@@ -22,6 +22,13 @@
            async step-up, exactly where browsers suppress native dialogs. -->
       <p id="health-msg" role="status" aria-live="polite" style="display:none;margin:0 0 .8rem;font-size:.9rem;"></p>
 
+      <!-- Stratum intake (design §21). The Stratum Server card below reports the PROCESS, which
+           stays up during a pause; this line reports whether miners are being accepted. Fed by
+           admin-shell's shared poll (AdminStratum), not a second fetch. -->
+      <div id="stratum-line" class="health-card" style="margin-bottom:.8rem;">
+        <div class="health-detail"><span class="spinner"></span>Stratum intake…</div>
+      </div>
+
       <!-- Services grid -->
       <div class="health-grid" id="health-grid">
         <div class="health-card"><div class="health-name"><span class="spinner"></span>Loading…</div></div>
@@ -52,11 +59,11 @@
         </div>
       </div>
 
-      <!-- ── Custodial reconciliation (summary; full statement on Payments) ──── -->
+      <!-- ── Custodial reconciliation (summary; full statement on Treasury) ──── -->
       <h2 data-sec="Reconciliation">Wallet ↔ Ledger Reconciliation</h2>
       <p style="font-size:.82rem;color:var(--text-dim);margin:-.4rem 0 .8rem;">
         Solvency + ledger-integrity summary. The full money statement (flow, buckets, coverage
-        split) lives on the <a href="payments.html">Payments</a> page.
+        split) lives on the <a href="treasury.html">Treasury</a> page.
       </p>
       <div id="recon-banner"></div>
 
@@ -184,7 +191,7 @@ async function loadHealth() {
 // ── Reconciliation summary ───────────────────────────────────────────────────
 // One-shot solvency/integrity verdict. Reconciliation forces a full wallet→node output
 // scan (slow), so health loads it ONCE on page open — the full statement + its own 3-min
-// poll live on payments.html. Never wire this into the 60s liveness loop.
+// poll live on treasury.html. Never wire this into the 60s liveness loop.
 function fmtSigned(v) { const n = Number(v) || 0; return (n >= 0 ? '+' : '') + n.toFixed(4); }
 async function loadReconciliation() {
   const banner = document.getElementById('recon-banner');
@@ -198,13 +205,13 @@ async function loadReconciliation() {
     if (c.integrity_ok === false) problems.push(`⚠ INTEGRITY DRIFT ${fmtSigned(c.integrity_drift)} ツ — a balance moved without a ledger row.`);
     if (d.wallet && !d.wallet.reachable) problems.push('Wallet was unreachable — coverage checks skipped.');
     if (problems.length) {
-      problems.push('→ Open the <a href="payments.html">Payments</a> page for the full statement.');
+      problems.push('→ Open the <a href="treasury.html">Treasury</a> page for the full statement.');
       banner.innerHTML = `<div class="health-card error" style="margin-bottom:.8rem;">
         <div class="health-detail">${problems.join('<br>')}</div></div>`;
     } else {
       banner.innerHTML = `<div class="health-card ok" style="margin-bottom:.8rem;">
         <div class="health-detail">✓ Wallet covers all balances; ledger reconciles with the log.
-        <a href="payments.html">Full statement →</a></div></div>`;
+        <a href="treasury.html">Full statement →</a></div></div>`;
     }
   } catch (err) {
     banner.innerHTML =
@@ -245,6 +252,33 @@ document.getElementById('health-grid').addEventListener('click', (e) => {
   const b = e.target.closest('[data-resolve-alert]');
   if (b) resolveAlert(b.getAttribute('data-resolve-alert'));
 });
+
+// ── Stratum intake line ──────────────────────────────────────────────────────
+// One line from the shared poll; the controls live on Settings → Announcements → Stratum.
+function renderStratumLine(c) {
+  const el = document.getElementById('stratum-line');
+  const S = window.AdminStratum;
+  if (!el || !S) return;
+  const k = S.classify(c);
+  const cls = k.level === 'ok' ? 'ok' : (k.tone === 'red' ? 'error' : 'warn');
+  const live = (c.listeners || []).filter(l => l && l.listening).length;
+  const extra = k.level === 'ok' || k.level === 'scheduled'
+    ? ' ' + live + ' listener(s) up · ' + escHtml(c.connections) + ' connection(s).'
+    : (k.level === 'paused' || k.level === 'pausing')
+      ? ' The Stratum Server card below shows the process, which stays up; region status on Regions reflects the tunnel, not intake.'
+      : '';
+  el.className = 'health-card ' + cls;
+  el.style.marginBottom = '.8rem';
+  el.innerHTML = '<div class="health-detail">' + S.summaryHtml(c) + extra +
+    ' <a href="settings-announcements.html?findh=Stratum">Stratum controls →</a></div>';
+}
+function renderStratumError(err) {
+  const el = document.getElementById('stratum-line');
+  if (!el) return;
+  el.className = 'health-card warn';
+  el.innerHTML = '<div class="health-detail">Stratum intake unknown — ' + escHtml(err.message) + '.</div>';
+}
+if (window.AdminStratum) AdminStratum.subscribe(renderStratumLine, renderStratumError);
 
 // Initial paint: load everything once.
 document.addEventListener('DOMContentLoaded', () => { loadHealth(); loadReconciliation(); });

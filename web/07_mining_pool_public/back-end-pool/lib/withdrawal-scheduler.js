@@ -261,6 +261,123 @@ class WithdrawalScheduler {
     }
   }
 
+  // ─── Change splitting (2026-10-05) ──────────────────────────────────────────────
+  // A payout locks whole inputs, so a wallet holding ONE big output can serve one payout at a
+  // time: everyone behind it gets "another payment is ahead". While the wallet holds fewer than
+  // `payout_target_outputs` (default 8; 0 = off) spendable outputs, a payout's change is split
+  // into 2–3 equal outputs, so the next payouts find coins of their own. Each extra output adds
+  // ~0.002 GRIN of network fee (weight), well inside the flat withdrawal fee. Counted at the rail's
+  // min_conf (`minConf`: 10 for the Tor CLI, 1 for the Owner-API rails). Any failure → 1, i.e.
+  // exactly the old behaviour: this is an optimisation and must never block or fail a payout.
+  async _changeOutputCount(minConf) {
+    const raw = this.config.payout_target_outputs;
+    let target = raw === undefined || raw === null || raw === '' ? 8 : Number(raw);
+    if (!Number.isFinite(target) || target < 0) target = 8;
+    if (target === 0 || !this.wallet || typeof this.wallet.countSpendableOutputs !== 'function') return 1;
+    let have;
+    try { have = await this.wallet.countSpendableOutputs(minConf); } catch (_) { return 1; }
+    if (!Number.isFinite(have) || have >= target) return 1;
+    return Math.min(3, Math.max(2, target - have));
+  }
+
+  // ─── "Another payment is ahead" (2026-10-05) ────────────────────────────────────
+  // A Grin wallet spends whole outputs: a payout locks its inputs, and their change cannot be
+  // spent again until it is mined (Owner-API rails, min_conf 1) or 10 blocks deep (the Tor rail's
+  // CLI send, --min_conf 10). So a second miner withdrawing right after the first is refused for
+  // lack of SPENDABLE funds while the pool is fully solvent. This estimates when those funds come
+  // back, from the pool's own rows — no wallet call.
+  //
+  // Each payout ahead releases its change on its OWN clock, in parallel, so the wait is the
+  // LATEST release, never the sum. It is an upper bound ("up to N minutes"):
+  //   · a Tor payout in flight, or confirmed in the last TOR_SETTLE_SECS → +15 min (send, mine,
+  //     10 confirmations);
+  //   · a Slatepack / Goblin payout still pending → its expiry (created_at + TTL): that is the
+  //     latest the miner's slate can hold the inputs. Finalizing, or confirmed in the last
+  //     SLATE_SETTLE_SECS → +5 min (mine, 1 confirmation).
+  // Returns { ahead, waitSecs } — ahead 0 means nothing explains the shortfall (the wallet is
+  // genuinely short and the operator must hear about it, never a "queue" message).
+  _paymentQueueWait() {
+    const TOR_SETTLE_SECS = 15 * 60, SLATE_SETTLE_SECS = 5 * 60;
+    const now = Math.floor(Date.now() / 1000);
+    let ahead = 0, latest = now;
+    const add = (until) => { if (until > now) { ahead++; if (until > latest) latest = until; } };
+    for (const r of this.db.prepare(
+      `SELECT method, status, created_at FROM withdrawals WHERE ${PENDING_SQL}`).all()) {
+      if (r.status === 'slatepack_pending') {
+        const ttl = r.method === 'nostr' ? this.nostrPendingTtlSeconds : this.slatepackTtlSeconds;
+        add(Math.max(r.created_at + ttl, now + SLATE_SETTLE_SECS));
+      } else if (r.status === 'finalizing') {
+        add(now + SLATE_SETTLE_SECS);
+      } else {
+        add(now + TOR_SETTLE_SECS);
+      }
+    }
+    for (const r of this.db.prepare(
+      `SELECT method, confirmed_at FROM withdrawals WHERE status = 'confirmed' AND confirmed_at > ?`
+    ).all(now - TOR_SETTLE_SECS)) {
+      add(r.confirmed_at + ((r.method || 'tor') === 'tor' ? TOR_SETTLE_SECS : SLATE_SETTLE_SECS));
+    }
+    return { ahead, waitSecs: latest - now };
+  }
+
+  // The miner-facing line for a payout refused because other payouts hold the wallet's coins.
+  // Rounded UP to 5 minutes, floored at 5 (and at `minWaitSecs` — a reversal's cooldown). Says
+  // how many payments are ahead and how long, never how much the pool wallet holds.
+  _queueMessage({ ahead, waitSecs }, minWaitSecs = 0) {
+    const mins = Math.max(5, Math.ceil(Math.max(waitSecs, minWaitSecs) / 300) * 5);
+    const who = ahead === 1 ? 'Another payment is' : `${ahead} other payments are`;
+    return `${who} ahead of yours — please try again in up to ${mins} minutes. Nothing was deducted from your balance.`;
+  }
+
+  // The refusal for a wallet that came up short AFTER the balance lock (the pre-check raced, or
+  // could not read the wallet). The lock has already been reversed, so the cooldown is running:
+  // the wait shown is never shorter than it. Nothing ahead → the generic "contact the operator"
+  // line, since then the wallet is genuinely short.
+  _walletShortError() {
+    const q = this._paymentQueueWait();
+    const e = new Error(q.ahead > 0 ? this._queueMessage(q, this._cooldownSecs()) : WALLET_SHORT_MSG);
+    e.code = 503;
+    return e;
+  }
+
+  // Cheap wallet check BEFORE any balance lock — the slatepack precedent is _assertNoTorSend: a
+  // refusal after the lock is a reversal, and a reversal starts the miner's 30-min cooldown, which
+  // would contradict a "try again in 10 minutes". Reads the wallet's CACHED summary (refresh=false:
+  // the wallet records its own locks locally at once, so no node scan is needed) at the rail's own
+  // min_conf. Throws 503 with the queue message only when payouts ahead explain the shortfall; a
+  // shortfall nothing explains is left to the authoritative path (which alerts the operator).
+  // FAILS OPEN: an unreadable wallet never blocks a payout — grin-wallet stays the authority.
+  async _assertWalletCanCover(netSend, rail) {
+    if (!this.wallet || typeof this.wallet.getBalance !== 'function') return;
+    let spendable;
+    try {
+      const summary = await this.wallet.getBalance(false, rail === 'tor' ? 10 : 1);
+      const info = Array.isArray(summary) ? summary[1] : (summary || {});
+      spendable = Number(info.amount_currently_spendable) / 1e9;
+    } catch (_) { return; }
+    if (!Number.isFinite(spendable) || spendable >= netSend) return;
+    const q = this._paymentQueueWait();
+    if (q.ahead === 0) return;
+    const e = new Error(this._queueMessage(q));
+    e.code = 503;
+    e.retry_after = Math.max(300, q.waitSecs);
+    throw e;
+  }
+
+  // Route-side copy for the Tor rail, whose create is synchronous and whose send happens later in
+  // the scheduler loop: resolves the amount exactly as createWithdrawal does, then checks.
+  // Invalid amounts return quietly — createWithdrawal refuses them with the real reason.
+  async precheckWalletCover(grinAddress, amount) {
+    const acct = this.db.prepare('SELECT balance FROM miner_accounts WHERE grin_address = ?').get(grinAddress);
+    if (!acct) return;
+    let amt = amount === undefined || amount === null || amount === '' ? acct.balance : parseFloat(amount);
+    if (!Number.isFinite(amt) || amt <= 0) return;
+    amt = parseFloat(amt.toFixed(9));
+    let net;
+    try { net = this._netSend(amt, this._feeFor(amt)); } catch (_) { return; }
+    await this._assertWalletCanCover(net, 'tor');
+  }
+
   // ─── Flat withdrawal fee ────────────────────────────────────────────────────
   // Grin charges the SENDER a network fee by transaction WEIGHT, not by amount, so a payout
   // costs the pool the same ~0.023 GRIN whether it's 25 or 2500 GRIN. This flat fee recovers
@@ -303,6 +420,91 @@ class WithdrawalScheduler {
     return net;
   }
 
+  // A miner payout's address must be a miner's. 'pool_fee' and 'prize_pool' are ledger buckets,
+  // not wallets: a payout "to" one would hand grin-wallet a destination it cannot send to, and a
+  // pool_fee row created this way would skip everything createRevenueWithdrawal enforces (the
+  // saved address, the 24 h hold, booking network fees first). Revenue leaves ONLY through
+  // createRevenueWithdrawal; prize money leaves through an award to a miner. Review 2026-10-05:
+  // the admin below-minimum payout route reached createWithdrawal('pool_fee', …) unguarded.
+  _assertMinerAddress(grinAddress) {
+    if (IncentivesManager.RESERVED_ADDRESSES.includes(grinAddress)) {
+      const e = new Error(`${grinAddress} is a pool ledger bucket, not a miner wallet — it cannot be paid out here`);
+      e.code = 400;
+      throw e;
+    }
+  }
+
+  // ─── Network fees → the pool_fee bucket (2026-10-05) ────────────────────────────
+  // The pool wallet pays every payout's REAL chain fee (withdrawals.fee), but the ledger never
+  // debited it from anyone: the bucket grew by the full flat fee while ~0.023 of it was already
+  // spent on chain, so `pool_fee.balance` overstated what the operator can take out by Σ fees.
+  // Draining it would have left the wallet short of what miners are owed by exactly that sum —
+  // and reconciliation adds the sum back to its coverage gaps, so nothing would have said so.
+  //
+  // Booked in ONE batch, inside the operator's revenue withdrawal (createRevenueWithdrawal),
+  // rather than per payout: no rail has to know its fee before confirm, no migration is needed
+  // (fee_booked = 0 on legacy rows makes the first withdrawal book the whole history), and the
+  // only moment the overstatement can do harm — money leaving the bucket — is exactly when it is
+  // corrected. Only CONFIRMED rows count: those are the payouts whose transaction (and fee) left
+  // the wallet; reconciliation's add-back reads the same set, so the two can never disagree.
+  _unbookedNetworkFees() {
+    const r = this.db.prepare(
+      `SELECT COALESCE(SUM(fee - fee_booked), 0) AS s FROM withdrawals
+       WHERE status = 'confirmed' AND fee > fee_booked`
+    ).get();
+    return parseFloat((Number(r.s) || 0).toFixed(9));
+  }
+
+  // Debit every unbooked fee from pool_fee as one 'network_fee' row and mark the rows booked.
+  // MUST run inside the caller's transaction. The bucket MAY go negative (a promotion at
+  // pool_fee_percent 0 on a pool that has collected little): that is the truth, the integrity
+  // invariant holds either way, and the revenue CAS that follows then refuses the withdrawal.
+  _bookNetworkFees() {
+    const total = this._unbookedNetworkFees();
+    if (!(total > 0)) return 0;
+    this.db.prepare(
+      'INSERT OR IGNORE INTO miner_accounts (grin_address, balance) VALUES (?, 0)'
+    ).run(POOL_FEE_ADDRESS);
+    const before = this.db.prepare(
+      'SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?'
+    ).get(POOL_FEE_ADDRESS);
+    this.db.prepare(
+      'UPDATE miner_accounts SET balance = balance - ?, updated_at = unixepoch() WHERE grin_address = ?'
+    ).run(total, POOL_FEE_ADDRESS);
+    this.db.prepare(`
+      INSERT INTO balance_log
+      (grin_address, event_type, amount, balance_before, balance_after,
+       locked_before, locked_after, reference_type, reference_id)
+      VALUES (?, 'debit', ?, ?, ?, ?, ?, 'network_fee', 0)
+    `).run(POOL_FEE_ADDRESS, total, before.balance, parseFloat((before.balance - total).toFixed(9)),
+           before.balance_locked, before.balance_locked);
+    this.db.prepare(
+      "UPDATE withdrawals SET fee_booked = fee WHERE status = 'confirmed' AND fee > fee_booked"
+    ).run();
+    return total;
+  }
+
+  // What the operator could withdraw right now: the bucket minus the fees not booked yet.
+  // `pending` is the in-flight revenue withdrawal, if any (one at a time, like any address).
+  revenueStatus() {
+    const acct = this.db.prepare(
+      'SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?'
+    ).get(POOL_FEE_ADDRESS) || { balance: 0, balance_locked: 0 };
+    const unbooked = this._unbookedNetworkFees();
+    const pending = this.db.prepare(
+      `SELECT id, amount, status, dest_address, created_at FROM withdrawals
+       WHERE grin_address = ? AND ${PENDING_SQL} ORDER BY id DESC LIMIT 1`
+    ).get(POOL_FEE_ADDRESS) || null;
+    const r9 = (v) => parseFloat((Number(v) || 0).toFixed(9));
+    return {
+      balance: r9(acct.balance),
+      locked: r9(acct.balance_locked),
+      unbooked_network_fees: unbooked,
+      available: Math.max(0, r9(acct.balance - unbooked)),
+      pending,
+    };
+  }
+
   // Cross-rail cooldown after a reversed payout (operator decision 2026-07-17, default 30 min).
   // When a payout's lock is reversed back to balance — slatepack expiry or creation failure, a
   // Goblin/Nostr failure, admin cancel — the miner must wait before requesting ANOTHER payout on
@@ -319,23 +521,7 @@ class WithdrawalScheduler {
   // (torPauseStatus) instead. The join is LEFT and COALESCEd so a reversal whose withdrawal row
   // is missing still counts (a NULL must never switch the guard off).
   _assertNoRecentReversal(grinAddress) {
-    // `0` disabling the cooldown is a documented operator choice. A NON-NUMBER disabling it is a
-    // broken config, and used to do so silently: `'thirty' * 60` is NaN and `if (!cooldown)`
-    // returned (audit §J4-6, same family as memory project_config_loader_type_traps). Fall back to
-    // the default and say so once — a money guard must never switch itself off without a trace.
-    const raw = this.config.withdrawal_cooldown_minutes;
-    let mins = (raw === undefined || raw === null) ? 30 : Number(raw);
-    if (!Number.isFinite(mins) || mins < 0) {
-      if (!this._badCooldownWarned) {
-        this._badCooldownWarned = true;
-        console.error(
-          `[payout] withdrawal_cooldown_minutes is not a number (${JSON.stringify(raw)}) — ` +
-          `using the 30 min default; set it to 0 if you really mean "no cooldown"`
-        );
-      }
-      mins = 30;
-    }
-    const cooldown = mins * 60;
+    const cooldown = this._cooldownSecs();
     if (!cooldown) return;
     const row = this.db.prepare(`
       SELECT MAX(b.created_at) AS t FROM balance_log b
@@ -353,6 +539,28 @@ class WithdrawalScheduler {
       e.code = 429;
       throw e;
     }
+  }
+
+  // The cooldown in seconds (0 = disabled). Shared with the post-lock "payments ahead" message,
+  // which must not promise a retry sooner than this guard allows.
+  _cooldownSecs() {
+    // `0` disabling the cooldown is a documented operator choice. A NON-NUMBER disabling it is a
+    // broken config, and used to do so silently: `'thirty' * 60` is NaN and `if (!cooldown)`
+    // returned (audit §J4-6, same family as memory project_config_loader_type_traps). Fall back to
+    // the default and say so once — a money guard must never switch itself off without a trace.
+    const raw = this.config.withdrawal_cooldown_minutes;
+    let mins = (raw === undefined || raw === null) ? 30 : Number(raw);
+    if (!Number.isFinite(mins) || mins < 0) {
+      if (!this._badCooldownWarned) {
+        this._badCooldownWarned = true;
+        console.error(
+          `[payout] withdrawal_cooldown_minutes is not a number (${JSON.stringify(raw)}) — ` +
+          `using the 30 min default; set it to 0 if you really mean "no cooldown"`
+        );
+      }
+      mins = 30;
+    }
+    return mins * 60;
   }
 
   freeze(reason, by) {
@@ -463,6 +671,13 @@ class WithdrawalScheduler {
     }
   }
 
+  // Where a payout's coins go. A miner row's grin_address IS its wallet; an operator revenue row's
+  // grin_address is the 'pool_fee' ledger bucket, and the wallet is dest_address (saved at request
+  // time). Every wallet-facing call on the Tor rail reads this — never grin_address directly.
+  _recipientOf(withdrawal) {
+    return withdrawal.dest_address || withdrawal.grin_address;
+  }
+
   // THE one Tor send of a payout (plan 2026-09-26: one attempt, then an answer).
   //
   //   A  "Tx sent successfully"                      → confirmed (F1/F2 then watch it mine)
@@ -505,6 +720,8 @@ class WithdrawalScheduler {
       // coins, and the chain could accept only one of the two transactions: the other payout then
       // stuck in finalizing or Held. The CLI is this process's own child, so this process's lock
       // covers it. While it is held the creates refuse at once (_assertNoTorSend).
+      // Read before the lock: a wallet call must never sit between the claim and the send.
+      const changeOutputs = await this._changeOutputCount(10);
       this._torSendBusy = true;
       let run = null;
       try {
@@ -532,7 +749,7 @@ class WithdrawalScheduler {
           // on-chain network fee. The row keeps `amount` as the gross the miner was debited, so
           // the wallet-log lookups must match on the net figure that actually went out.
           const netSend = this._netSend(withdrawal.amount, withdrawal.fee_charged || 0);
-          return { netSend, sendResult: await this.walletTor.sendToTorAddress(withdrawal.grin_address, netSend) };
+          return { netSend, sendResult: await this.walletTor.sendToTorAddress(this._recipientOf(withdrawal), netSend, { changeOutputs }) };
         });
       } finally {
         this._torSendBusy = false;
@@ -584,7 +801,7 @@ class WithdrawalScheduler {
       // Why did it fail? ONE fresh probe of the miner's onion (never the tor-check route's cache).
       // A throw is "could not tell", like the probe's own null.
       let probe = null;
-      try { probe = await this.walletTor.probeToronlineStatus(withdrawal.grin_address); }
+      try { probe = await this.walletTor.probeToronlineStatus(this._recipientOf(withdrawal)); }
       catch (e) { probe = { online: null, reason: `probe_error: ${e.message}` }; }
       const online = probe ? probe.online : null;
       const code = online === false ? 'wallet_offline' : online === true ? 'pool_send_path' : 'wallet_unreachable';
@@ -1496,6 +1713,7 @@ class WithdrawalScheduler {
     const adminOverride = !!(opts && opts.adminOverride);
 
     if (!grinAddress) fail('address required', 400);
+    this._assertMinerAddress(grinAddress);
     this._assertNotFrozen();
     if (!adminOverride) this._assertNoRecentReversal(grinAddress);
 
@@ -1523,6 +1741,7 @@ class WithdrawalScheduler {
     const adminOverride = !!(opts && opts.adminOverride);
 
     if (!grinAddress) fail('address required', 400);
+    this._assertMinerAddress(grinAddress);
     if (method !== 'tor') fail('only Tor withdrawals are supported', 400);
     this._assertNotFrozen();
     if (!adminOverride) this._assertNoRecentReversal(grinAddress);
@@ -1613,6 +1832,77 @@ class WithdrawalScheduler {
     };
   }
 
+  // ─── Operator revenue withdrawal (2026-10-05) ───────────────────────────────
+  // Sends part of the pool_fee bucket to the operator's saved revenue address, through the SAME
+  // locked Tor flow as a miner payout — so it is claimed once, sent once, Held on an unknown
+  // outcome, captured with a kernel + signed payment proof, and listed in the queue. The only
+  // differences from createWithdrawal:
+  //   · grin_address is the 'pool_fee' bucket; the coins go to `destAddress` (dest_address);
+  //   · no flat withdrawal fee: it would be credited straight back to pool_fee, so it is 0;
+  //   · unbooked network fees are debited from the bucket FIRST, in the same transaction, so the
+  //     amount the CAS checks against is what the operator really owns (see _bookNetworkFees);
+  //   · its confirm debit is 'operator_withdrawal', never 'withdrawal' — every reader of
+  //     debit/'withdrawal' (reconciliation flows, the payments page) means "paid to miners".
+  // The caller (an admin route) owns the address rules: saved address only, 24 h hold, step-up.
+  createRevenueWithdrawal(amount, destAddress) {
+    const fail = (msg, code) => { const e = new Error(msg); e.code = code; throw e; };
+    if (!destAddress || destAddress === POOL_FEE_ADDRESS) fail('no operator revenue address is set', 400);
+    this._assertNotFrozen();
+
+    let amt = parseFloat(amount);
+    if (!Number.isFinite(amt) || amt <= 0) fail('invalid amount', 400);
+    amt = parseFloat(amt.toFixed(9));
+
+    const txn = this.db.transaction(() => {
+      const totalPending = this.db.prepare(
+        `SELECT COUNT(*) AS c FROM withdrawals WHERE ${PENDING_SQL}`
+      ).get().c;
+      if (totalPending >= this.MAX_PENDING_WITHDRAWALS) fail(POOL_BUSY_MSG, 429);
+      const mine = this.db.prepare(
+        `SELECT COUNT(*) AS c FROM withdrawals WHERE grin_address = ? AND ${PENDING_SQL}`
+      ).get(POOL_FEE_ADDRESS).c;
+      if (mine >= 1) fail('an operator revenue withdrawal is already in progress — wait for it to settle', 429);
+
+      const booked = this._bookNetworkFees();
+
+      const before = this.db.prepare(
+        'SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?'
+      ).get(POOL_FEE_ADDRESS) || { balance: 0, balance_locked: 0 };
+      const locked = this.db.prepare(
+        `UPDATE miner_accounts
+         SET balance = balance - ?, balance_locked = balance_locked + ?, updated_at = unixepoch()
+         WHERE grin_address = ? AND balance >= ?`
+      ).run(amt, amt, POOL_FEE_ADDRESS, amt);
+      if (locked.changes !== 1) {
+        const avail = Math.max(0, parseFloat(Number(before.balance).toFixed(9)));
+        fail(`amount exceeds the revenue available to withdraw (${avail} GRIN after network fees)`, 409);
+      }
+
+      const wid = this.db.prepare(
+        `INSERT INTO withdrawals (grin_address, amount, fee, fee_charged, status, method, dest_address)
+         VALUES (?, ?, 0, 0, 'tor_checking', 'tor', ?)`
+      ).run(POOL_FEE_ADDRESS, amt, destAddress).lastInsertRowid;
+
+      this.db.prepare(`
+        INSERT INTO balance_log
+        (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id)
+        VALUES (?, 'lock', ?, ?, ?, ?, ?, 'withdrawal', ?)
+      `).run(POOL_FEE_ADDRESS, amt, before.balance, before.balance - amt,
+             before.balance_locked, before.balance_locked + amt, wid);
+
+      this.db.prepare(`
+        INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+        VALUES (?, NULL, 'tor_checking', 'admin_revenue', ?)
+      `).run(wid, `operator revenue withdrawal (${amt} GRIN to ${destAddress})` +
+                  (booked > 0 ? `; booked ${booked} GRIN of payout network fees first` : ''));
+      return { wid, booked };
+    });
+
+    const { wid, booked } = txn();
+    console.log(`[${new Date().toISOString()}] Operator revenue withdrawal ${wid} created (${amt} GRIN to ${destAddress}, network fees booked ${booked})`);
+    return { success: true, withdrawal_id: wid, amount: amt, network_fees_booked: booked };
+  }
+
   // ─── Slatepack payout (interactive, encrypted, no-Tor) ──────────────────────
   // Reinstated rail: emits a slatepack ENCRYPTED to the miner's own address so only that wallet
   // can decrypt + receive (no theft even if the IP gate is passed by a NAT co-tenant). The IP
@@ -1625,6 +1915,7 @@ class WithdrawalScheduler {
   async createSlatepackWithdrawal(grinAddress, amount) {
     const fail = (msg, code) => { const e = new Error(msg); e.code = code; throw e; };
     if (!grinAddress) fail('address required', 400);
+    this._assertMinerAddress(grinAddress);
     if (!this.wallet) fail('slatepack payouts are not configured on this pool', 503);
     this._assertNotFrozen();
     this._assertNoTorSend();
@@ -1646,6 +1937,11 @@ class WithdrawalScheduler {
     // Flat fee frozen at request time; the slate below is built for the NET amount.
     const feeCharged = this._feeFor(amt);
     const netSend = this._netSend(amt, feeCharged);
+    await this._assertWalletCanCover(netSend, 'slatepack');
+    const changeOutputs = await this._changeOutputCount(1);
+    // Again: those wallet reads yielded, and a Tor CLI send may have taken the send lock meanwhile.
+    // Refuse now rather than wait it out inside this HTTP request (see _assertNoTorSend).
+    this._assertNoTorSend();
 
     // Lock the pool-side balance first (authoritative for accounting); the wallet-side output
     // lock happens during tx_lock_outputs below, and is released via cancelTx on failure.
@@ -1690,7 +1986,7 @@ class WithdrawalScheduler {
       // Select + lock under the wallet's send lock (see _withSendLock) so no other rail's init
       // can pick the same coins between these two calls.
       await this._withSendLock(async () => {
-        slate = await this.wallet.initSendTx(netSend);
+        slate = await this.wallet.initSendTx(netSend, { changeOutputs });
         await this.wallet.txLockOutputs(slate);
       });
       const armored = await this.wallet.createSlatepackMessage(slate, [grinAddress]);
@@ -1726,7 +2022,7 @@ class WithdrawalScheduler {
       this._reverseLock(withdrawalId, 'slatepack_failed', 'slatepack_pending', `slate creation failed: ${err.message}`);
       if (isNotEnoughFunds(err)) {
         this._noteWalletShort({ withdrawalId, method: 'slatepack', amount: netSend, error: err.message });
-        const e = new Error(WALLET_SHORT_MSG); e.code = 503; throw e;
+        throw this._walletShortError();
       }
       const e = new Error(`failed to create slatepack: ${err.message}`); e.code = 502; throw e;
     }
@@ -1808,6 +2104,7 @@ class WithdrawalScheduler {
   async createNostrWithdrawal(grinAddress, amount, recipientPubHex, note) {
     const fail = (msg, code) => { const e = new Error(msg); e.code = code; throw e; };
     if (!grinAddress) fail('address required', 400);
+    this._assertMinerAddress(grinAddress);
     if (!this.wallet) fail('slatepack payouts are not configured on this pool', 503);
     if (!this.nostrBridge || !this.nostrBridge.isEnabled()) fail('nostr payouts are not enabled on this pool', 503);
     if (!/^[0-9a-f]{64}$/.test(String(recipientPubHex || ''))) fail('invalid destination', 400);
@@ -1827,6 +2124,11 @@ class WithdrawalScheduler {
     // Flat fee frozen at request time; the S1 slate below is built for the NET amount.
     const feeCharged = this._feeFor(amt);
     const netSend = this._netSend(amt, feeCharged);
+    await this._assertWalletCanCover(netSend, 'nostr');
+    const changeOutputs = await this._changeOutputCount(1);
+    // Again: those wallet reads yielded, and a Tor CLI send may have taken the send lock meanwhile.
+    // Refuse now rather than wait it out inside this HTTP request (see _assertNoTorSend).
+    this._assertNoTorSend();
 
     // Lock the pool-side balance first (authoritative). Same CAS + caps as the other rails.
     const txn = this.db.transaction(() => {
@@ -1868,7 +2170,7 @@ class WithdrawalScheduler {
     let slate = null;
     try {
       await this._withSendLock(async () => {
-        slate = await this.wallet.initSendTx(netSend);
+        slate = await this.wallet.initSendTx(netSend, { changeOutputs });
         await this.wallet.txLockOutputs(slate);
       });
       const armored = await this.wallet.createSlatepackMessage(slate, []); // recipients:[] → plain armor
@@ -1895,7 +2197,7 @@ class WithdrawalScheduler {
       this._reverseLock(withdrawalId, 'nostr_failed', 'slatepack_pending', `nostr send failed: ${err.message}`);
       if (isNotEnoughFunds(err)) {
         this._noteWalletShort({ withdrawalId, method: 'nostr', amount: netSend, error: err.message });
-        const e = new Error(WALLET_SHORT_MSG); e.code = 503; throw e;
+        throw this._walletShortError();
       }
       const e = new Error(`failed to send nostr payout: ${err.message}`); e.code = err.code && err.code >= 400 && err.code < 600 ? err.code : 502; throw e;
     }
@@ -2467,8 +2769,11 @@ class WithdrawalScheduler {
          locked_before, locked_after, reference_type, reference_id)
         VALUES (?, 'debit', ?, ?, ?, ?, ?, ?, ?)
       `);
+      // An operator revenue withdrawal leaves the pool_fee bucket, not a miner's balance — its
+      // debit is named for that, so "paid to miners" (debit/'withdrawal') stays exactly that.
+      const debitType = withdrawal.grin_address === POOL_FEE_ADDRESS ? 'operator_withdrawal' : 'withdrawal';
       logDebit.run(withdrawal.grin_address, netPaid, spendable, spendable, lockedBefore,
-                   lockedBefore - released, 'withdrawal', withdrawal.id);
+                   lockedBefore - released, debitType, withdrawal.id);
 
       if (feeCharged > 0) {
         logDebit.run(withdrawal.grin_address, feeCharged, spendable, spendable, lockedBefore - released,

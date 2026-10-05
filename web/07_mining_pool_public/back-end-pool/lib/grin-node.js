@@ -25,12 +25,17 @@ const path = require('path');
 //   'timeout' — FetchError type 'request-timeout': the port accepted the connection but the
 //               node did not answer in time. Something IS running there — typically a node
 //               catching up after a start, or compacting.
-//   'other'   — everything else, including a 401/403 from a wrong or unreadable secret. That
-//               one is a real fault, never "busy", so it must not be folded into the two above.
+//   'auth'    — HTTP 401/403: the node is up and rejected our credential (wrong or unreadable
+//               secret). Classified from the status code _rpcCall attaches as `httpStatus`, never
+//               from the message. A real fault, never "busy" — downState() maps it to 'offline'
+//               exactly as it did when this was 'other', so the public lamp does not move.
+//               Added for lib/node-availability.js, where auth is NOT downtime (design §20.2).
+//   'other'   — everything else: a 5xx, an nginx error page, a non-JSON body.
 function transportFailure(message, cause) {
   const err = new Error(message);
   err.nodeReplied = false;
   err.transport = classifyTransport(cause);
+  if (cause && Number.isInteger(cause.httpStatus)) err.httpStatus = cause.httpStatus;
   return err;
 }
 
@@ -38,6 +43,7 @@ function classifyTransport(cause) {
   if (!cause) return 'other';
   if (cause.type === 'request-timeout') return 'timeout';
   if (cause.code === 'ECONNREFUSED') return 'refused';
+  if (cause.httpStatus === 401 || cause.httpStatus === 403) return 'auth';
   return 'other';
 }
 
@@ -222,10 +228,15 @@ class GrinNodeAPI {
         timestamp: Date.now()
       };
     } catch (err) {
+      // nodeReplied + http_status are TAGS for lib/node-availability.js (origin node_reply vs
+      // transport, and the HTTP code in an admin-only detail). A node-replied failure keeps
+      // transport 'other', as before, so downState() and every existing reader see no change.
       return {
         ok: false,
         error: err.message,
         transport: err.transport || 'other',
+        nodeReplied: err.nodeReplied === true,
+        http_status: Number.isInteger(err.httpStatus) ? err.httpStatus : null,
         timestamp: Date.now()
       };
     }
@@ -404,8 +415,11 @@ class GrinNodeAPI {
       });
 
       if (!response.ok) {
-        // 401/403 here is the classic wrong-secret signature, NOT a missing block.
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        // 401/403 here is the classic wrong-secret signature, NOT a missing block. The status
+        // travels as a tag so classifyTransport() never has to read this message.
+        const httpErr = new Error(`HTTP ${response.status}: ${response.statusText}`);
+        httpErr.httpStatus = response.status;
+        throw httpErr;
       }
 
       data = await response.json();

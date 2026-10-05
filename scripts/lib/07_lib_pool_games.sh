@@ -72,6 +72,8 @@ PGS_ZONE_CONF="/etc/nginx/conf.d/${PGS_ZONE_BASENAME}.conf"
 PGS_NGINX_SNIPPET="/etc/nginx/snippets/script07-${POOL_SERVICE:-grin-pool-manager}-games-locations.conf"
 PGS_ZONE_API="${POOL_SERVICE:-grin-pool-manager}_games"
 PGS_ZONE_LOGIN="${POOL_SERVICE:-grin-pool-manager}_gamelogin"
+# Guest sign-up (design §19.17.3, games Part C5): the challenge GET and the sign-up POST share it.
+PGS_ZONE_SIGNUP="${POOL_SERVICE:-grin-pool-manager}_gamesignup"
 # A game folder name. The same charset the games registry accepts for an id; anything
 # else in play/games/ is skipped by the deploy, never copied.
 PGS_GAME_ID_RE='^[a-z0-9][a-z0-9_-]{0,31}$'
@@ -499,8 +501,10 @@ pgs_install() {
 
     echo ""
     success "Games installed. The pool was not restarted."
-    echo -e "  Next: ${BOLD}P → 3 Nginx${RESET}, then admin panel → Settings → Games → mode ${BOLD}preview${RESET}."
-    echo -e "  ${DIM}Mode stays 'off' until you change it there: every public /play/ route answers 404.${RESET}"
+    echo -e "  Next: ${BOLD}P → 3 Nginx${RESET}, then try /play/ by its direct URL."
+    echo -e "  ${DIM}A new games DB starts in PREVIEW: /play/ works, the pool's menu does not show it.${RESET}"
+    echo -e "  ${DIM}When it works: admin panel → Games → Overview → ${RESET}${BOLD}Go live${RESET}${DIM}. If /play/ answers 404, the${RESET}"
+    echo -e "  ${DIM}pool's switch is off: admin panel → Settings → Games (design §19.17.2).${RESET}"
     return 0
 }
 
@@ -525,6 +529,21 @@ location = /play { return 301 https://\$host/play/; }
 # limits per IP and per address before it asks the pool to check a proof (D7).
 location ^~ /play/api/login {
     limit_req zone=${PGS_ZONE_LOGIN} burst=5 nodelay;
+    client_max_body_size 4k;
+    proxy_pass         http://127.0.0.1:$PGS_PORT;
+    proxy_set_header   Host \$host;
+    proxy_set_header   X-Real-IP \$remote_addr;
+    proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header   X-Forwarded-Proto \$scheme;
+    proxy_read_timeout 30s;
+}
+
+# Guest sign-up (design 19.17.3): /signup/challenge and /signup share one strict zone, 6 r/m
+# per IP, before the app's own limits (a proof-of-work per attempt, 6 attempts an hour and 3
+# sign-ups a day per /24). Guest LOGIN is /play/api/login/guest, so the login location above
+# already covers it (prefix match): 20 r/m and the 4 KB cap.
+location ^~ /play/api/signup {
+    limit_req zone=${PGS_ZONE_SIGNUP} burst=4 nodelay;
     client_max_body_size 4k;
     proxy_pass         http://127.0.0.1:$PGS_PORT;
     proxy_set_header   Host \$host;
@@ -603,12 +622,15 @@ pgs_setup_nginx() {
     [[ -f "$hdr_common" ]] || { error "Missing $hdr_common — re-run 4) Setup nginx first."; return 1; }
 
     # Zones: same helper as every toolkit zone. It is a no-op when the file exists; the
-    # snippet references both names, so a file without them is regenerated.
+    # snippet references all three names, so a file missing any of them (a box set up before
+    # the sign-up zone existed) is regenerated.
     if [[ -f "$PGS_ZONE_CONF" ]] && { ! grep -q "zone=${PGS_ZONE_API}[: ]" "$PGS_ZONE_CONF" \
-                                      || ! grep -q "zone=${PGS_ZONE_LOGIN}[: ]" "$PGS_ZONE_CONF"; }; then
+                                      || ! grep -q "zone=${PGS_ZONE_LOGIN}[: ]" "$PGS_ZONE_CONF" \
+                                      || ! grep -q "zone=${PGS_ZONE_SIGNUP}[: ]" "$PGS_ZONE_CONF"; }; then
         rm -f "$PGS_ZONE_CONF" || { error "Could not remove the stale $PGS_ZONE_CONF."; return 1; }
     fi
     nginx_ensure_rate_limit_zones "$PGS_ZONE_BASENAME" "${PGS_ZONE_API}:600r/m" "${PGS_ZONE_LOGIN}:20r/m" \
+        "${PGS_ZONE_SIGNUP}:6r/m" \
         || { error "Could not write the games rate-limit zones."; return 1; }
 
     # Snippet: written to a temp file and renamed in, keeping the previous one aside so a
@@ -857,10 +879,16 @@ pgs_status() {
     anon=$(sed -n 's/.*anon=\([0-9]*\).*/\1/p' <<<"$probe")
     mode=$(sed -n 's/.*mode=\([^ ]*\).*/\1/p' <<<"$probe")
     case "$mode" in
-        off)     echo -e "  Mode      : ${DIM}off${RESET} ${DIM}(pool setting; public /play/ routes 404)${RESET}" ;;
-        preview) echo -e "  Mode      : ${YELLOW}preview${RESET} ${DIM}(works by direct URL, nav link hidden)${RESET}" ;;
-        on)      echo -e "  Mode      : ${GREEN}on${RESET}" ;;
-        *)       echo -e "  Mode      : ${RED}unknown${RESET} ${DIM}(pool answered ${mode#ERR:} — is the pool running and deployed with the games link?)${RESET}" ;;
+        off)     echo -e "  Pool mode : ${DIM}off${RESET} ${DIM}(pool setting; public /play/ routes 404)${RESET}" ;;
+        preview) echo -e "  Pool mode : ${YELLOW}preview${RESET} ${DIM}(works by direct URL, nav link hidden)${RESET}" ;;
+        on)      echo -e "  Pool mode : ${GREEN}on${RESET}" ;;
+        *)       echo -e "  Pool mode : ${RED}unknown${RESET} ${DIM}(pool answered ${mode#ERR:} — is the pool running and deployed with the games link?)${RESET}" ;;
+    esac
+    # The games' own half of the switch (§19.17.2): the pages follow the LOWER of the two.
+    case "$h" in
+        *'"launch":"on"'*)      echo -e "  Launch    : ${GREEN}live${RESET} ${DIM}(admin → Games → Overview)${RESET}" ;;
+        *'"launch":"preview"'*) echo -e "  Launch    : ${YELLOW}preview${RESET} ${DIM}(menu hidden until Go live — admin → Games → Overview)${RESET}" ;;
+        *)                      echo -e "  Launch    : ${DIM}unknown (no health answer)${RESET}" ;;
     esac
     [[ "$probe" == *"chat="* ]] && echo -e "  Chat      : $(sed -n 's/.*chat=\([a-z]*\).*/\1/p' <<<"$probe")"
     if [[ "$anon" == "401" ]]; then
@@ -1162,7 +1190,7 @@ pool_games_menu() {
         echo -e "${BOLD}${CYAN}  Play & chat (games) — ${POOL_NET_LABEL:-$POOL_NET}${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo -e "  ${DIM}/play/ runs as its own service ($PGS_SERVICE). Nothing here restarts the pool.${RESET}"
-        echo -e "  ${DIM}Public switch: admin panel → Settings → Games (off / preview / on).${RESET}"
+        echo -e "  ${DIM}Public switches: admin → Settings → Games (off / preview / on) and Games → Overview (Go live).${RESET}"
         echo -e "  Service: $(_pgs_menu_state)"
         echo ""
         echo -e "  ${GREEN}1${RESET}) Install / repair       ${DIM}(user, dirs, link secret, code, unit, start)${RESET}"

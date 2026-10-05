@@ -1,7 +1,9 @@
 # Script 082 — Provider / Host-Access Tamper Watch
 
-> **Covers code as of:** 2026-07-25 (the doc: "BUILT 2026-07-25") · **Last verified:** never systematically verified
-> **Product code last changed:** 2026-08-25 — `scripts/082_provider_access_watch.sh`
+> **Covers code as of:** 2026-07-25 (the doc: "BUILT 2026-07-25"); the *Alert design* section
+> 2026-10-03 · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-10-03 — `scripts/082_provider_access_watch.sh` (alert
+> delivery moved into `scripts/lib/grin_alert_send.sh`, inlined into the worker; no behaviour change)
 > The menu-key note was updated 2026-08-06; the rest is the 2026-07-25 build.
 
 **Status:** BUILT 2026-07-25 (add-ons branch), NOT VPS-tested.
@@ -39,8 +41,22 @@ scope** (surfaced as pointers in menu option 7, not implemented):
 - `state/` — `baseline_hash`, `baseline_time`, `last_seen` (epoch heartbeat), `interval_seconds`, `seen_logins` (sha set, primed at baseline, capped 1000→500), `last_report`, `last_status`, `last_check_time`, `last_alert_hash`.
 
 ## Alert design (mirrors pool `alert-delivery.js`)
-`notify(severity, subject, body)` sends to **every** configured channel; each is
-independent (`&& note sent || note FAILED`), one failing never blocks the rest.
+`notify(severity, subject, body)` sources `alert.conf` and calls `gas_send`, which sends to
+**every** configured channel. Each channel is independent (`note sent` / `note FAILED`), so
+one failing never blocks the rest.
+
+**Where the code lives (since 2026-10-03).** The delivery code is `scripts/lib/grin_alert_send.sh`,
+which the node event recorder (086 design §8.10) shares. `_aw_install_worker` **inlines** it
+between the worker's two quoted heredocs, so `/opt/grin/access-watch.sh` is still one
+self-contained file that sources nothing. Edit the lib, not the generated copy.
+- The worker sets `GAS_TITLE_PREFIX="Grin VPS access-watch"`, `GAS_NTFY_TAGS=rotating_light`
+  and `GAS_LOG_FN=note`, and nothing else. Every other knob stays off, so its requests and log
+  lines are byte-for-byte the pre-extraction ones. This was checked in nine stubbed
+  channel/tool combinations (086 implementation §8.17).
+- The worker is built in a temp file and moved into place. If the lib is missing, the
+  installed worker is kept and the menu warns.
+
+The channels:
 - **ntfy** — `curl -d` to topic URL; `Priority: urgent` when HIGH.
 - **Telegram** — `curl` to `api.telegram.org/bot<token>/sendMessage` (same pattern proven in the pool backend).
 - **Email** — `sendmail -t` → `mail` → `msmtp`, whichever exists.

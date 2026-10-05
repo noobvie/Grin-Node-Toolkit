@@ -140,6 +140,22 @@ function parseProxyV2Header(buf) {
   return { state: 'parsed', ip, consumed: total };
 }
 
+// Stratum pause (design §21.2): how long pause() waits for in-flight submits to settle before it
+// destroys the remaining sockets anyway. Derived, not picked: the node submit timeout
+// (SUBMIT_TIMEOUT_MS 15 s, node-stratum-client.js) + creditBlock's node reads (10 s) + 5 s.
+// Past it nothing is abandoned — the submit IIFE does not need its socket (see pause()).
+const PAUSE_SETTLE_MS = 30000;
+
+// After the sockets are destroyed, how long pause() waits for every socket and every closed
+// listener to emit 'close' (a listener fires it only once its last connection is gone). Bounded
+// so a wedged handle cannot hold the pause response open; the listener stopped ACCEPTING at
+// close() regardless.
+const LISTENER_CLOSE_WAIT_MS = 5000;
+
+// acceptState values. Intake is REFUSED only in the first two; while 'resuming' the listeners
+// that are already up serve miners normally (refusing there would bounce the first reconnects).
+const REFUSING_STATES = new Set(['pausing', 'paused']);
+
 class StratumServer {
   // `minerManager` is the process-wide session registry. index.js MUST pass its own instance:
   // the HTTP side (/api/pool/stats, the account page's per-worker online flag and stale/reject
@@ -190,6 +206,20 @@ class StratumServer {
     this.nodeStratumClient = null;
     // Set by index.js (setBlockManager) so found blocks are credited to the local DB.
     this.blockManager = null;
+    // Host the PUBLIC listener binds. Production is all interfaces; the tests set 127.0.0.1
+    // (CLAUDE.md: a local test server never binds 0.0.0.0).
+    this.publicHost = '0.0.0.0';
+    // Stratum pause MECHANISM (design §21). The policy — persisted row, caps, timers, boot
+    // re-derive — is lib/stratum-pause.js; this class only opens and closes intake.
+    //   'accepting' → normal · 'pausing' → listeners closed, settling · 'paused' → nothing bound
+    //   · 'resuming' → re-binding. See REFUSING_STATES.
+    this.acceptState = 'accepting';
+    // Submits between "passed validation" and "answered" (the async IIFE in handleSubmit).
+    // Entries are { isBlock, startedAt }; `isBlock` flips once the node reports a block hash.
+    // pause() waits on this — it is what "settled" means (§21.2.4).
+    this.inflight = new Set();
+    this._inflightWaiters = [];
+    this._pruneTimer = null;
   }
 
   // Wire the upstream node stratum client so submits can be forwarded for PoW validation.
@@ -202,26 +232,70 @@ class StratumServer {
     this.blockManager = bm;
   }
 
-  start() {
+  // `paused` (design §21.5): the pool booted with a persisted pause, so bind NOTHING — the
+  // listeners open on resume. index.js reads the pause row BEFORE calling this; binding first and
+  // closing after would reopen intake for a moment at every restart, and the gateways' HAProxy
+  // would push waiting miners straight in. The prune interval is armed either way.
+  // Returns the _bindAll() results Promise (resolves [] when paused).
+  start({ paused = false } = {}) {
+    if (!this._pruneTimer) {
+      this._pruneTimer = setInterval(() => this.pruneInactiveSessions(), 60000);
+    }
+    if (paused) {
+      this.acceptState = 'paused';
+      console.log(`[${new Date().toISOString()}] Stratum starting PAUSED — no listener bound until resume`);
+      return Promise.resolve([]);
+    }
+    this.acceptState = 'accepting';
+    return this._bindAll();
+  }
+
+  // Bind the public listener + every region listener in config.region_ports AS IT IS NOW (the
+  // pairing route edits it at runtime, and may change region_listen_host too). Every _listen call
+  // runs in this one tick, so every port is CLAIMED in boundPorts before any bind settles — a
+  // bindRegionListener racing a resume finds its port claimed and cannot double-bind (§21.4).
+  // A port this process already holds is a no-op (already:true), which is what makes a second
+  // resume a "re-bind only what is missing" (§21.3.5).
+  // Resolves to [{ port, host, region, bound, already, error }] — one per listener, the REAL
+  // outcome of each bind, never an unconditional success.
+  _bindAll() {
+    const targets = [];
     // Public listener: direct + local miners. Region = config.region (default single-box).
     // isPublic=true → per-IP connection cap applies (untrusted direct clients).
-    this._listen(this.port, '0.0.0.0', this.config.region || 'default', true);
+    targets.push({ port: this.port, host: this.publicHost, region: this.config.region || 'default', isPublic: true });
 
     // Model C: one internal listener per region, bound to the WireGuard interface only.
     // Regional gateways tunnel here with a PROXY-v2 header; the listener's region label is
     // stamped on every share that arrives on it. Empty region_ports = single-box (no-op).
+    const results = [];
     const regionPorts = this.config.region_ports || {};
     const host = this.config.region_listen_host || '127.0.0.1';
     for (const [region, rawPort] of Object.entries(regionPorts)) {
       const p = parseInt(rawPort, 10);
       if (!p || p === this.port) {
         console.error(`[ERROR] Invalid or duplicate region port for "${region}": ${rawPort} — skipped`);
+        results.push(Promise.resolve({ port: p || null, host, region, bound: false, already: false,
+          error: `Invalid or duplicate region port: ${rawPort}`, code: 'EINVAL' }));
         continue;
       }
-      this._listen(p, host, region, false); // trusted tunnel — exempt from per-IP cap
+      targets.push({ port: p, host, region, isPublic: false }); // trusted tunnel — exempt from per-IP cap
     }
 
-    setInterval(() => this.pruneInactiveSessions(), 60000);
+    for (const t of targets) {
+      if (this.boundPorts.has(t.port)) {
+        results.push(Promise.resolve({ port: t.port, host: t.host, region: t.region,
+          bound: true, already: true, error: null, code: null }));
+        continue;
+      }
+      results.push(new Promise((resolve) => {
+        this._listen(t.port, t.host, t.region, t.isPublic, (err) => {
+          // err.message already names the code ("listen EADDRINUSE: address already in use …").
+          resolve({ port: t.port, host: t.host, region: t.region, bound: !err, already: false,
+            error: err ? err.message : null, code: err ? (err.code || null) : null });
+        });
+      }));
+    }
+    return Promise.all(results);
   }
 
   // Runtime region-listener add (design §13.3 hot-bind): the admin-panel pairing
@@ -240,6 +314,12 @@ class StratumServer {
       return Promise.resolve({ bound: false, already: false, port: p || null,
         error: `Invalid or reserved region port: ${rawPort}` });
     }
+    // Paused (design §21.4): do NOT open intake. Nothing else needs recording — the caller has
+    // already written the region into config.region_ports, which is the one list resume() binds
+    // from. `deferred` is the caller's cue to say "opens when stratum resumes", not "listening".
+    if (this.isRefusing()) {
+      return Promise.resolve({ bound: false, already: false, deferred: true, port: p, error: null });
+    }
     if (this.boundPorts.has(p)) {
       return Promise.resolve({ bound: false, already: true, port: p, error: null });
     }
@@ -247,6 +327,11 @@ class StratumServer {
     return new Promise((resolve) => {
       // hot-added region = trusted tunnel, per-IP-cap exempt
       this._listen(p, host, region, false, (err) => {
+        if (err && err.code === 'STRATUM_PAUSED') {
+          // A pause landed while this bind was in flight and closed it (see _listen).
+          resolve({ bound: false, already: false, deferred: true, port: p, error: null });
+          return;
+        }
         resolve(err
           ? { bound: false, already: false, port: p, error: err.message }
           : { bound: true,  already: false, port: p, error: null });
@@ -267,14 +352,28 @@ class StratumServer {
       if (settled) return;
       settled = true;
       if (err) {
-        this.boundPorts.delete(port);
+        // An abandoned server's claim was already released by the pause — and the port may have
+        // been re-claimed since by a resume, which this must not undo.
+        if (!server._stratumAbandoned) this.boundPorts.delete(port);
         const i = this.servers.indexOf(server);
         if (i >= 0) this.servers.splice(i, 1);   // don't leave a dead listener in the registry
       }
       if (typeof done === 'function') done(err || null);
     };
+    // Identity of this listener, for pause()'s report and listenerView().
+    server._stratumMeta = { port, host, region, isPublic: !!isPublic };
     this.boundPorts.add(port);
     server.listen(port, host, () => {
+      // A pause (or stop) closed this server while its listen was still in flight. close() on a
+      // not-yet-listening server does NOT cancel the pending bind — it would come up here, alive
+      // and outside this.servers, where nothing would ever close it. Close it now instead.
+      if (server._stratumAbandoned) {
+        try { server.close(); } catch (e) { /* already closed */ }
+        const err = new Error(`Stratum listener ${host}:${port} closed by pause before it bound`);
+        err.code = 'STRATUM_PAUSED';
+        settle(err);
+        return;
+      }
       console.log(`[${new Date().toISOString()}] Stratum listener ${host}:${port} (region=${region})`);
       settle(null);
     });
@@ -283,6 +382,154 @@ class StratumServer {
       settle(err);
     });
     this.servers.push(server);
+  }
+
+  // ─── Stratum pause mechanism (design §21) ───────────────────────────────────────────────
+  // Policy (validation, persistence, caps, timers, audit) is lib/stratum-pause.js. These methods
+  // only open and close intake, and they assume the caller serialises them (StratumPause's
+  // transition guard); each still refuses a call that makes no sense in the current state.
+
+  isRefusing() {
+    return REFUSING_STATES.has(this.acceptState);
+  }
+
+  // Close every listener this process holds — public, boot-time region and hot-bound region
+  // alike (all of them live in this.servers) — and release their port claims. Returns
+  // [{ port, host, region }] plus a Promise per server that resolves on its 'close' event.
+  _closeAllListeners() {
+    const closed = [];
+    const closing = [];
+    for (const server of this.servers.splice(0)) {
+      server._stratumAbandoned = true;
+      const m = server._stratumMeta || {};
+      closed.push({ port: m.port || null, host: m.host || null, region: m.region || null });
+      closing.push(new Promise((resolve) => {
+        server.once('close', resolve);
+        try { server.close(); } catch (e) { resolve(); }
+      }));
+    }
+    this.boundPorts.clear();
+    return { closed, closing };
+  }
+
+  // Resolve once this.inflight is empty, or after `ms` (resolves false on timeout). `ms` omitted
+  // = no timeout — the policy layer uses that to stamp settled_at when a slow submit finally lands.
+  waitSettled(ms) {
+    if (this.inflight.size === 0) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      let timer = null;
+      const waiter = () => { if (timer) clearTimeout(timer); resolve(true); };
+      this._inflightWaiters.push(waiter);
+      if (typeof ms === 'number') {
+        timer = setTimeout(() => {
+          const i = this._inflightWaiters.indexOf(waiter);
+          if (i >= 0) this._inflightWaiters.splice(i, 1);
+          resolve(false);
+        }, ms);
+      }
+    });
+  }
+
+  _inflightDone(entry) {
+    this.inflight.delete(entry);
+    if (this.inflight.size === 0 && this._inflightWaiters.length) {
+      const waiters = this._inflightWaiters.splice(0);
+      for (const w of waiters) w();
+    }
+  }
+
+  // Stop accepting miners (design §21.2 steps 3–5). Order is the point:
+  //   1. close EVERY listener → the kernel refuses new connects on every stratum port;
+  //   2. socket.pause() every connection → no new frame is parsed, while writes still flow, so an
+  //      in-flight submit's reply still reaches its miner;
+  //   3. wait for this.inflight to drain, bounded by `settleMs`;
+  //   4. destroy every remaining socket (cleanup → minerManager.closeSession).
+  // Past the bound nothing is abandoned: the submit IIFE closes over the session and the submit
+  // values, not the socket — _stat no-ops once the session is closed and a write to a destroyed
+  // socket fails silently (its 'error' listener stays attached) — so a block candidate still in
+  // flight is credited even though its miner is gone. The result says how many were left.
+  async pause({ settleMs = PAUSE_SETTLE_MS } = {}) {
+    if (this.acceptState !== 'accepting') {
+      const err = new Error(`Cannot pause: stratum is ${this.acceptState}`);
+      err.code = 'ESTATE';
+      throw err;
+    }
+    const t0 = Date.now();
+    this.acceptState = 'pausing';
+
+    const { closed, closing } = this._closeAllListeners();
+
+    for (const socket of this.sockets.keys()) {
+      if (!socket.destroyed) socket.pause();
+    }
+    const settled = await this.waitSettled(settleMs);
+    const settleMs_ = Date.now() - t0;
+    let blocksInFlight = 0;
+    for (const e of this.inflight) if (e.isBlock) blocksInFlight++;
+    const inflightLeft = this.inflight.size;
+
+    let socketsClosed = 0;
+    for (const socket of [...this.sockets.keys()]) {
+      socketsClosed++;
+      if (!socket.closed) closing.push(new Promise((r) => socket.once('close', r)));
+      socket.destroy();
+    }
+
+    // Wait for every socket's 'close' (that is where cleanup → minerManager.closeSession runs —
+    // a tick AFTER destroy, and after its listener's own 'close') and every listener's 'close'
+    // (which fires once its last connection is gone). On return the registry and the session
+    // table are empty, so the "N dropped" in the response is already true.
+    await Promise.race([
+      Promise.all(closing),
+      new Promise((r) => { const t = setTimeout(r, LISTENER_CLOSE_WAIT_MS); if (t.unref) t.unref(); }),
+    ]);
+
+    this.acceptState = 'paused';
+    console.log(`[${new Date().toISOString()}] Stratum PAUSED — ${closed.length} listener(s) closed, ` +
+      `${socketsClosed} connection(s) dropped, ${settled ? 'settled' : `NOT settled (${inflightLeft} in flight, ${blocksInFlight} block(s))`} in ${settleMs_} ms`);
+    return {
+      settled,
+      settle_ms: settleMs_,
+      inflight_left: inflightLeft,
+      blocks_in_flight: blocksInFlight,
+      sockets_closed: socketsClosed,
+      listeners_closed: closed,
+    };
+  }
+
+  // Re-open intake (design §21.3). From 'paused': bind the public listener + every region_ports
+  // entry as it is NOW, then accept — even if some binds failed (the operator asked for service;
+  // the failures are in the result, and the policy layer raises the alert). From 'accepting':
+  // re-bind only what is missing (the operator's retry button). Resolves
+  // { rebind, results: [{ port, host, region, bound, already, error, code }] }.
+  async resume() {
+    if (this.acceptState === 'accepting') {
+      return { rebind: true, results: await this._bindAll() };
+    }
+    if (this.acceptState !== 'paused') {
+      const err = new Error(`Cannot resume: stratum is ${this.acceptState}`);
+      err.code = 'ESTATE';
+      throw err;
+    }
+    this.acceptState = 'resuming';
+    let results;
+    try {
+      results = await this._bindAll();
+    } finally {
+      this.acceptState = 'accepting';
+    }
+    const failed = results.filter((r) => !r.bound).length;
+    console.log(`[${new Date().toISOString()}] Stratum RESUMED — ${results.length - failed}/${results.length} listener(s) up` +
+      (failed ? ` (${failed} FAILED)` : ''));
+    return { rebind: false, results };
+  }
+
+  // Live listener view for the admin control route: what this process actually holds.
+  listenerView() {
+    return this.servers.map((s) => {
+      const m = s._stratumMeta || {};
+      return { port: m.port || null, host: m.host || null, region: m.region || null, listening: !!s.listening };
+    });
   }
 
   // Called by NodeStratumClient whenever the node pushes a new job.
@@ -313,6 +560,9 @@ class StratumServer {
 
   broadcastJob() {
     if (!this.currentJob) return;
+    // Paused (§21.2): setNewJob still tracks the job — resume then has a current one at once —
+    // but nobody is to be handed work the pool will not credit.
+    if (this.isRefusing()) return;
     const msg = JSON.stringify(createJobNotification(
       this.currentJob.job_id,
       this.currentJob.height,
@@ -341,6 +591,13 @@ class StratumServer {
     // when the address is shared (CGNAT, mining-farm NAT) — precisely the population the cap's
     // generous default exists to protect. Keep the increment and the decrement on THIS constant.
     const cappedIp = ip;
+
+    // Paused (§21): every listener is closed, so nothing should reach here. A guard anyway, so
+    // a listener that slipped the close can never become a way back in.
+    if (this.isRefusing()) {
+      socket.destroy();
+      return;
+    }
 
     // Global socket ceiling: refuse once the process is at capacity so a
     // connection flood can't exhaust file descriptors / memory.
@@ -515,6 +772,16 @@ class StratumServer {
   }
 
   handleMessage(socket, msg, ip, setSession, getSession, region) {
+    // Paused (§21.2.4): pause() stops reading every socket, but a frame already parsed from the
+    // same chunk can still land here. Refuse it — a REJECTION, never an ack (decision 3) — and do
+    // NOT _stat it: checkStratumHealth sums the session counters, and a pause must not fire
+    // high_rejection_rate. A login is refused too, so no session is created on a closing pool.
+    if (this.isRefusing() && (msg.method === 'submit' || msg.method === 'login')) {
+      socket.write(JSON.stringify(msg.method === 'submit'
+        ? createSubmitResponse(msg.id, false, null, 'Pool paused')
+        : createLoginResponse(msg.id, { code: -1, message: 'Pool paused' })) + '\n');
+      return;
+    }
     switch (msg.method) {
       case 'login':
         this.handleLogin(socket, msg, ip, setSession, region, getSession);
@@ -743,6 +1010,11 @@ class StratumServer {
     // unless the node accepts the PoW. If the node is briefly unreachable, forwardSubmit
     // returns accepted:false and we reject the share (the miner resubmits) rather than crediting
     // unvalidated work.
+    //
+    // Tracked in this.inflight from here until the reply is written (design §21.2.4): a stratum
+    // pause waits on this set, and "settled" means it is empty.
+    const inflightEntry = { isBlock: false, startedAt: Date.now() };
+    this.inflight.add(inflightEntry);
     (async () => {
       let nodeResult = { accepted: true, blockHash: null, error: null };
       if (this.nodeStratumClient) {
@@ -838,6 +1110,7 @@ class StratumServer {
       }
 
       if (nodeResult.blockHash) {
+        inflightEntry.isBlock = true;
         console.log(`[${new Date().toISOString()}] BLOCK FOUND: height=${height} hash=${nodeResult.blockHash} miner=${session.grinAddress}`);
         // Credit the found block to the local DB (creditBlock dedups by hash UNIQUE). Under
         // Model C every region's submits arrive here, so the central box is the sole crediter.
@@ -891,7 +1164,7 @@ class StratumServer {
     })().catch((err) => {
       console.error(`[ERROR] Share submission: ${err.message}`);
       socket.write(JSON.stringify(createSubmitResponse(id, false, null, 'Internal error')) + '\n');
-    });
+    }).finally(() => this._inflightDone(inflightEntry));
   }
 
   handleGetJobTemplate(socket, msg) {
@@ -980,13 +1253,13 @@ class StratumServer {
     }
   }
 
+  // Works in any acceptState, paused included (nothing is bound then, so only the timer goes).
+  // Unlike pause() it leaves live sockets alone — it is a shutdown helper, not an intake control.
   stop() {
-    for (const server of this.servers) {
-      try { server.close(); } catch (e) { /* already closed */ }
-    }
-    // Release the port claims too, or a restart in the same process is refused as
-    // already-bound by the idempotency check (audit §J6-12).
-    this.boundPorts.clear();
+    // _closeAllListeners also empties this.servers and releases the port claims, or a restart in
+    // the same process is refused as already-bound by the idempotency check (audit §J6-12).
+    this._closeAllListeners();
+    if (this._pruneTimer) { clearInterval(this._pruneTimer); this._pruneTimer = null; }
   }
 
   getStats() {
@@ -1021,5 +1294,6 @@ module.exports.MSG_BURST        = MSG_BURST;
 module.exports.MAX_CONSECUTIVE_REJECTS = MAX_CONSECUTIVE_REJECTS;
 module.exports.LOGIN_DEADLINE_MS       = LOGIN_DEADLINE_MS;
 module.exports.JOB_WINDOW              = JOB_WINDOW;
+module.exports.PAUSE_SETTLE_MS         = PAUSE_SETTLE_MS;
 module.exports.MSG_RATE_PER_SEC = MSG_RATE_PER_SEC;
 module.exports.MSG_BURST        = MSG_BURST;

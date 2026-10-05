@@ -10,7 +10,8 @@
   <style>
     .gn-name { font-weight: 600; overflow-wrap: anywhere; }
     .gn-sub { font-size: .75rem; color: var(--text-dim); margin-top: .2rem; overflow-wrap: anywhere; }
-    .gn-flags { display: flex; flex-wrap: wrap; gap: .3rem; }
+    .gn-bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: 0 0 .6rem; }
+    .gn-bar input { max-width: 320px; }
     #confirm-dialog .modal { max-width: 480px; }
   </style>
 </head>
@@ -21,26 +22,43 @@
     <section>
       <h2>Games · Nicknames</h2>
       <p class="helper-text" style="margin:0 0 .8rem;">
-        Players on <a href="/play/" target="_blank" rel="noopener">/play/</a> can ask for a nickname. Nothing a player
-        types is shown to anyone else until you approve it here, and an approved nickname is <strong>always</strong>
-        shown together with the masked address — <code>Night Shift (grin1abcd…wxyz)</code> — never on its own, so
-        copying someone's nickname does not make you them. Names that contain "operator", "admin" or "moderator",
-        look like an address, or match another player's live nickname are refused before they reach this queue.
-        Every action here asks for your admin password again. Switch nicknames off under
-        <a href="games.html">Overview &amp; settings</a>.
+        Players on <a href="/play/" target="_blank" rel="noopener">/play/</a> choose a nickname of 3–20 letters and
+        digits. It is <strong>checked automatically and goes live at once</strong> — there is no queue. The check refuses
+        reserved words (operator, admin, moderator, support, staff, official, mod, bot, pool, this pool's name, names
+        starting with "guest"), the built-in slur list, your <a href="settings-names.html">blocked words</a>, the chat
+        <a href="games-chat.html">word list</a>, banned names below, and any name that reads the same as another
+        player's (case, look-alike digits ignored). A nickname is <strong>always</strong> shown together with the masked
+        address — <code>NightShift (grin1abcd…wxyz)</code> — so copying one does not make you someone. Moderators can
+        remove a name from /play/; banning a name and blocking a player are yours. Every action here asks for your
+        admin password again. Switch nicknames off under <a href="games.html">Overview &amp; settings</a>.
       </p>
       <p class="error-msg" id="gn-offline" style="display:none;"></p>
-      <p class="helper-text" id="gn-off" style="display:none;">Nicknames are switched <strong>off</strong>: players cannot ask for one, and every page shows masked addresses only. Approved names are kept and come back when you switch it on.</p>
+      <p class="helper-text" id="gn-off" style="display:none;">Nicknames are switched <strong>off</strong>: players cannot set one, and every page shows masked addresses only. Live names are kept and come back when you switch it on.</p>
 
       <div class="tabs" id="gn-tabs">
-        <button class="tab-btn active" data-state="pending">Waiting for review <span id="gn-count-pending"></span></button>
-        <button class="tab-btn" data-state="approved">Live <span id="gn-count-approved"></span></button>
-        <button class="tab-btn" data-state="rejected">Rejected</button>
+        <button class="tab-btn active" data-tab="live">Live <span id="gn-count-live"></span></button>
+        <button class="tab-btn" data-tab="removed">Removed <span id="gn-count-removed"></span></button>
+        <button class="tab-btn" data-tab="banned">Banned names <span id="gn-count-banned"></span></button>
+        <button class="tab-btn" data-tab="blocked">Blocked players <span id="gn-count-blocked"></span></button>
       </div>
+
+      <form class="gn-bar" id="gn-search-form" novalidate>
+        <input type="search" id="gn-q" class="settings-skip" maxlength="64" autocomplete="off" placeholder="Search a name or an address start">
+        <button type="submit" class="btn btn-secondary btn-sm">Search</button>
+      </form>
+      <form class="gn-bar" id="gn-ban-form" novalidate style="display:none;">
+        <input type="text" id="gn-ban-name" class="settings-skip" maxlength="40" autocomplete="off" placeholder="A name to ban (every spelling of it)">
+        <button type="submit" class="btn btn-danger btn-sm">Ban name</button>
+      </form>
+      <form class="gn-bar" id="gn-block-form" novalidate style="display:none;">
+        <input type="text" id="gn-block-addr" class="settings-skip" maxlength="70" autocomplete="off" placeholder="An address to block from nicknames">
+        <button type="submit" class="btn btn-danger btn-sm">Block player</button>
+      </form>
+
       <div class="card" style="padding:0;">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Nickname</th><th>Address</th><th id="gn-col-time">Sent (UTC)</th><th>Flags / reason</th><th>Actions</th></tr></thead>
+            <thead><tr id="gn-head"></tr></thead>
             <tbody id="gn-tbody"><tr class="loading-row"><td colspan="5"><span class="spinner"></span>Loading…</td></tr></tbody>
           </table>
         </div>
@@ -51,14 +69,13 @@
       <p id="gn-msg" style="display:none;"></p>
 
       <div class="card" style="margin-top:1rem;">
-        <h3 class="sub-title" style="margin-top:0;">What the flags mean</h3>
+        <h3 class="sub-title" style="margin-top:0;">What each action does</h3>
         <ul class="helper-text" style="margin:0;padding-left:1.1rem;">
-          <li><strong>Reserved word</strong> — pool, grinium, official, support, staff, prize, jackpot, winner, mod or bot: it could read as speaking for the pool.</li>
-          <li><strong>Word list</strong> — it contains an entry of the chat word list (<a href="games-chat.html">Chat &amp; moderation</a>).</li>
-          <li><strong>Same as a live name</strong> — another player already has a nickname that reads the same (case, spaces, <code>-</code> <code>_</code> and look-alike digits ignored). It cannot be approved.</li>
-          <li><strong>Same as a waiting name</strong> — another request reads the same. Only the first one you approve can go live.</li>
+          <li><strong>Remove</strong> — the name stops showing at once; the player sees your reason on /play/ and can choose another (once their change cooldown is over).</li>
+          <li><strong>Ban name</strong> — removes it from whoever holds it AND refuses it, in every spelling that reads the same (<code>Sp4rky</code> = <code>sparky</code>), to everyone from now on. Players are only told the name "isn't available".</li>
+          <li><strong>Block player</strong> — removes their name and stops that address from setting any nickname until you unblock it. Chat and games are not affected.</li>
+          <li><strong>Now refused by…</strong> — a live name the rule would refuse today (you added a word after it went live). Nothing happens to it by itself: remove it if you agree.</li>
         </ul>
-        <p class="helper-text" style="margin:.6rem 0 0;">Flags are hints, never decisions. A rejection reason is <strong>shown to the player</strong> on /play/.</p>
       </div>
     </section>
   </div>
@@ -85,67 +102,65 @@
 <script src="/admin/admin-shell.js"></script>
 <script src="/admin/games-admin.js"></script>
 <script>
-// Games → Nicknames (design §19.16; games Part 12). Every call goes through GamesAdmin.call
-// (the admin proxy, adminFetch — never API.*); every write is step-up (none is in the pool's
-// FAST_WRITES). A nickname and a rejection reason are PLAYER/ADMIN TEXT: every row here is
-// built with GamesAdmin.el (textContent), never as an HTML string.
+// Games → Nicknames (design §19.17.5; games Part C3, which replaced Part 12's review queue).
+// Every call goes through GamesAdmin.call (the admin proxy, adminFetch — never API.*); every
+// write is step-up (none is in the pool's FAST_WRITES). A nickname, a banned name and a reason
+// are PLAYER/ADMIN TEXT: every row here is built with GamesAdmin.el (textContent), never as an
+// HTML string.
 API.guardAdminPage();
 const G = window.GamesAdmin;
 const { el } = G;
 
-let _state = 'pending';
+let _tab = 'live';
+let _q = '';
 
-const FLAG_TEXT = {
-  reserved: f => ['badge-warn', 'Reserved word: ' + f.word],
-  word: f => ['badge-warn', 'Word list: ' + f.word],
-  same_as: () => ['badge-error', 'Same as a live name'],
-  pending_same: () => ['badge-dim', 'Same as a waiting name'],
+const LIST_TEXT = {
+  reserved: 'a reserved word', pool_name: 'the pool\'s name', prefix: 'the "guest" prefix', seed: 'the built-in list',
+  operator: 'your blocked words', chat: 'the chat word list', banned: 'a banned name',
+};
+const HEADS = {
+  live: ['Nickname', 'Address', 'Live since (UTC)', 'Rule check', 'Actions'],
+  removed: ['Nickname', 'Address', 'Removed (UTC)', 'Reason', 'Actions'],
+  banned: ['Banned name', 'Matching form', 'Banned (UTC)', 'Reason', 'Actions'],
+  blocked: ['Address', '', 'Last name change (UTC)', '', 'Actions'],
 };
 
-function flagsCell(n) {
-  const td = el('td');
-  if (n.state === 'pending') {
-    const box = el('div', 'gn-flags');
-    (n.flags || []).forEach(f => {
-      const make = FLAG_TEXT[f.type];
-      if (!make) return;
-      const [cls, label] = make(f);
-      box.appendChild(el('span', 'badge ' + cls, label));
-    });
-    if (!box.firstChild) box.appendChild(el('span', 'gn-sub', 'none'));
-    td.appendChild(box);
-    (n.flags || []).filter(f => Array.isArray(f.addresses)).forEach(f => {
-      const sub = el('div', 'gn-sub');
-      sub.appendChild(document.createTextNode(f.type === 'same_as' ? 'held by ' : 'also asked by '));
-      f.addresses.forEach(a => { sub.appendChild(G.addrChip(a)); sub.appendChild(document.createTextNode(' ')); });
-      td.appendChild(sub);
-    });
-  } else if (n.reason) {
-    td.appendChild(el('span', null, '“' + n.reason + '”'));
-  } else {
-    td.appendChild(el('span', 'gn-sub', '—'));
+function head() {
+  const tr = document.getElementById('gn-head');
+  G.clear(tr);
+  HEADS[_tab].forEach(h => tr.appendChild(el('th', null, h)));
+  document.getElementById('gn-search-form').style.display = _tab === 'live' || _tab === 'removed' ? '' : 'none';
+  document.getElementById('gn-ban-form').style.display = _tab === 'banned' ? '' : 'none';
+  document.getElementById('gn-block-form').style.display = _tab === 'blocked' ? '' : 'none';
+}
+
+function empty(tb, text) {
+  const tr = el('tr');
+  const td = el('td', 'empty-row', text);
+  td.colSpan = 5;
+  tr.appendChild(td);
+  tb.appendChild(tr);
+}
+
+function counts(c) {
+  if (!c) return;
+  ['live', 'removed', 'banned', 'blocked'].forEach(k => {
+    document.getElementById('gn-count-' + k).textContent = typeof c[k] === 'number' ? '(' + c[k] + ')' : '';
+  });
+}
+
+function whenCell(t, by) {
+  const td = el('td', 'mono', G.fmtUtc(t));
+  if (by) {
+    const sub = el('div', 'gn-sub');
+    sub.appendChild(document.createTextNode('by '));
+    sub.appendChild(by === 'self' ? el('span', null, 'the player') : by === 'system' ? el('span', null, 'the v2 rule migration') : G.actorNode(by));
+    td.appendChild(sub);
   }
   return td;
 }
 
-function actionsCell(n) {
-  const td = el('td');
-  const box = el('div', 'row-actions');
-  if (n.state === 'pending') {
-    const blocked = (n.flags || []).some(f => f.type === 'same_as');
-    const ok = G.btn('Approve', 'btn-secondary', () => act(n, 'approve'));
-    if (blocked) { ok.disabled = true; ok.title = 'Another player already has a nickname that reads the same.'; }
-    box.appendChild(ok);
-    box.appendChild(G.btn('Reject', 'btn-danger', () => act(n, 'reject')));
-  } else if (n.state === 'approved') {
-    box.appendChild(G.btn('Remove', 'btn-danger', () => act(n, 'remove')));
-  }
-  box.appendChild(G.playerLink(n.address));
-  td.appendChild(box);
-  return td;
-}
-
-function row(n) {
+function nickRow(n) {
   const tr = el('tr');
   const name = el('td');
   name.appendChild(el('div', 'gn-name', n.name));                 // player text: textContent only
@@ -154,38 +169,82 @@ function row(n) {
   const who = el('td');
   who.appendChild(G.addrChip(n.address));
   tr.appendChild(who);
-  const t = el('td', 'mono', G.fmtUtc(n.state === 'pending' ? n.submitted_at : n.decided_at));
-  if (n.state !== 'pending' && n.decided_by) {
-    const sub = el('div', 'gn-sub');
-    sub.appendChild(document.createTextNode('by '));
-    sub.appendChild(G.actorNode(n.decided_by));
-    t.appendChild(sub);
+  tr.appendChild(whenCell(n.decided_at, n.state === 'approved' ? null : n.decided_by));
+  const info = el('td');
+  if (n.state === 'approved') {
+    if (n.hit) info.appendChild(el('span', 'badge badge-warn', 'Now refused by ' + (LIST_TEXT[n.hit.list] || n.hit.list) + (n.hit.entry ? ': ' + n.hit.entry : '')));
+    else info.appendChild(el('span', 'gn-sub', 'passes'));
+  } else if (n.reason) {
+    info.appendChild(el('span', null, '“' + n.reason + '”'));
+  } else {
+    info.appendChild(el('span', 'gn-sub', '—'));
   }
-  tr.appendChild(t);
-  tr.appendChild(flagsCell(n));
-  tr.appendChild(actionsCell(n));
+  tr.appendChild(info);
+  const td = el('td');
+  const box = el('div', 'row-actions');
+  if (n.state === 'approved') box.appendChild(G.btn('Remove', 'btn-danger', () => removeName(n)));
+  box.appendChild(G.btn('Ban name', 'btn-outline', () => banName(n.name, n.state === 'approved' ? n : null)));
+  if (n.state === 'approved') box.appendChild(G.btn('Block player', 'btn-outline', () => block(n.address)));
+  box.appendChild(G.playerLink(n.address));
+  td.appendChild(box);
+  tr.appendChild(td);
+  return tr;
+}
+
+function bannedRow(b) {
+  const tr = el('tr');
+  tr.appendChild(el('td', 'gn-name', b.name));
+  tr.appendChild(el('td', 'mono', b.norm));
+  tr.appendChild(whenCell(b.banned_at, b.banned_by));
+  tr.appendChild(b.reason ? el('td', null, '“' + b.reason + '”') : el('td', 'gn-sub', '—'));
+  const td = el('td');
+  td.appendChild(G.btn('Unban', 'btn-secondary', () => unban(b)));
+  tr.appendChild(td);
+  return tr;
+}
+
+function blockedRow(b) {
+  const tr = el('tr');
+  const who = el('td');
+  who.appendChild(G.addrChip(b.address));
+  tr.appendChild(who);
+  tr.appendChild(el('td'));
+  tr.appendChild(el('td', 'mono', G.fmtUtc(b.changed_at)));
+  tr.appendChild(el('td'));
+  const td = el('td');
+  const box = el('div', 'row-actions');
+  box.appendChild(G.btn('Unblock', 'btn-secondary', () => unblock(b.address)));
+  box.appendChild(G.playerLink(b.address));
+  td.appendChild(box);
+  tr.appendChild(td);
   return tr;
 }
 
 async function load() {
   const tb = document.getElementById('gn-tbody');
-  document.getElementById('gn-col-time').textContent = _state === 'pending' ? 'Sent (UTC)' : 'Decided (UTC)';
+  head();
   try {
-    const r = await G.call('GET', 'nicknames?state=' + _state);
-    document.getElementById('gn-offline').style.display = 'none';
-    document.getElementById('gn-off').style.display = r.enabled ? 'none' : '';
-    document.getElementById('gn-count-pending').textContent = r.counts.pending ? '(' + r.counts.pending + ')' : '';
-    document.getElementById('gn-count-approved').textContent = '(' + r.counts.approved + ')';
+    let r;
     G.clear(tb);
-    if (!r.nicknames.length) {
-      const tr = el('tr');
-      const td = el('td', 'empty-row', { pending: 'Nothing is waiting for review.', approved: 'No live nicknames.', rejected: 'Nothing rejected.' }[_state]);
-      td.colSpan = 5;
-      tr.appendChild(td);
-      tb.appendChild(tr);
-      return;
+    if (_tab === 'banned') {
+      r = await G.call('GET', 'banned-names');
+      G.clear(tb);
+      if (!r.banned.length) empty(tb, 'No banned names.');
+      r.banned.forEach(b => tb.appendChild(bannedRow(b)));
+    } else if (_tab === 'blocked') {
+      r = await G.call('GET', 'nick-blocked');
+      G.clear(tb);
+      if (!r.blocked.length) empty(tb, 'Nobody is blocked from nicknames.');
+      r.blocked.forEach(b => tb.appendChild(blockedRow(b)));
+    } else {
+      r = await G.call('GET', 'nicknames?state=' + _tab + (_q ? '&q=' + encodeURIComponent(_q) : ''));
+      G.clear(tb);
+      document.getElementById('gn-off').style.display = r.enabled ? 'none' : '';
+      if (!r.nicknames.length) empty(tb, _q ? 'Nothing matches “' + _q + '”.' : (_tab === 'live' ? 'No live nicknames.' : 'Nothing removed.'));
+      r.nicknames.forEach(n => tb.appendChild(nickRow(n)));
     }
-    r.nicknames.forEach(n => tb.appendChild(row(n)));
+    counts(r.counts);
+    document.getElementById('gn-offline').style.display = 'none';
   } catch (e) {
     G.clear(tb);
     const off = document.getElementById('gn-offline');
@@ -194,30 +253,73 @@ async function load() {
   }
 }
 
-async function act(n, action) {
-  const who = G.short(n.address);
-  const spec = {
-    approve: { title: 'Approve “' + n.name + '”?', body: 'It shows at once on chat, the boards and games as:\n' + n.shown_as, withReason: false, confirmText: 'Approve' },
-    reject: { title: 'Reject “' + n.name + '”?', body: 'The player ' + who + ' sees the rejection and your reason on /play/, and can ask again.', withReason: true, confirmText: 'Reject', danger: true },
-    remove: { title: 'Remove “' + n.name + '”?', body: 'Every page shows ' + who + ' as the masked address again. The player sees your reason and can ask for a new nickname, which is reviewed again.', withReason: true, confirmText: 'Remove', danger: true },
-  }[action];
-  const ok = await G.askConfirm(spec);
-  if (!ok) return;
-  const body = spec.withReason && ok.reason ? { reason: ok.reason } : {};
+async function write(rel, body, done) {
   try {
-    await G.call('POST', 'nicknames/' + n.id + '/' + action, body);
-    G.flash('gn-msg', { approve: 'Approved.', reject: 'Rejected.', remove: 'Removed.' }[action]);
+    const r = await G.call('POST', rel, body);
+    G.flash('gn-msg', typeof done === 'function' ? done(r) : done);
   } catch (e) {
-    G.flash('gn-msg', e.code === 'nickname_taken' ? 'Another player already has a nickname that reads the same — it cannot go live.' : e.message, true);
+    G.flash('gn-msg', e.message, true);
   }
   await load();
 }
 
+async function removeName(n) {
+  const ok = await G.askConfirm({ title: 'Remove “' + n.name + '”?', withReason: true, confirmText: 'Remove', danger: true,
+    body: 'Every page shows ' + G.short(n.address) + ' as the masked address again. The player sees your reason and can choose another name once their change cooldown is over.' });
+  if (!ok) return;
+  await write('nicknames/' + n.id + '/remove', ok.reason ? { reason: ok.reason } : {}, 'Removed.');
+}
+
+async function banName(name, holder) {
+  const ok = await G.askConfirm({ title: 'Ban the name “' + name + '”?', withReason: true, confirmText: 'Ban name', danger: true,
+    body: 'Nobody can take it again, in any spelling that reads the same.' + (holder ? '\n' + G.short(holder.address) + ' loses it now and sees your reason.' : '') });
+  if (!ok) return;
+  await write('banned-names', ok.reason ? { name, reason: ok.reason } : { name },
+    r => (r.changed ? 'Banned.' : 'Already banned.') + (r.removed ? ' Removed from ' + G.short(r.removed.address) + '.' : ''));
+}
+
+async function unban(b) {
+  const ok = await G.askConfirm({ title: 'Unban “' + b.name + '”?', withReason: false, confirmText: 'Unban',
+    body: 'Anyone may take it again. Nothing is given back to whoever held it.' });
+  if (!ok) return;
+  await write('banned-names/' + encodeURIComponent(b.norm) + '/unban', {}, 'Unbanned.');
+}
+
+async function block(address) {
+  const ok = await G.askConfirm({ title: 'Block ' + G.short(address) + ' from nicknames?', withReason: true, confirmText: 'Block player', danger: true,
+    body: 'Their live name (if any) is removed and they cannot set another until you unblock them. Chat and games are not affected.' });
+  if (!ok) return;
+  await write('players/' + G.playerSeg(address) + '/nick-block', ok.reason ? { reason: ok.reason } : {}, r => r.removed ? 'Blocked; their name was removed.' : 'Blocked.');
+}
+
+async function unblock(address) {
+  const ok = await G.askConfirm({ title: 'Unblock ' + G.short(address) + '?', withReason: false, confirmText: 'Unblock',
+    body: 'They can set a nickname again. A removed name is not given back.' });
+  if (!ok) return;
+  await write('players/' + G.playerSeg(address) + '/nick-unblock', {}, 'Unblocked.');
+}
+
 document.querySelectorAll('#gn-tabs .tab-btn').forEach(b => b.addEventListener('click', () => {
   document.querySelectorAll('#gn-tabs .tab-btn').forEach(x => x.classList.toggle('active', x === b));
-  _state = b.getAttribute('data-state');
+  _tab = b.getAttribute('data-tab');
   load();
 }));
+document.getElementById('gn-search-form').addEventListener('submit', e => {
+  e.preventDefault();
+  _q = document.getElementById('gn-q').value.trim();
+  load();
+});
+document.getElementById('gn-ban-form').addEventListener('submit', e => {
+  e.preventDefault();
+  const v = document.getElementById('gn-ban-name').value.trim();
+  if (v) banName(v, null).then(() => { document.getElementById('gn-ban-name').value = ''; });
+});
+document.getElementById('gn-block-form').addEventListener('submit', e => {
+  e.preventDefault();
+  const v = document.getElementById('gn-block-addr').value.trim();
+  if (!G.isPlayer(v)) { G.flash('gn-msg', 'That is not a GRIN address or a guest id (g:…).', true); return; }
+  block(v).then(() => { document.getElementById('gn-block-addr').value = ''; });
+});
 document.getElementById('gn-refresh').addEventListener('click', load);
 load();
 </script>

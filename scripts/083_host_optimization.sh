@@ -302,9 +302,9 @@ show_menu() {
     echo -e "  ${CYAN}5${RESET})   Kernel & node limits      ${DIM}sysctl, THP, fd limits, peer count${RESET}"
     echo -e "  ${CYAN}6${RESET})   Security & firewall       ${DIM}ufw, exposed node API, updates${RESET}"
     echo ""
-    echo -e "${BOLD}  Hardening${RESET}"
-    echo -e "  ${YELLOW}7${RESET})   SSH posture               ${DIM}read-only summary of SSH config${RESET}"
-    echo -e "  ${YELLOW}8${RESET})   SSH Key Hardening →       ${DIM}open the SSH tool (makes changes)${RESET}"
+    echo -e "${BOLD}  Hardening${RESET}   ${DIM}configure first, then verify${RESET}"
+    echo -e "  ${YELLOW}7${RESET})   SSH Key Hardening →       ${DIM}keys, key-only login, guided user+sudo setup${RESET}"
+    echo -e "  ${YELLOW}8${RESET})   SSH posture               ${DIM}read-only summary — check your work${RESET}"
     echo ""
     echo -e "  ${DIM}0${RESET})   Return to admin centre"
     echo ""
@@ -329,8 +329,8 @@ main() {
             "4") show_single_area Disk       || true ;;
             "5") show_single_area Kernel Node || true ;;
             "6") show_single_area Security   || true ;;
-            "7") show_single_area SSH        || true ;;
-            "8") open_ssh_hardening          || true ;;
+            "7") open_ssh_hardening          || true ;;
+            "8") show_single_area SSH        || true ;;
             "0") break ;;
             *)   warn "Invalid option." ; sleep 1 ;;
         esac

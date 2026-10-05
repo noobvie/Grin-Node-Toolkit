@@ -1,0 +1,162 @@
+/* chat-bubble.css — the floating chat on the pool's public pages (design §19.17.7; Part C7).
+ *
+ * Loaded by chat-bubble.js onto POOL pages, so every rule is scoped under .gcb (or the two
+ * body hooks it sets) and draws only from the pool's own tokens — the bubble follows the
+ * page's theme (Reactor, Light, the seasonal ones) without knowing which one it is. Ink on an
+ * accent fill is var(--bg), never a literal (the pool's UI/UX audit rule).
+ *
+ * The rows reuse the /play/ panel's class names (the shared chat core draws them); play.css is
+ * not loaded here, so the row rules are repeated below under .gcb.
+ *
+ * Stacking: below the pool's cookie-consent bar (9999), announcement banners (9998) and the
+ * maintenance overlay; above page chrome and the ad rail (40). --gcb-lift is the consent
+ * bar's height, set by the script, so the bubble rides above it instead of covering it.
+ */
+.gcb {
+    --gcb-gap: 16px;
+    --gcb-lift: 0px;
+    position: fixed; right: var(--gcb-gap); bottom: calc(var(--gcb-gap) + var(--gcb-lift));
+    z-index: 9990;
+    font-family: var(--sans, system-ui, sans-serif);
+    color: var(--text);
+}
+.gcb[hidden], .gcb [hidden] { display: none !important; }
+
+/* ── Closed: the button ─────────────────────────────────────────────────────── */
+.gcb-launch {
+    position: relative; display: inline-flex; align-items: center; justify-content: center;
+    width: 52px; height: 52px; padding: 0; border-radius: 50%;
+    border: 1px solid var(--accent); background: var(--accent); color: var(--bg);
+    box-shadow: var(--shadow, 0 4px 14px rgba(0, 0, 0, .35));
+    cursor: pointer; font-size: 24px; line-height: 1;
+}
+.gcb-launch:hover { filter: brightness(1.08); }
+.gcb-launch:focus-visible { outline: 3px solid var(--text); outline-offset: 2px; }
+.gcb-dot {
+    position: absolute; top: 2px; right: 2px; width: 13px; height: 13px; border-radius: 50%;
+    background: var(--danger, #e53e3e); border: 2px solid var(--bg);
+}
+
+/* ── Open: the panel ────────────────────────────────────────────────────────── */
+.gcb-panel {
+    display: flex; flex-direction: column;
+    width: 360px; max-width: calc(100vw - 2 * var(--gcb-gap));
+    height: min(560px, calc(100vh - 2 * var(--gcb-gap) - var(--gcb-lift)));
+    height: min(560px, calc(100dvh - 2 * var(--gcb-gap) - var(--gcb-lift)));
+    background: var(--bg-elev, var(--bg)); border: 1px solid var(--border);
+    border-radius: var(--radius, 10px); box-shadow: var(--shadow, 0 8px 28px rgba(0, 0, 0, .45));
+    overflow: hidden;
+}
+.gcb-head {
+    display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+    border-bottom: 1px solid var(--border-soft, var(--border));
+    background: var(--bg-elev2, var(--bg-elev));
+}
+.gcb-head-text { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+.gcb-title { margin: 0; font-size: 16px; font-weight: 700; color: var(--text); }
+.gcb-title:focus { outline: none; }
+.gcb-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.gcb-who {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-family: var(--mono, monospace); font-size: 12px; color: var(--text-dim);
+}
+.gcb-full { flex: 0 0 auto; font-size: 13px; color: var(--accent); text-decoration: none; }
+.gcb-full:hover { text-decoration: underline; }
+.gcb-close {
+    flex: 0 0 auto; width: 32px; height: 32px; padding: 0; border-radius: var(--radius-sm, 6px);
+    border: 1px solid var(--border); background: transparent; color: var(--text);
+    cursor: pointer; font-size: 15px; line-height: 1;
+}
+.gcb-close:hover, .gcb-close:focus-visible { border-color: var(--accent); color: var(--accent); }
+
+.gcb-warn {
+    margin: 0; padding: 7px 12px; font-size: 12.5px; line-height: 1.45;
+    border-bottom: 1px solid var(--border-soft, var(--border));
+    background: color-mix(in srgb, var(--gold, var(--accent)) 8%, transparent); color: var(--text-dim);
+}
+.gcb-warn b { color: var(--text); }
+.gcb-state { margin: 0; padding: 10px 12px; font-size: 13px; color: var(--text-dim); }
+
+/* The list grows; the rows are the /play/ panel's (repeated here, scoped). */
+.gcb .gcb-list {
+    flex: 1 1 auto; min-height: 0; list-style: none; margin: 0; padding: 0;
+    overflow-y: auto; overscroll-behavior: contain; background: var(--bg);
+}
+.gcb .play-chat-row { padding: 7px 12px; border-bottom: 1px solid var(--border-soft, var(--border)); }
+.gcb .play-chat-row:last-child { border-bottom: 0; }
+.gcb .play-chat-row.is-operator { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.gcb .play-chat-row.is-held { opacity: .75; border-left: 3px dashed var(--gold, var(--accent)); }
+.gcb .play-chat-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 12px; }
+.gcb .play-chat-name { font-family: var(--mono, monospace); color: var(--text-dim); overflow-wrap: anywhere; }
+.gcb .play-chat-row.is-own .play-chat-name { color: var(--accent); }
+.gcb .play-chat-time { margin-left: auto; font-family: var(--mono, monospace); color: var(--text-dim); font-size: 11px; }
+.gcb .play-chat-you { font-size: 10.5px; color: var(--accent); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.gcb .play-chat-badge {
+    display: inline-block; padding: 0 6px; border-radius: 999px; font-size: 10.5px; font-weight: 700;
+    line-height: 1.6; letter-spacing: .03em; white-space: nowrap;
+}
+.gcb .play-chat-badge.is-operator { background: var(--accent); color: var(--bg); }
+.gcb .play-chat-badge.is-mod { border: 1px solid var(--gold, var(--accent)); color: var(--gold, var(--accent)); }
+.gcb .play-chat-body {
+    margin: 2px 0 0; font-size: 14px; line-height: 1.45; color: var(--text);
+    overflow-wrap: anywhere; white-space: pre-wrap;
+}
+.gcb .play-chat-held { margin: 3px 0 0; font-size: 11.5px; color: var(--gold, var(--accent)); }
+.gcb .play-chat-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.gcb .btn.sm.play-chat-act { padding: 2px 8px; font-size: 11.5px; }
+.gcb .play-armed { border-color: var(--danger, #e53e3e); color: var(--danger, #e53e3e); }
+
+/* ── The foot: compose, gate, sign-in ───────────────────────────────────────── */
+.gcb-foot {
+    flex: 0 0 auto; max-height: 55%; overflow-y: auto; padding: 10px 12px 12px;
+    border-top: 1px solid var(--border-soft, var(--border)); background: var(--bg-elev, var(--bg));
+}
+.gcb-foot > :first-child { margin-top: 0; }
+.gcb-label { display: flex; justify-content: space-between; gap: 8px; margin: 0 0 4px; font-size: 12.5px; color: var(--text-dim); font-weight: 600; }
+.gcb-count { font-family: var(--mono, monospace); font-size: 11.5px; font-weight: 400; }
+.gcb-count.is-over { color: var(--danger, #e53e3e); font-weight: 700; }
+.gcb-compose { display: flex; gap: 8px; }
+.gcb-compose .input { flex: 1 1 auto; min-width: 0; padding: 8px 10px; }
+.gcb-compose .btn { flex: 0 0 auto; }
+.gcb .btn.primary.sm { padding: 7px 14px; font-size: 12.5px; }
+.gcb-gate, .gcb-note { margin: 8px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--text-dim); }
+.gcb-gate { color: var(--text); }
+.gcb-note a, .gcb-signin a { color: var(--accent); }
+.gcb .gcb-msg { margin-top: 8px; font-size: 13px; }
+.gcb .gcb-msg:empty { display: none; }
+.gcb-acct { margin-top: 8px; display: flex; justify-content: flex-end; }
+
+.gcb-signin-open { width: 100%; }
+.gcb-signin-forms { margin-top: 10px; }
+.gcb-tabs { display: flex; gap: 4px; margin-bottom: 8px; border-bottom: 1px solid var(--border-soft, var(--border)); }
+.gcb-tab {
+    flex: 1 1 0; padding: 6px 10px; border: 0; border-bottom: 2px solid transparent;
+    background: transparent; color: var(--text-dim); font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.gcb-tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+.gcb-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.gcb-pane { display: grid; gap: 8px; }
+.gcb-field { margin: 0; }
+.gcb-field label { margin-bottom: 4px; font-size: 12px; }
+.gcb-field .input { padding: 8px 10px; font-size: 13px; }
+.gcb-pane > .btn { justify-self: start; }
+
+/* The page's last lines can scroll clear of the closed button. */
+.gcb-spacer { height: 76px; }
+
+/* ── ≤ 600 px: open = a full-screen sheet ───────────────────────────────────── */
+@media (max-width: 600px) {
+    .gcb { --gcb-gap: 12px; }
+    .gcb-launch { width: 48px; height: 48px; font-size: 22px; }
+    .gcb.is-open { inset: 0 0 var(--gcb-lift) 0; right: 0; bottom: var(--gcb-lift); }
+    .gcb.is-open .gcb-panel {
+        width: 100%; max-width: none; height: 100%; border-radius: 0; border: 0;
+    }
+    .gcb-spacer { height: 68px; }
+    body.gcb-sheet-open { overflow: hidden; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .gcb-panel { animation: gcb-in .14s ease-out; }
+    @keyframes gcb-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+}

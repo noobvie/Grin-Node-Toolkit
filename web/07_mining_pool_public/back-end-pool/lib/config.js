@@ -1,6 +1,20 @@
 const fs = require('fs');
 const path = require('path');
 
+// The flat withdrawal fee can never go below this (operator decision 2026-10-05). It is a FIXED
+// price the miner sees, set by hand in admin → Payout and never tracked to the chain: the pool
+// wallet pays the real weight-based network fee (~0.023 GRIN for a plain payout, more with change
+// splitting or many inputs), and this floor keeps every payout covering it. "0 = the pool absorbs
+// the fee" is gone — a promotion is run with pool_fee_percent = 0 instead. One constant, read by
+// the pool.json loader, the settings validator and applyToConfig, so the three cannot drift.
+const MIN_WITHDRAWAL_FEE = 0.04;
+
+// How long after the operator revenue address is set or changed before a revenue withdrawal may
+// go to it — and, for the same window, the address-change alert can be neither closed nor
+// snoozed (review 2026-10-05), so a change the operator did not make cannot be silenced by the
+// session that made it. One constant for the admin routes and AlertMonitor.
+const REVENUE_ADDRESS_HOLD_S = 86400;
+
 function loadConfig(configPath = './pool.json') {
   let config = {};
 
@@ -67,8 +81,11 @@ function mergeEnvVars(config) {
     // a typical 1-in/2-out/1-kernel payout regardless of size. Without this the cost lands
     // entirely on the pool and scales with payout COUNT, so it eats a bigger share of the 1%
     // pool fee the lower min_withdrawal goes (~9% of fee income at 25 GRIN, ~23% at 10).
-    // 0.04 leaves headroom for a multi-input sweep (10 inputs ≈ 0.0275). Set 0 to absorb it.
-    withdrawal_fee: config.withdrawal_fee !== undefined ? config.withdrawal_fee : 0.04,
+    // 0.04 leaves headroom for a multi-input sweep (10 inputs ≈ 0.0275). It is also the FLOOR
+    // (MIN_WITHDRAWAL_FEE): a lower value — older installers wrote a dead `withdrawal_fee: 0.0`
+    // into pool.json — is raised to it below in validateConfig, never rejected, so an upgrade
+    // cannot stop a pool from starting.
+    withdrawal_fee: config.withdrawal_fee !== undefined ? config.withdrawal_fee : MIN_WITHDRAWAL_FEE,
     // Cross-rail wait after a reversed payout before the miner can request another (0 disables).
     withdrawal_cooldown_minutes: config.withdrawal_cooldown_minutes !== undefined ? config.withdrawal_cooldown_minutes : 30,
     // Minutes a manual Slatepack payout waits for the miner's response before it expires: the
@@ -252,11 +269,20 @@ function validateConfig(config) {
     throw new Error(`Invalid min_withdrawal: ${config.min_withdrawal}`);
   }
 
-  // Must be non-negative and strictly below the floor — a fee >= min_withdrawal would make an
-  // at-minimum payout net zero or negative, i.e. every miner at the threshold is unpayable.
-  if (!(config.withdrawal_fee >= 0) || config.withdrawal_fee >= config.min_withdrawal) {
+  // At least MIN_WITHDRAWAL_FEE (raised, with a warning — see the default above), and strictly
+  // below the floor: a fee >= min_withdrawal would make an at-minimum payout net zero or
+  // negative, i.e. every miner at the threshold is unpayable.
+  const fee = Number(config.withdrawal_fee);
+  if (!Number.isFinite(fee) || fee < MIN_WITHDRAWAL_FEE) {
+    console.warn(
+      `[config] withdrawal_fee ${JSON.stringify(config.withdrawal_fee)} is below the ${MIN_WITHDRAWAL_FEE} GRIN ` +
+      `minimum — using ${MIN_WITHDRAWAL_FEE}`
+    );
+    config.withdrawal_fee = MIN_WITHDRAWAL_FEE;
+  }
+  if (config.withdrawal_fee >= config.min_withdrawal) {
     throw new Error(
-      `Invalid withdrawal_fee: ${config.withdrawal_fee} (must be >= 0 and < min_withdrawal ${config.min_withdrawal})`
+      `Invalid withdrawal_fee: ${config.withdrawal_fee} (must be >= ${MIN_WITHDRAWAL_FEE} and < min_withdrawal ${config.min_withdrawal})`
     );
   }
 }
@@ -290,5 +316,7 @@ function mergeDbSettings(config, db) {
 module.exports = {
   loadConfig,
   getConfirmDepth,
-  mergeDbSettings
+  mergeDbSettings,
+  MIN_WITHDRAWAL_FEE,
+  REVENUE_ADDRESS_HOLD_S
 };

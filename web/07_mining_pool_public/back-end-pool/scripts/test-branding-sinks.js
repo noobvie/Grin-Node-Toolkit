@@ -1,14 +1,21 @@
-// Credential-page sink test — audit §J1-1.
+// Credential-page sink test — audit §J1-1, plus design §19.17 D22 (Option B, Part C1).
 //
-// public_html/js/branding.js injects operator-authored content into every public page, and
-// applyAnalytics() deliberately re-creates <script> nodes out of custom_head_html via
-// cloneScript() SO THAT THEY EXECUTE. login.html loads branding.js and carries the admin
-// password and TOTP fields, so that combination turned "write the analytics settings section"
-// into "keylog the admin login form" — a route from a secureAdmin session to freshAdmin.
+// public_html/js/branding.js injects operator-authored content into every public page.
+// Until Part C1, applyAnalytics() re-created <script> nodes out of custom_head_html /
+// custom_body_html via cloneScript() SO THAT THEY EXECUTED; login.html loads branding.js and
+// carries the admin password and TOTP fields, which turned "write the analytics settings
+// section" into "keylog the admin login form". §J1-1 kept those sinks off credential pages;
+// D22 then DELETED them, because with a sign-in form on every page no page is left to exempt.
 //
-// The settings route is now step-up gated for those keys (test-admin-guards.js), and
-// branding.js additionally refuses to apply the sinks on a credential page. This test pins the
-// second half.
+// What this file pins now:
+//   [1]–[3] the CSS sinks and the provider loader stay off credential pages (§J1-1);
+//   [6]     a payload that still carries custom_head_html / custom_body_html (an old server,
+//           a stale cache) injects NOTHING on ANY page — the render path is gone;
+//   [7]     each provider loader builds its <script> only from a value that matches its
+//           strict pattern — a GA id that could break out of the init text, or a javascript:,
+//           data: or http: script URL, loads nothing.
+// The static half (no new script creator anywhere in public_html) is
+// test-operator-code-sinks.js.
 //
 // No jsdom in this project and none is worth adding, so the harness runs branding.js against a
 // minimal DOM shim. That is only trustworthy WITH A CONTROL: every negative assertion below is
@@ -97,7 +104,9 @@ const CFG = {
   analytics: {
     provider: 'ga4',
     ga_tracking_id: 'G-PWNED',
-    custom_head_html: '<script>window.__PWNED_HEAD=1;</script>',
+    // LEGACY keys (design §19.17 D22): the server no longer sends them, but a stale payload
+    // might. branding.js must ignore them on every page — [6] asserts it.
+    custom_head_html: '<script>window.__PWNED_HEAD=1;</script><img src=x onerror="window.__PWNED_IMG=1">',
     custom_body_html: '<script>window.__PWNED_BODY=1;</script>',
   },
   maintenance: { enabled: false },
@@ -183,9 +192,12 @@ async function main() {
     console.log('\nFAILURES — the control could not run, so no negative result below is meaningful.\n');
     process.exit(1);
   }
+  // Since D22 the only script sink left is the provider loader, so it is the control: GA4 with
+  // a valid id must reach a normal page, or every "no SCRIPT" assertion below is vacuous.
   const homeHasScript = home.headTags.includes('SCRIPT') || home.bodyTags.includes('SCRIPT');
-  ok('CONTROL: custom_head/body_html reaches the page as a SCRIPT node', homeHasScript,
-    `head=${home.headTags} body=${home.bodyTags}`);
+  ok('CONTROL: the GA4 provider loader reaches the page as a SCRIPT node', homeHasScript &&
+    /googletagmanager\.com\/gtag\/js\?id=G-PWNED/.test(home.headText),
+    `head=${home.headTags} ${home.headText.slice(0, 200)}`);
   ok('CONTROL: custom_css reaches the page as a STYLE node', home.headTags.includes('STYLE'),
     `head=${home.headTags}`);
   ok('CONTROL: font_url reaches the page as a LINK node', /attacker\.example/.test(home.headText),
@@ -274,6 +286,70 @@ async function main() {
     !/<[a-z][^>]*onerror/i.test(maint.bodyHtml), maint.bodyHtml.slice(0, 240));
   ok('CONTROL: the escaped form is present (proves it was escaped, not dropped)',
     /&lt;img/.test(maint.bodyHtml), maint.bodyHtml.slice(0, 200));
+
+  console.log('');
+  console.log('[6] D22 - a legacy custom_head_html / custom_body_html payload injects nothing, on ANY page');
+  // Before Part C1 the home page got these as live SCRIPT nodes (that WAS the control in [1]).
+  // Now the render path is deleted, so the NORMAL page is the one that matters — the credential
+  // page was already covered by [2]. home.deep walks every node under <head> and <body>.
+  for (const page of ['home', 'blog', 'account-settings']) {
+    const r = await runFor(page);
+    ok(`${page}: no node carries the legacy head/body HTML markers`,
+      !/__PWNED_HEAD|__PWNED_BODY|__PWNED_IMG/.test(r.deep), r.deep.slice(0, 300));
+    // Exactly the two GA4 nodes (loader + init) and nothing else may be a SCRIPT. Counting is
+    // what catches a half-revert that re-adds the head sink but keeps the markers out of text.
+    const scripts = r.deep.split('~').filter((n) => n.startsWith('SCRIPT|'));
+    ok(`${page}: the only SCRIPT nodes are the two GA4 nodes`, scripts.length === 2 &&
+      scripts.every((n) => /G-PWNED/.test(n)), scripts.join(' ~ '));
+  }
+
+  console.log('');
+  console.log('[7] D22 - provider loaders build a <script> only from a strict-pattern value');
+  // Each case is run on the home page (where analytics DOES load) with a CONTROL first: the
+  // same provider with a valid value must produce its script, or the refusals prove nothing.
+  const withAnalytics = (a) => Object.assign({}, CFG, { analytics: a, announcements: [] });
+  const providerScripts = (r) => r.deep.split('~').filter((n) => n.startsWith('SCRIPT|'));
+  const cases = [
+    { name: 'GA4', good: { provider: 'ga4', ga_tracking_id: 'G-ABC123' }, goodRe: /gtag\/js\?id=G-ABC123/,
+      bad: [
+        // The old `id.replace(/'/g,'')` kept a trailing backslash, which escapes the closing
+        // quote of the init text. Neither form may reach a script now.
+        { provider: 'ga4', ga_tracking_id: "G-X',alert(1),'" },
+        { provider: 'ga4', ga_tracking_id: 'G-ABC\\' },
+        { provider: 'ga4', ga_tracking_id: 'g-lowercase' },
+      ] },
+    { name: 'Plausible', good: { provider: 'plausible', plausible_domain: 'pool.example', plausible_src: 'https://plausible.io/js/script.js' },
+      goodRe: /https:\/\/plausible\.io\/js\/script\.js/,
+      bad: [
+        { provider: 'plausible', plausible_domain: 'pool.example', plausible_src: 'javascript:window.__PWNED_P=1' },
+        { provider: 'plausible', plausible_domain: 'pool.example', plausible_src: 'data:text/javascript,window.__PWNED_P=1' },
+        { provider: 'plausible', plausible_domain: 'pool.example', plausible_src: 'http://plausible.io/js/script.js' },
+        { provider: 'plausible', plausible_domain: 'pool.example', plausible_src: 'https://user:pw@plausible.io/js/script.js' },
+        { provider: 'plausible', plausible_domain: 'a" onload="x', plausible_src: 'https://plausible.io/js/script.js' },
+      ] },
+    { name: 'Umami', good: { provider: 'umami', umami_website_id: '1b2c3d4e-0000-1111-2222-333344445555', umami_src: 'https://cloud.umami.is/script.js' },
+      goodRe: /cloud\.umami\.is\/script\.js/,
+      bad: [
+        { provider: 'umami', umami_website_id: 'abc', umami_src: 'javascript:window.__PWNED_U=1' },
+        { provider: 'umami', umami_website_id: 'x" onload="y', umami_src: 'https://cloud.umami.is/script.js' },
+      ] },
+    { name: 'Matomo', good: { provider: 'matomo', matomo_url: 'https://stats.pool.example/', matomo_site_id: '3' },
+      goodRe: /https:\/\/stats\.pool\.example\/matomo\.js/,
+      bad: [
+        { provider: 'matomo', matomo_url: 'javascript:window.__PWNED_M=1//', matomo_site_id: '3' },
+        { provider: 'matomo', matomo_url: 'https://stats.pool.example/', matomo_site_id: '3;x' },
+      ] },
+  ];
+  for (const c of cases) {
+    const good = await runFor('home', false, withAnalytics(c.good));
+    const gs = providerScripts(good);
+    ok(`CONTROL: ${c.name} with a valid value loads its script`, gs.some((n) => c.goodRe.test(n)), gs.join(' ~ '));
+    for (const b of c.bad) {
+      const r = await runFor('home', false, withAnalytics(b));
+      const s = providerScripts(r);
+      ok(`${c.name}: refuses ${JSON.stringify(b).slice(0, 110)}`, s.length === 0, s.join(' ~ '));
+    }
+  }
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
   process.exit(fail === 0 ? 0 : 1);

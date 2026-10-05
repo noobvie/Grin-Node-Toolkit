@@ -9,6 +9,7 @@
  *
  *   PlayApi.get(path)        → Promise<body>                     (body.ok === true)
  *   PlayApi.post(path, data) → Promise<body>
+ *   PlayApi.rules()          → Promise<body of GET rules>, one request per page load
  *   rejects with PlayApi.Error { kind, status, code, message, body }
  *     kind 'offline' — network error, timeout, non-JSON answer, or the service restarting
  *     kind 'http'    — the service answered with { ok:false, error, message, … }
@@ -93,9 +94,22 @@
     });
   }
 
+  // GET rules, shared: the chat panel, the lobby and the guest forms all read the live rules
+  // (settings only, nothing per player), so the page asks once. A failure is not cached — the
+  // next caller asks again.
+  var rulesP = null;
+  function rules() {
+    if (!rulesP) {
+      rulesP = request('GET', 'rules');
+      rulesP.catch(function () { rulesP = null; });
+    }
+    return rulesP;
+  }
+
   window.PlayApi = Object.freeze({
     get: function (path) { return request('GET', path); },
     post: function (path, data) { return request('POST', path, data); },
+    rules: rules,
     Error: PlayApiError
   });
 })();

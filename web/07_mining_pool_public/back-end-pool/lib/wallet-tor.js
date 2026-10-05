@@ -376,7 +376,8 @@ class WalletTor {
   // wallet finalized and posted. On a Tor-delivery failure the CLI prints a slatepack instead,
   // locks the outputs and STILL exits 0; that comes back as success:false with torFallback set
   // and the slate id, so the caller can cancel the lock before it retries.
-  async sendToTorAddress(address, amount) {
+  // `opts.changeOutputs` (1–3) → `-o N`: split the change, see WithdrawalScheduler._changeOutputCount.
+  async sendToTorAddress(address, amount, opts = {}) {
     try {
       if (!this.isPayoutAddress(address)) {
         throw new Error('Invalid Grin payout address (expected a grin1…/tgrin1… Slatepack address)');
@@ -388,9 +389,11 @@ class WalletTor {
       // refused after `send`. Until 2026-09-26 this read `--top-level-dir … -a <amount>` — two
       // clap errors, so every real send exited 1 before building anything. Pinned by
       // scripts/test-payout-rails.js against the upstream spec.
+      const n = Number(opts && opts.changeOutputs);
+      const split = Number.isInteger(n) && n >= 2 && n <= 3 ? ['-o', String(n)] : [];
       const result = await this.execWalletCommand([
         '--top_level_dir', this.walletDir,
-        'send', '-d', address, String(amount)
+        'send', ...split, '-d', address, String(amount)
       ]);
 
       return this._sendResult(classifySendOutput(result), result, address, amount);

@@ -62,6 +62,7 @@ const { MASK_ONLY } = require('./names');
 const { createTokenBuckets } = require('./ratelimit');
 const { utcDay } = require('./plays');
 const { GRIN_ADDR_RE } = require('./pool-link');
+const { NO_TICKETS } = require('./tickets');
 const { createRatings } = require('./ratings');
 const { normaliseBody } = require('./chat');
 
@@ -123,7 +124,7 @@ const isMoveList = (v) => Array.isArray(v) && v.length <= 1000 && v.every((x) =>
 const isStatus = (v) => v !== null && typeof v === 'object' && (v.over === false
   || (v.over === true && RESULTS.has(v.result) && typeof v.reason === 'string' && REASON_RE.test(v.reason)));
 
-function createMatches({ db, registry, ledger, settings, sessions, auth, admin, config, log, names = MASK_ONLY, now = () => Math.floor(Date.now() / 1000) }) {
+function createMatches({ db, registry, ledger, settings, sessions, auth, admin, config, log, names = MASK_ONLY, tickets = NO_TICKETS, now = () => Math.floor(Date.now() / 1000) }) {
   const raw = db.raw;
   const prefix = config && config.net === 'testnet' ? 'tgrin1' : 'grin1';
   const ratings = createRatings({ db });
@@ -181,6 +182,9 @@ function createMatches({ db, registry, ledger, settings, sessions, auth, admin, 
     activePvp: raw.prepare(
       "SELECT (SELECT COUNT(*) FROM matches WHERE seat1 = ? AND state = 'active' AND mode = 'pvp') + " +
       "(SELECT COUNT(*) FROM matches WHERE seat2 = ? AND state = 'active' AND mode = 'pvp') AS n"),
+    openOf: raw.prepare(
+      `SELECT ${cols} FROM matches WHERE seat1 = ? AND state IN ('seek', 'challenge') UNION ALL ` +
+      `SELECT ${cols} FROM matches WHERE seat2 = ? AND state IN ('seek', 'challenge')`),
     openMine: raw.prepare(
       "SELECT (SELECT COUNT(*) FROM matches WHERE seat1 = ? AND state IN ('seek', 'challenge')) + " +
       "(SELECT COUNT(*) FROM matches WHERE seat2 = ? AND state IN ('seek', 'challenge')) AS n"),
@@ -438,6 +442,19 @@ function createMatches({ db, registry, ledger, settings, sessions, auth, admin, 
 
   // The caller's own passed deadlines (active or open), each its own transaction. Bounded:
   // ≤ one bot game per game + pvp_active_max + pvp_open_max.
+  // A deleted guest's open seeks and challenges are cancelled (and refunded, which keeps the
+  // ledger whole) inside the delete's transaction (guests.js). Its ACTIVE games are left to their
+  // move clocks: the side that stopped moving loses on time, as for anyone who walks away.
+  function closeOpenOf(address, t) {
+    let n = 0;
+    for (const r of stmts.openOf.all(address, address)) {
+      if (r.created_by !== address) continue;
+      closeOpen(r, 'aborted', 'cancelled', t);
+      n++;
+    }
+    return n;
+  }
+
   function expireMine(address, t) {
     for (const r of stmts.myExpired.all(address, t, address, t)) finalizeIfExpired(r.id, t);
   }
@@ -609,7 +626,10 @@ function createMatches({ db, registry, ledger, settings, sessions, auth, admin, 
         const r = stmts.insert.run(game.id, man.version, 'bot', 'active', human === 1 ? s.address : botSeat, human === 2 ? s.address : botSeat,
           s.address, null, JSON.stringify(params), seed, pos, t + moveSeconds, t, t);
         const newId = Number(r.lastInsertRowid);
-        if (cost > 0) ledger.post({ address: s.address, kind: 'plays', delta: -cost, reason: 'match_cost', ref: `m:${newId}:${human}` });
+        if (cost > 0) {
+          tickets.topUp(s.address, t);     // a guest's day starts with its daily tickets (§19.17.4)
+          ledger.post({ address: s.address, kind: 'plays', delta: -cost, reason: 'match_cost', ref: `m:${newId}:${human}` });
+        }
         advance(stmts.get.get(newId), game, [pos], t);
         return newId;
       });
@@ -649,7 +669,10 @@ function createMatches({ db, registry, ledger, settings, sessions, auth, admin, 
           seat === 1 ? s.address : null, seat === 2 ? s.address : null, s.address, target,
           JSON.stringify(params), seed, pos, t + OPEN_TTL_S, t, null);
         const newId = Number(r.lastInsertRowid);
-        if (cost > 0) ledger.post({ address: s.address, kind: 'plays', delta: -cost, reason: 'match_cost', ref: `m:${newId}:${seat}` });
+        if (cost > 0) {
+          tickets.topUp(s.address, t);
+          ledger.post({ address: s.address, kind: 'plays', delta: -cost, reason: 'match_cost', ref: `m:${newId}:${seat}` });
+        }
         return newId;
       });
     } catch (e) {
@@ -774,7 +797,10 @@ function createMatches({ db, registry, ledger, settings, sessions, auth, admin, 
         const seat = openSeat(m);
         const params = parseParams(m);
         // The acceptor pays what the creator paid (the cost recorded at creation).
-        if (params.cost > 0) ledger.post({ address: s.address, kind: 'plays', delta: -params.cost, reason: 'match_cost', ref: `m:${m.id}:${seat}` });
+        if (params.cost > 0) {
+          tickets.topUp(s.address, t);
+          ledger.post({ address: s.address, kind: 'plays', delta: -params.cost, reason: 'match_cost', ref: `m:${m.id}:${seat}` });
+        }
         const r = (seat === 1 ? stmts.accept1 : stmts.accept2).run(s.address, t, t + params.move_seconds, m.id);
         if (r.changes !== 1) throw new Error(`accept: match ${m.id} changed under a held write lock`);
       });
@@ -1016,6 +1042,7 @@ function createMatches({ db, registry, ledger, settings, sessions, auth, admin, 
     ],
     sweepTimeouts,
     purgeBotMoves,
+    closeOpenOf,
     finalizeIfExpired,
     ratings,
     _internal: { replay, settle, abort, view },

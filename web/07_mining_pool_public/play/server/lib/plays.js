@@ -30,6 +30,8 @@
 // and plays then exist when the operator switches the games on. With no link secret it is a
 // logged no-op.
 
+const { isGuestId } = require('./mask');
+
 const HOUR = 3600;
 const DAY = 86400;
 const LAG_S = 120;
@@ -80,6 +82,9 @@ function createActivitySync({ db, poolLink, ledger, settings, log, now = () => M
       let credited = 0;
       let plays = 0;
       for (const r of rows) {
+        // A guest never earns from mining (D25, D32). pool-link already drops any row that is not
+        // a pool address; this says so here too, where the credit happens.
+        if (isGuestId(r.address)) continue;
         const secs = Math.min(r.seconds, span);
         if (secs <= 0) continue;
         ledger.ensurePlayer(r.address, t);

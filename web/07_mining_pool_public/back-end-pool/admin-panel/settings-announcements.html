@@ -25,17 +25,132 @@
             <label for="maintenance_mode">Enable maintenance mode</label>
           </div>
           <div class="helper-text" style="margin: 0.5rem 0 1rem;">
-            Shows a branded full-page notice to visitors. The admin panel stays accessible and
-            miners keep mining (stratum is unaffected). Login / dashboard / account pages remain reachable.
+            Shows a branded full-page notice to visitors. It is a website notice only &mdash; miners
+            keep mining. To stop miner intake use <strong>Stratum</strong> below: a stratum pause also
+            shows this overlay, with the text set at the bottom of this card, whenever this switch is
+            off. It never changes this switch. The admin panel stays accessible, and the login and
+            account pages stay reachable, so miners can still check their balance.
           </div>
           <div class="form-group">
             <label for="maintenance_title">Title</label>
             <input type="text" id="maintenance_title" name="maintenance_title" placeholder="Under Maintenance">
           </div>
           <div class="form-group">
-            <label for="maintenance_message">Message (HTML allowed)</label>
+            <label for="maintenance_message">Message (plain text)</label>
             <textarea id="maintenance_message" name="maintenance_message" rows="3" placeholder="We'll be back shortly..."></textarea>
           </div>
+          <div class="form-group">
+            <label for="stratum_pause_title">Overlay title while stratum is paused</label>
+            <input type="text" id="stratum_pause_title" name="stratum_pause_title" class="settings-allow-empty" maxlength="120" placeholder="Mining paused">
+          </div>
+          <div class="form-group">
+            <label for="stratum_pause_message">Overlay message while stratum is paused (plain text)</label>
+            <textarea id="stratum_pause_message" name="stratum_pause_message" class="settings-allow-empty" rows="3" maxlength="1000"
+              placeholder="Mining on this pool is paused for maintenance and will resume automatically. Your balance is safe. Keep a backup pool configured in your miner — it switches back here on its own."></textarea>
+            <div class="helper-text">
+              Used instead of the title and message above while stratum is paused and the switch above
+              is off. The overlay adds &ldquo;Expected back at about &hellip; UTC&rdquo; itself. Leave
+              both blank for the defaults. Saved with <em>Save Changes</em>; text only &mdash; it
+              cannot pause or resume anything.
+            </div>
+          </div>
+        </div>
+
+        <!-- Stratum pause (design §21). NOT part of this page's settings form: every control
+             here acts at once through its own step-up-gated route, and every input carries
+             settings-skip so saveSection() never harvests it. The state is the stratum_control
+             table, which no settings route can reach (§21.1). -->
+        <div class="form-section" id="stratum-section">
+          <h3 class="section-title">Stratum <span id="stratum-pill" class="badge" style="display:none;margin-left:.5rem;font-size:.7rem;vertical-align:middle;"></span></h3>
+          <div class="helper-text" style="margin: 0.5rem 0 .6rem;">
+            Stops <strong>miner intake</strong>: the public stratum port and every regional listener
+            close, shares already in flight are recorded first (up to 30&nbsp;s), then every miner is
+            disconnected and refused until you resume. Miners fail over to their backup pool and come
+            back on their own. Use it around a restore, a hub move or database trouble. Every pause
+            resumes on its own after the time you pick (2&nbsp;h at most; extend if you need longer).
+            Payouts are not touched &mdash; they have their own freeze under Payouts.
+            <strong>The buttons here act at once and are not part of Save Changes.</strong>
+            All times UTC.
+          </div>
+
+          <div id="stratum-status" class="stratum-status" role="status" aria-live="polite">
+            <span class="spinner"></span>Loading stratum state…
+          </div>
+
+          <div class="stratum-actions">
+            <button type="button" class="btn btn-danger" id="st-pause" disabled>Pause stratum…</button>
+            <button type="button" class="btn btn-secondary" id="st-extend" disabled>Extend…</button>
+            <button type="button" class="btn btn-primary" id="st-resume" disabled>Resume now</button>
+          </div>
+          <p id="stratum-msg" role="alert" style="display:none;margin:0 0 1rem;font-size:.9rem;"></p>
+
+          <h4 style="margin:1.2rem 0 .3rem;">Planned window</h4>
+          <div class="helper-text" style="margin-bottom:.6rem;">
+            A one-off pause that starts and ends on its own &mdash; for maintenance you can plan. It
+            must start at least 15&nbsp;min from now and within 30&nbsp;days, and last 5&nbsp;min to
+            6&nbsp;h. Miners see a banner from 24&nbsp;h before it starts. One window at a time:
+            scheduling another replaces it. Once it has started it is an ordinary pause &mdash;
+            end it early with <em>Resume now</em>.
+          </div>
+          <div id="stratum-planned" class="stratum-status" style="display:none;"></div>
+          <div class="stratum-window">
+            <div class="form-group">
+              <label for="st-win-start">Start (UTC)</label>
+              <input type="datetime-local" id="st-win-start" class="settings-skip" step="60">
+            </div>
+            <div class="form-group">
+              <label for="st-win-end">End (UTC)</label>
+              <input type="datetime-local" id="st-win-end" class="settings-skip" step="60">
+            </div>
+            <div class="form-group">
+              <label for="st-win-reason">Reason (admin-only, never published)</label>
+              <input type="text" id="st-win-reason" class="settings-skip" maxlength="300" autocomplete="off" placeholder="e.g. node upgrade to v5.6">
+            </div>
+          </div>
+          <div class="stratum-actions">
+            <button type="button" class="btn btn-secondary" id="st-schedule" disabled>Schedule window</button>
+            <button type="button" class="btn btn-outline" id="st-cancel-window" style="display:none;">Cancel scheduled window</button>
+          </div>
+
+          <details class="stratum-guide">
+            <summary>Moving the hub (Migrate OUT / IN) or restoring a backup &mdash; the order that keeps downtime short</summary>
+            <p style="margin:.6rem 0 0;">
+              The pool menu's <code>B → 6</code> Migrate OUT and <code>B → 7</code> Migrate IN stop and
+              start the service themselves. Pausing first adds the one thing a plain stop cannot: every
+              share and block candidate in flight is recorded before the old hub goes dark. Downtime is
+              set by the steps between the pause and the resume on the new hub, so keep that stretch short.
+            </p>
+            <ol>
+              <li><strong>Days before</strong>, on the new box: pool menu <code>B → 7 → CHECK</code> until it
+                says READY. Fix everything there &mdash; outside the downtime.</li>
+              <li><strong>Old hub, here:</strong> <em>Pause stratum</em> for 60&nbsp;min, reason
+                &ldquo;hub move&rdquo;. Wait for <em>&ldquo;settled &mdash; safe to proceed&rdquo;</em>.</li>
+              <li><strong>Old hub:</strong> <code>B → 6</code> Migrate OUT straight away. Payouts freeze as
+                part of it.</li>
+              <li><strong>New box:</strong> <code>B → 7 → MIGRATE</code>. The pool comes up
+                <strong>paused</strong> for up to 2&nbsp;hours from its start, however long the move
+                took &mdash; Migrate IN writes the pause into the restored database right before it
+                starts the service. If the strip is not red once it is up, pause it here before you
+                do anything else.</li>
+              <li>Change exactly the DNS records Migrate IN lists.</li>
+              <li><strong>New hub, here:</strong> once its continuity checks are all ✓, press
+                <em>Resume now</em> &mdash; do not wait for the automatic resume, that wait is pure
+                downtime. Check that every listener reads <em>listening</em>. A region that fails with
+                <code>EADDRNOTAVAIL</code> means its WireGuard address is not up yet: bring the tunnel up,
+                then press <em>Re-bind</em>.</li>
+              <li>Watch every gateway reach ✓ on the Regions page. Payouts stay frozen until you have
+                reconciled &mdash; then resume them under Payouts.</li>
+            </ol>
+            <p style="margin:.4rem 0 0;">
+              <strong>Never resume the old hub after Migrate OUT</strong> &mdash; two live pools on one
+              wallet seed. A <strong>rollback</strong> (valid only until the new hub has accepted a share)
+              brings the old hub back still paused until its resume time; resume it here once it is up.
+              A <strong>plain restore</strong> (<code>B</code> menu restore) pauses it too, for
+              2&nbsp;hours from the <em>restore</em> &mdash; the menu prints the resume time. Start
+              the pool within that, check it, then follow step 6; a pool started after it comes up
+              <strong>accepting</strong>, so pause it here first.
+            </p>
+          </details>
         </div>
 
         <div class="form-section">
@@ -65,11 +180,417 @@
   </div>
   </main>
 
+  <!-- In-page dialog for every Stratum action (never confirm()/prompt(): the step-up password
+       dialog follows this one, and browsers suppress a native dialog that follows another).
+       Outside <main> and the settings form; its fields carry settings-skip anyway. Static
+       markup — the title and body are set with textContent. -->
+  <div class="modal-overlay" id="stratum-dialog" role="dialog" aria-modal="true" aria-labelledby="st-dlg-title">
+    <form class="modal" id="st-dlg-form" novalidate>
+      <h3 id="st-dlg-title">Stratum</h3>
+      <p class="helper-text" id="st-dlg-body" style="margin:0 0 1rem;white-space:pre-line;overflow-wrap:anywhere;"></p>
+      <div class="form-group" id="st-dlg-reason-group">
+        <label for="st-dlg-reason">Reason (admin-only, never published)</label>
+        <input type="text" id="st-dlg-reason" class="settings-skip" maxlength="300" autocomplete="off" placeholder="e.g. restore from backup">
+      </div>
+      <div class="form-group" id="st-dlg-duration-group">
+        <label for="st-dlg-duration">Resume on its own after (counted from now)</label>
+        <select id="st-dlg-duration" class="settings-skip"></select>
+      </div>
+      <p id="st-dlg-error" role="alert" style="display:none;margin:0 0 .6rem;color:var(--danger);font-size:.88rem;"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-outline" id="st-dlg-cancel">Cancel</button>
+        <button type="submit" class="btn" id="st-dlg-submit">Confirm</button>
+      </div>
+    </form>
+  </div>
+
   <script src="/js/auth.js"></script>
   <script src="/js/api.js"></script>
   <script src="/js/stepup.js"></script>
   <script src="/admin/admin-shell.js"></script>
   <script>window.SETTINGS_SECTION = "notices";</script>
   <script src="/admin/settings-common.js"></script>
+  <script>
+  // ── Stratum section (design §21) ─────────────────────────────────────────────────────────
+  // Reads the state from admin-shell's shared poll (window.AdminStratum — the same answer the
+  // strip renders), and acts through the five freshAdmin routes with adminFetch, so a stale
+  // session gets the in-page step-up dialog. After an action the route's own `state` is handed
+  // to AdminStratum.set() and a fresh poll follows; a 409 also carries `state`, so a second
+  // admin acting on a stale page sees what is really true (§21.11). Nothing here is part of
+  // saveSection(): no input id below is a settings key, and every one is settings-skip.
+  (function () {
+    'use strict';
+    var S = window.AdminStratum;
+    var LIMITS = { duration_min: [15, 30, 60, 120], window_min_s: 300, window_max_s: 21600,
+                   window_lead_s: 900, window_horizon_s: 2592000, reason_min: 3, reason_max: 300 };
+    var cur = null;       // last control payload
+    var busy = false;     // an action is in flight: every button stays disabled, polls included
+    var prefilled = false;
+    var stale = false;    // the "could not refresh" warning is up; the next good answer clears it
+    var $ = function (id) { return document.getElementById(id); };
+
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+    function showMsg(text, isError) {
+      var el = $('stratum-msg');
+      el.textContent = text;
+      el.style.color = isError ? 'var(--danger)' : 'var(--text-dim)';
+      el.style.display = text ? '' : 'none';
+    }
+
+    // datetime-local has no zone. The page states UTC, so the typed wall time IS UTC: append Z.
+    // NEVER new Date(value) — that reads it in the BROWSER's zone and shifts the window.
+    function zoned(v) {
+      v = String(v || '');
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(v)) return v + ':00Z';
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(v)) return v + 'Z';
+      return null;
+    }
+    function localValue(sec) { return new Date(sec * 1000).toISOString().slice(0, 16); }
+    function zonedSec(v) { var z = zoned(v); return z ? Math.floor(Date.parse(z) / 1000) : null; }
+
+    function listenerRows(c) {
+      var live = {};
+      (c.listeners || []).forEach(function (l) { if (l && l.listening) live[Number(l.port)] = true; });
+      var down = {};
+      S.down(c).forEach(function (d) { down[d.port] = d; });
+      var rows = [];
+      function row(label, port, deferred) {
+        var p = Number(port), st;
+        if (live[p]) st = '<span class="st-good">listening</span>';
+        // `deferred` is true for EVERY region while paused (nothing is held), so it cannot tell a
+        // region paired during the pause from one that was closed by it — and need not.
+        else if (c.paused) st = deferred ? 'closed — opens on resume' : 'closed';
+        else if (down[p]) st = '<span class="st-bad">NOT listening' + (down[p].error ? ' — ' + esc(down[p].error) : '') + '</span>';
+        else st = 'not listening';
+        rows.push('<li>' + label + ' <code>:' + esc(port) + '</code> — ' + st + '</li>');
+      }
+      if (c.public_port) row('Public', c.public_port, false);
+      (c.regions || []).forEach(function (r) { if (r && r.port) row('Region <strong>' + esc(r.region) + '</strong>', r.port, r.deferred); });
+      return rows.length ? '<ul>' + rows.join('') + '</ul>' : '';
+    }
+
+    function render(c) {
+      cur = c;
+      if (stale) { stale = false; if (!busy) showMsg('', false); }
+      if (c.limits && Array.isArray(c.limits.duration_min)) LIMITS = c.limits;
+      var now = S.now(), k = S.classify(c);
+      var tone = k.tone || (k.level === 'ok' ? 'ok' : null);
+
+      var pill = $('stratum-pill');
+      var PILL = { ok: ['badge-ok', 'ACCEPTING'], scheduled: ['badge-warn', 'ACCEPTING · window scheduled'],
+                   pausing: ['badge-error', 'PAUSING'], paused: ['badge-error', 'PAUSED'],
+                   resuming: ['badge-warn', 'RESUMING'], degraded: ['badge-error', 'DEGRADED'] }[k.level];
+      if (PILL) { pill.className = 'badge ' + PILL[0]; pill.textContent = PILL[1]; pill.style.display = ''; }
+      else pill.style.display = 'none';
+
+      var box = $('stratum-status');
+      box.className = 'stratum-status' + (tone ? ' tone-' + tone : '');
+      var meta = [];
+      if (c.paused) {
+        if (c.reason) meta.push('Reason: ' + esc(c.reason));
+        meta.push(c.settled_at
+          ? '<strong>Settled ' + S.time(c.settled_at) + ' — safe to proceed.</strong>'
+          : '<span class="st-bad">Not settled yet — ' + esc(c.inflight) + ' submit(s) still in flight. They are still recorded when they finish; wait before you proceed.</span>');
+      }
+      meta.push('Connections now: ' + esc(c.connections) + ' · in-flight submits: ' + esc(c.inflight));
+      box.innerHTML = '<div class="st-head">' + S.summaryHtml(c) + '</div>' +
+        '<div class="st-meta">' + meta.join('<br>') + '</div>' + listenerRows(c);
+
+      // Planned window: scheduled → shown with Cancel; running → it is the pause above.
+      var pl = $('stratum-planned');
+      if (c.planned) {
+        pl.style.display = '';
+        pl.className = 'stratum-status tone-amber';
+        pl.innerHTML = '<div class="st-head"><strong>Scheduled:</strong> ' + S.range(c.planned.start, c.planned.end) +
+          ' (' + S.dur(c.planned.end - c.planned.start) + ', starts in ' + S.dur(c.planned.start - now) + ')</div>' +
+          '<div class="st-meta">Reason: ' + esc(c.planned.reason) + (c.planned.by ? ' · by ' + esc(c.planned.by) : '') + '</div>';
+      } else if (c.paused && c.source === 'planned') {
+        pl.style.display = '';
+        pl.className = 'stratum-status tone-red';
+        pl.innerHTML = '<div class="st-head">A planned window is running now — it is the pause above and ends with it.</div>';
+      } else {
+        pl.style.display = 'none';
+        pl.innerHTML = '';
+      }
+
+      if (!prefilled) {
+        prefilled = true;
+        var start = Math.ceil((now + 3600) / 900) * 900;
+        $('st-win-start').value = localValue(start);
+        $('st-win-end').value = localValue(start + 3600);
+      }
+      $('st-win-start').min = localValue(now + (LIMITS.window_lead_s || 900));
+      $('st-win-start').max = localValue(now + (LIMITS.window_horizon_s || 2592000));
+      setButtons();
+    }
+
+    function renderError(err) {
+      if (cur) {
+        // Keep the last answer visible but say it is not fresh.
+        if (busy) return;
+        stale = true;
+        showMsg('Could not refresh the stratum state (' + err.message + ') — what is shown may be stale.', true);
+        return;
+      }
+      var box = $('stratum-status');
+      box.className = 'stratum-status tone-red';
+      box.innerHTML = '<div class="st-head">Stratum state unknown — ' + esc(err.message) + '</div>' +
+        '<div class="st-meta">The controls stay disabled until the pool answers.</div>';
+    }
+
+    function setButtons() {
+      var c = cur, t = busy || !c || c.transition;
+      var down = c ? S.down(c) : [];
+      $('st-pause').disabled = t || c.paused || c.accept_state !== 'accepting';
+      $('st-extend').disabled = t || !c.paused || c.accept_state !== 'paused';
+      var resume = $('st-resume');
+      if (c && !c.paused && down.length) {
+        resume.textContent = 'Re-bind';
+        resume.disabled = t;
+      } else {
+        resume.textContent = 'Resume now';
+        resume.disabled = t || !c.paused || c.accept_state !== 'paused';
+      }
+      $('st-schedule').disabled = t;
+      var cancel = $('st-cancel-window');
+      cancel.style.display = c && c.planned ? '' : 'none';
+      cancel.disabled = t;
+    }
+
+    function setBusy(on, text) {
+      busy = on;
+      if (text) showMsg(text, false);
+      setButtons();
+    }
+
+    // ── The dialog ─────────────────────────────────────────────────────────────────────────
+    // Resolves { reason, duration } on Confirm, or null on Cancel / Escape / backdrop. `check`
+    // validates on submit and returns an error string to keep the dialog open.
+    function ask(o) {
+      var ov = $('stratum-dialog'), form = $('st-dlg-form'), err = $('st-dlg-error');
+      var reason = $('st-dlg-reason'), dur = $('st-dlg-duration'), submit = $('st-dlg-submit');
+      $('st-dlg-title').textContent = o.title;
+      $('st-dlg-body').textContent = o.body;
+      $('st-dlg-reason-group').style.display = o.reason ? '' : 'none';
+      $('st-dlg-duration-group').style.display = o.duration ? '' : 'none';
+      reason.value = '';
+      reason.minLength = LIMITS.reason_min || 3;
+      reason.maxLength = LIMITS.reason_max || 300;
+      dur.innerHTML = (LIMITS.duration_min || []).map(function (m) {
+        var v = Number(m);
+        return '<option value="' + v + '"' + (v === 60 ? ' selected' : '') + '>' +
+          (v >= 60 ? (v / 60) + ' h' : v + ' min') + '</option>';
+      }).join('');
+      err.style.display = 'none';
+      submit.textContent = o.confirm;
+      submit.className = o.danger ? 'btn btn-danger' : 'btn';
+      return new Promise(function (resolve) {
+        function done(v) {
+          ov.classList.remove('open');
+          form.removeEventListener('submit', onSubmit);
+          $('st-dlg-cancel').removeEventListener('click', onCancel);
+          ov.removeEventListener('click', onBackdrop);
+          document.removeEventListener('keydown', onKey);
+          resolve(v);
+        }
+        function onSubmit(e) {
+          e.preventDefault();
+          var v = { reason: reason.value.trim(), duration: Number(dur.value) };
+          var problem = o.reason && (v.reason.length < (LIMITS.reason_min || 3))
+            ? 'A reason of at least ' + (LIMITS.reason_min || 3) + ' characters is required — it goes in the audit log.' : '';
+          if (problem) { err.textContent = problem; err.style.display = ''; reason.focus(); return; }
+          done(v);
+        }
+        function onCancel() { done(null); }
+        function onBackdrop(e) { if (e.target === ov) done(null); }
+        function onKey(e) { if (e.key === 'Escape') done(null); }
+        form.addEventListener('submit', onSubmit);
+        $('st-dlg-cancel').addEventListener('click', onCancel);
+        ov.addEventListener('click', onBackdrop);
+        document.addEventListener('keydown', onKey);
+        ov.classList.add('open');
+        (o.reason ? reason : o.duration ? dur : submit).focus();
+      });
+    }
+
+    // POST/DELETE through adminFetch. A refusal (incl. the step-up's own) throws the server's
+    // reason; a 409's `state` is applied first so the page re-renders from the truth.
+    async function call(method, url, body) {
+      var res = await adminFetch(url, {
+        method: method, credentials: 'include',
+        headers: body ? { 'Content-Type': 'application/json' } : {},
+        body: body ? JSON.stringify(body) : undefined
+      });
+      var data = await res.json().catch(function () { return {}; });
+      if (!res.ok) {
+        if (data && data.state) S.set(data.state);
+        throw new Error((data && data.error) || ('HTTP ' + res.status));
+      }
+      if (data && data.state) S.set(data.state);
+      return data;
+    }
+    function persistNote(d) {
+      return d && d.persisted === false ? ' NOT persisted — the database write failed, so a restart will reopen stratum.' : '';
+    }
+    function bindResults(results) {
+      return (results || []).filter(function (r) { return r && !r.bound && !r.already; })
+        .map(function (r) { return ':' + r.port + ' (' + (r.region || '?') + ') ' + (r.code || r.error || 'failed'); }).join(', ');
+    }
+
+    async function onPause() {
+      var n = cur ? cur.connections : 0;
+      var v = await ask({
+        title: 'Pause stratum',
+        body: 'Closes the public port and every regional listener now. Shares already in flight are ' +
+          'recorded first (up to 30 s), then all ' + n + ' connection(s) are dropped and every miner is ' +
+          'refused until you resume. Miners fail over to their backup pool.\n\nThe pool resumes on its own ' +
+          'after the time below. You may be asked for your admin password.',
+        reason: true, duration: true, confirm: 'Pause now', danger: true
+      });
+      if (!v) return;
+      setBusy(true, 'Pausing — listeners closed, waiting for in-flight shares to settle (up to ~35 s)…');
+      try {
+        var d = await call('POST', '/api/admin/stratum/pause', { reason: v.reason, duration_min: v.duration });
+        var t = d.settled
+          ? 'Paused · settled — safe to proceed. '
+          : 'Paused, but NOT settled: ' + d.inflight_left + ' submit(s) still in flight (' + d.blocks_in_flight +
+            ' block candidate(s)). They are still recorded when they finish — wait for "Settled" above before you proceed. ';
+        t += d.sockets_closed + ' connection(s) dropped, ' + (d.listeners_closed || []).length + ' listener(s) closed.';
+        showMsg(t + persistNote(d), !d.settled || d.persisted === false);
+      } catch (e) {
+        showMsg('Not paused: ' + e.message, true);
+      } finally {
+        setBusy(false);
+        S.refresh();
+      }
+    }
+
+    async function onExtend() {
+      var v = await ask({
+        title: 'Extend the pause',
+        body: 'Sets a NEW automatic resume time, counted from now — it is not added to the current one ' +
+          '(' + S.time(cur && cur.until) + ' UTC). Each extension is its own audit entry.',
+        reason: false, duration: true, confirm: 'Extend'
+      });
+      if (!v) return;
+      setBusy(true, 'Extending…');
+      try {
+        var d = await call('POST', '/api/admin/stratum/extend', { duration_min: v.duration });
+        showMsg('Extended — resumes on its own at ' + S.time(d.state && d.state.until) + ' UTC.' + persistNote(d), d.persisted === false);
+      } catch (e) {
+        showMsg('Not extended: ' + e.message, true);
+      } finally {
+        setBusy(false);
+        S.refresh();
+      }
+    }
+
+    async function onResume() {
+      var rebind = !!(cur && !cur.paused);
+      var v = await ask(rebind ? {
+        title: 'Re-bind missing listeners',
+        body: 'Tries again to open: ' + S.down(cur).map(function (x) { return ':' + x.port + ' (' + x.region + ')'; }).join(', ') +
+          '. Listeners that are already up are left alone.',
+        confirm: 'Re-bind'
+      } : {
+        title: 'Resume stratum now',
+        body: 'Re-opens the public port and every regional listener; miners return on their own.' +
+          (cur && cur.source === 'planned' ? ' This also ends the running planned window.' : '') +
+          '\n\nDuring a restore or a hub move, resume only once the pool has been checked: an early resume ' +
+          'accepts shares into a database that may still be replaced.',
+        confirm: 'Resume now'
+      });
+      if (!v) return;
+      setBusy(true, rebind ? 'Re-binding…' : 'Resuming — re-binding every listener…');
+      try {
+        var d = await call('POST', '/api/admin/stratum/resume');
+        var bad = bindResults(d.results);
+        showMsg(d.failed
+          ? (rebind ? 'Still not listening: ' : 'Resumed, but not listening: ') + bad +
+            '. Miners on those ports fail over. Free the port (EADDRINUSE) or bring the tunnel up (EADDRNOTAVAIL), then Re-bind.'
+          : (rebind ? 'Re-bound — every listener is up.' : 'Resumed — every listener is up; miners return on their own.'),
+          !!d.failed);
+        if (!rebind && d.persisted === false) {
+          // The opposite of persistNote(): the row still says PAUSED, so a restart boots paused.
+          showMsg($('stratum-msg').textContent + ' NOT persisted — the database write failed, so a restart ' +
+            'will boot stratum PAUSED again until its old resume time.', true);
+        }
+      } catch (e) {
+        showMsg((rebind ? 'Not re-bound: ' : 'Not resumed: ') + e.message, true);
+      } finally {
+        setBusy(false);
+        S.refresh();
+      }
+    }
+
+    async function onSchedule() {
+      var startV = $('st-win-start').value, endV = $('st-win-end').value, reason = $('st-win-reason').value.trim();
+      var a = zonedSec(startV), b = zonedSec(endV), now = S.now();
+      // Convenience checks only — the server enforces every cap (§21.7).
+      var problem = !a || !b ? 'Pick a start and an end.'
+        : b <= a ? 'The end must be after the start.'
+        : a < now + (LIMITS.window_lead_s || 900) ? 'The start must be at least ' + S.dur(LIMITS.window_lead_s || 900) + ' from now — for sooner, use Pause stratum.'
+        : reason.length < (LIMITS.reason_min || 3) ? 'A reason of at least ' + (LIMITS.reason_min || 3) + ' characters is required.'
+        : '';
+      if (problem) { showMsg('Not scheduled: ' + problem, true); return; }
+      var v = await ask({
+        title: 'Schedule a planned window',
+        body: 'Stratum pauses ' + S.range(a, b) + ' UTC (' + S.dur(b - a) + ') and resumes on its own. ' +
+          'Miners see a banner from 24 h before it starts.' +
+          (cur && cur.planned ? '\n\nThis REPLACES the window scheduled for ' + S.range(cur.planned.start, cur.planned.end) + ' UTC.' : ''),
+        confirm: 'Schedule'
+      });
+      if (!v) return;
+      setBusy(true, 'Scheduling…');
+      try {
+        var d = await call('POST', '/api/admin/stratum/window', { start: zoned(startV), end: zoned(endV), reason: reason });
+        $('st-win-reason').value = '';
+        showMsg('Scheduled ' + S.range(a, b) + ' UTC.' + (d.replaced ? ' The previous window was replaced.' : '') + persistNote(d), d.persisted === false);
+      } catch (e) {
+        showMsg('Not scheduled: ' + e.message, true);
+      } finally {
+        setBusy(false);
+        S.refresh();
+      }
+    }
+
+    async function onCancelWindow() {
+      if (!cur || !cur.planned) return;
+      var v = await ask({
+        title: 'Cancel the scheduled window',
+        body: 'Removes the window ' + S.range(cur.planned.start, cur.planned.end) + ' UTC.' +
+          (cur.paused ? ' The pause running now is not changed — it still resumes at ' + S.time(cur.until) + ' UTC.'
+                      : ' Nothing is paused now, so nothing else changes.'),
+        confirm: 'Remove window', danger: true
+      });
+      if (!v) return;
+      setBusy(true, 'Cancelling…');
+      try {
+        var d = await call('DELETE', '/api/admin/stratum/window');
+        showMsg('Window cancelled.' + persistNote(d), d.persisted === false);
+      } catch (e) {
+        showMsg('Not cancelled: ' + e.message, true);
+      } finally {
+        setBusy(false);
+        S.refresh();
+      }
+    }
+
+    if (!S) {
+      $('stratum-status').textContent = 'Stratum controls unavailable — admin-shell.js did not load.';
+      return;
+    }
+    $('st-pause').addEventListener('click', onPause);
+    $('st-extend').addEventListener('click', onExtend);
+    $('st-resume').addEventListener('click', onResume);
+    $('st-schedule').addEventListener('click', onSchedule);
+    $('st-cancel-window').addEventListener('click', onCancelWindow);
+    S.subscribe(render, renderError);
+  })();
+  </script>
 </body>
 </html>

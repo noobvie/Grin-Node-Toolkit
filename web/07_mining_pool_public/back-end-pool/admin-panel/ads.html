@@ -107,7 +107,7 @@
   <div class="container">
     <div class="page-head">
       <h1>Ads</h1>
-      <p class="page-sub">Promotions shown on the public site — a self-hosted <strong>banner</strong> image, a native <strong>text</strong> card (headline + button, no design needed), or an ad-network <strong>code</strong> snippet — each bound to a placement. When a placement has several active ads they rotate automatically, one at a time (interval configurable below).</p>
+      <p class="page-sub">Promotions shown on the public site — a self-hosted <strong>banner</strong> image, or a native <strong>text</strong> card (headline + button, no design needed) — each bound to a placement. When a placement has several active ads they rotate automatically, one at a time (interval configurable below).</p>
     </div>
 
     <!-- Existing ads -->
@@ -195,8 +195,8 @@
           <select id="ad-type" onchange="syncType()">
             <option value="banner">Banner (image + link)</option>
             <option value="text">Text (headline + button)</option>
-            <option value="code">Code snippet (HTML)</option>
           </select>
+          <div class="helper-text">Code-snippet ads were removed for security — design §19.17 D22.</div>
         </div>
       </div>
 
@@ -252,16 +252,7 @@
           <label for="ad-body">Body line (optional)</label>
           <input type="text" id="ad-body" maxlength="140" placeholder="e.g. No ICO · tail emission · private by default" oninput="updateTextPreview()">
         </div>
-        <div class="helper-text" style="margin:-.4rem 0 .6rem;">No image or code needed — this renders as a styled card on the site and rotates with any banners in the same placement. Edit the copy here any time.</div>
-      </div>
-
-      <!-- Code fields -->
-      <div id="code-fields" style="display:none;">
-        <div class="form-group">
-          <label for="ad-code">HTML / JS snippet</label>
-          <textarea id="ad-code" rows="5" placeholder="<!-- paste your ad-network zone code here -->"></textarea>
-          <div class="helper-text">Trusted operator content — rendered as-is on public pages (like your analytics snippet). Only paste code you trust.</div>
-        </div>
+        <div class="helper-text" style="margin:-.4rem 0 .6rem;">No image needed — this renders as a styled card on the site and rotates with any banners in the same placement. Edit the copy here any time.</div>
       </div>
 
       <div class="form-row cols-3">
@@ -512,7 +503,6 @@ function syncType() {
   const t = document.getElementById('ad-type').value;
   document.getElementById('banner-fields').style.display = t === 'banner' ? '' : 'none';
   document.getElementById('text-fields').style.display   = t === 'text' ? '' : 'none';
-  document.getElementById('code-fields').style.display   = t === 'code' ? '' : 'none';
   // The size/file-type spec box only makes sense for image banners.
   document.getElementById('placement-spec').style.display = t === 'banner' ? '' : 'none';
   // Refresh whichever preview belongs to the new type; the other one is hidden by
@@ -525,8 +515,7 @@ function syncType() {
 }
 
 // Decide what the preview panel below Save shows: the banner image, the composed text
-// card, or a hint telling the operator what is still missing (code snippets can't be
-// previewed here — they're rendered by the ad network on the public page).
+// card, or a hint telling the operator what is still missing.
 function refreshPreviewPanel() {
   const t = document.getElementById('ad-type').value;
   const imgOn  = t === 'banner' && document.getElementById('img-preview').style.display !== 'none';
@@ -536,7 +525,6 @@ function refreshPreviewPanel() {
   let msg = '';
   if (t === 'banner' && !imgOn) msg = 'Add an image URL (or upload a file) to preview the banner.';
   else if (t === 'text' && !textOn) msg = 'Type a headline, body line or button label to preview the card.';
-  else if (t === 'code') msg = 'Code snippets are rendered by the ad network and are not executed here — check the placement on the public page after saving.';
   hint.textContent = msg;
   hint.style.display = msg ? '' : 'none';
   const place = PLACEMENT_LABEL[document.getElementById('ad-placement').value] || '';
@@ -573,7 +561,6 @@ function resetForm() {
   document.getElementById('ad-image').value = '';
   document.getElementById('ad-link').value = '';
   document.getElementById('ad-alt').value = '';
-  document.getElementById('ad-code').value = '';
   document.getElementById('ad-headline').value = '';
   document.getElementById('ad-body').value = '';
   document.getElementById('ad-cta').value = '';
@@ -594,6 +581,8 @@ function resetForm() {
 // outside its window doesn't show, and the plain On/Off flag used to hide that.
 function statusOf(a) {
   const now = Math.floor(Date.now() / 1000);
+  // A legacy code ad is never served, whatever its flags say (design §19.17 D22).
+  if (a.removed) return ['Unsupported (removed)', 'badge-dim'];
   if (!a.is_active) return ['Off', 'badge-dim'];
   if (a.start_at && a.start_at > now) return ['Scheduled', 'badge-warn'];
   if (a.end_at && a.end_at < now) return ['Expired', 'badge-warn'];
@@ -641,7 +630,7 @@ function renderTable() {
               ? `<img class="ad-thumb" src="${escHtml(a.image_url)}" alt="" loading="lazy" onerror="this.outerHTML='<span class=&quot;ad-thumb-code&quot;>broken img</span>'">`
               : a.ad_type === 'text'
               ? `<span class="ad-thumb-code" title="${escHtml(a.headline || '')}">“${escHtml((a.headline || 'text ad').slice(0, 18))}”</span>`
-              : '<span class="ad-thumb-code">&lt;/&gt; code</span>'}</td>
+              : '<span class="ad-thumb-code" title="Code ads were removed for security — design §19.17 D22. This one is never shown; delete it.">code — removed</span>'}</td>
         <td>${escHtml(a.name)}${a.notes ? `<span class="notes-flag" title="${escHtml(a.notes)}">📝</span>` : ''}</td>
         <td>${escHtml(PLACEMENT_LABEL[a.placement] || a.placement)}</td>
         <td>${escHtml(a.ad_type)}</td>
@@ -651,9 +640,9 @@ function renderTable() {
         <td class="stats-cell" title="Unverified client-reported counters — see the note above the table.">${escHtml(fmtStats(a))}</td>
         <td>
           <div class="row-actions">
-            <button class="btn-icon" onclick="editAd(${a.id})" data-tip="Edit this ad" aria-label="Edit this ad">✏️</button>
+            ${a.removed ? '' : `<button class="btn-icon" onclick="editAd(${a.id})" data-tip="Edit this ad" aria-label="Edit this ad">✏️</button>
             <button class="btn-icon" onclick="duplicateAd(${a.id})" data-tip="Duplicate as a new ad" aria-label="Duplicate as a new ad">📋</button>
-            <button class="btn-icon" onclick="toggleAd(${a.id})" data-tip="${a.is_active ? 'Turn off (stop showing it)' : 'Turn on (start showing it)'}" aria-label="${a.is_active ? 'Turn off' : 'Turn on'}">${a.is_active ? '⏸️' : '▶️'}</button>
+            <button class="btn-icon" onclick="toggleAd(${a.id})" data-tip="${a.is_active ? 'Turn off (stop showing it)' : 'Turn on (start showing it)'}" aria-label="${a.is_active ? 'Turn off' : 'Turn on'}">${a.is_active ? '⏸️' : '▶️'}</button>`}
             <button class="btn-icon btn-icon-danger" onclick="deleteAd(${a.id})" data-tip="Delete this ad" aria-label="Delete this ad">🗑️</button>
           </div>
         </td>
@@ -676,7 +665,7 @@ async function toggleAd(id) {
 // Prefill the form as a NEW ad copied from an existing one (nothing saved until Save).
 function duplicateAd(id) {
   const a = _ads.find(x => x.id === id);
-  if (!a) return;
+  if (!a || a.removed) return;
   resetForm();
   document.getElementById('ad-name').value = (a.name || '') + ' (copy)';
   document.getElementById('ad-placement').value = a.placement || 'header';
@@ -685,7 +674,6 @@ function duplicateAd(id) {
   document.getElementById('ad-link').value = a.link_url || '';
   document.getElementById('ad-text-link').value = a.link_url || '';
   document.getElementById('ad-alt').value = a.alt_text || '';
-  document.getElementById('ad-code').value = a.html_code || '';
   document.getElementById('ad-headline').value = a.headline || '';
   document.getElementById('ad-body').value = a.body_text || '';
   document.getElementById('ad-cta').value = a.cta_label || '';
@@ -732,7 +720,7 @@ async function saveAdsConfig() {
 
 function editAd(id) {
   const a = _ads.find(x => x.id === id);
-  if (!a) return;
+  if (!a || a.removed) return;
   document.getElementById('ad-id').value = a.id;
   document.getElementById('ad-name').value = a.name || '';
   document.getElementById('ad-placement').value = a.placement || 'header';
@@ -741,7 +729,6 @@ function editAd(id) {
   document.getElementById('ad-link').value = a.link_url || '';
   document.getElementById('ad-text-link').value = a.link_url || '';
   document.getElementById('ad-alt').value = a.alt_text || '';
-  document.getElementById('ad-code').value = a.html_code || '';
   document.getElementById('ad-headline').value = a.headline || '';
   document.getElementById('ad-body').value = a.body_text || '';
   document.getElementById('ad-cta').value = a.cta_label || '';
@@ -772,7 +759,6 @@ async function submitAd() {
     image_url: document.getElementById('ad-image').value.trim(),
     link_url: linkUrl,
     alt_text: document.getElementById('ad-alt').value.trim(),
-    html_code: document.getElementById('ad-code').value,
     headline: document.getElementById('ad-headline').value.trim(),
     body_text: document.getElementById('ad-body').value.trim(),
     cta_label: document.getElementById('ad-cta').value.trim(),

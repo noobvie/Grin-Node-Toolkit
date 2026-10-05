@@ -113,7 +113,7 @@ function createEvents({ db, registry, ledger, sessions, admin, log, names = MASK
     resultsCount: raw.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(reward_points), 0) AS pts FROM event_results WHERE event_id = ?'),
     insertResult: raw.prepare(
       'INSERT INTO event_results (event_id, address, value, rank, reward_points, badge) VALUES (?, ?, ?, ?, ?, ?)'),
-    banned: raw.prepare('SELECT banned_until FROM players WHERE address = ?'),
+    banned: raw.prepare('SELECT banned_until, deleted_at FROM players WHERE address = ?'),
     badges: raw.prepare('SELECT badges_json FROM players WHERE address = ?'),
     setBadges: raw.prepare('UPDATE players SET badges_json = ? WHERE address = ?'),
   };
@@ -142,7 +142,7 @@ function createEvents({ db, registry, ledger, sessions, admin, log, names = MASK
   }
 
   // Compute + filter + rank. value DESC, then address ASC (§19.9's tie-break); a zero value is
-  // not ranked; a banned address is not ranked. → [{ address, value, rank }]
+  // not ranked; a banned address is not ranked, nor a deleted guest (§19.17.3). → [{ address, value, rank }]
   function standings(ev, t, upTo) {
     const kind = kinds.get(ev.kind);
     if (!kind) throw new Error(`events: event ${ev.id} has unknown kind ${ev.kind}`);
@@ -154,6 +154,7 @@ function createEvents({ db, registry, ledger, sessions, admin, log, names = MASK
       if (!Number.isSafeInteger(r.value) || r.value <= 0) continue;
       const p = stmts.banned.get(r.address);
       if (p && p.banned_until !== null && p.banned_until > t) continue;
+      if (p && p.deleted_at !== null) continue;
       seen.add(r.address);
       out.push({ address: r.address, value: r.value });
     }

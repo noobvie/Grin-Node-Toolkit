@@ -633,9 +633,11 @@ class HashrateTracker {
       // NET of the flat withdrawal fee: `amount` is the gross the miner was debited, but only
       // amount − fee_charged actually reached them. Legacy rows have fee_charged = 0, which is
       // historically correct (they predate the fee), so this stays exact across the migration.
+      // Miners only: an operator revenue withdrawal (grin_address 'pool_fee') is not a payout.
       const payStmt = this.db.prepare(`
         SELECT COALESCE(SUM(amount - COALESCE(fee_charged, 0)), 0) AS s FROM withdrawals
-        WHERE status = 'confirmed' AND confirmed_at >= ? AND confirmed_at < ?`);
+        WHERE status = 'confirmed' AND confirmed_at >= ? AND confirmed_at < ?
+          AND grin_address != 'pool_fee'`);
 
       const factor = HashrateTracker.CYCLE_LENGTH / (H * HashrateTracker.SOLUTION_RATE);
       let wrote = 0;
@@ -845,7 +847,7 @@ class HashrateTracker {
       totals: {
         paid_all: 0, payout_count: 0, avg_payout: 0, last_payout_at: null,
         fee_all: 0, donations_all: 0, giveaways_all: 0, to_miners_all: 0, fee_percent: 0,
-        withdrawal_fees_all: 0
+        withdrawal_fees_all: 0, operator_withdrawn_all: 0, operator_withdrawal_count: 0
       }
     };
     try {
@@ -877,12 +879,14 @@ class HashrateTracker {
       }
 
       // Confirmed payouts per bucket (actual GRIN sent to miners), keyed by confirmed_at.
-      // Net of the flat withdrawal fee — see payStmt above.
+      // Net of the flat withdrawal fee — see payStmt above. Operator revenue withdrawals
+      // (grin_address 'pool_fee') are excluded here and everywhere "paid to miners" is meant;
+      // they are reported on their own in totals.operator_withdrawn_all.
       const payRows = this.db.prepare(`
         SELECT CAST(confirmed_at / ? AS INTEGER) * ? AS t,
                COALESCE(SUM(amount - COALESCE(fee_charged, 0)), 0) AS payout
         FROM withdrawals
-        WHERE status = 'confirmed' AND confirmed_at >= ?
+        WHERE status = 'confirmed' AND confirmed_at >= ? AND grin_address != 'pool_fee'
         GROUP BY t
       `).all(bucket, bucket, cutoff);
 
@@ -955,7 +959,7 @@ class HashrateTracker {
       const counts = new Array(labels.length).fill(0);
       this.db.prepare(`
         SELECT (amount - COALESCE(fee_charged, 0)) AS amount FROM withdrawals
-        WHERE status = 'confirmed' AND confirmed_at >= ?
+        WHERE status = 'confirmed' AND confirmed_at >= ? AND grin_address != 'pool_fee'
       `).all(cutoff).forEach(w => {
         const a = Number(w.amount) || 0;
         let i = edges.findIndex(e => a < e);
@@ -969,7 +973,13 @@ class HashrateTracker {
         SELECT COALESCE(SUM(amount - COALESCE(fee_charged, 0)), 0) AS paid,
                COALESCE(SUM(fee_charged), 0) AS withdrawal_fees,
                COUNT(*) AS cnt, MAX(confirmed_at) AS last
-        FROM withdrawals WHERE status = 'confirmed'
+        FROM withdrawals WHERE status = 'confirmed' AND grin_address != 'pool_fee'
+      `).get();
+      // The operator's own take, as actually sent out of the pool_fee bucket (published by
+      // operator decision 2026-10-05, beside — never inside — what miners were paid).
+      const opw = this.db.prepare(`
+        SELECT COALESCE(SUM(amount), 0) AS s, COUNT(*) AS n
+        FROM withdrawals WHERE status = 'confirmed' AND grin_address = 'pool_fee'
       `).get();
       // Lifetime ledger sums = rollup(day < H) + raw(created_at >= H). Exact at every
       // prune state: raw rows below H still present simply aren't read twice.
@@ -1014,7 +1024,10 @@ class HashrateTracker {
         fee_percent: paidAll > 0 ? parseFloat(((led.fee / paidAll) * 100).toFixed(2)) : 0,
         // Lifetime flat withdrawal fees collected, reported separately so the transparency
         // page can show the full operator take without distorting fee_percent.
-        withdrawal_fees_all: round9(pay.withdrawal_fees)
+        withdrawal_fees_all: round9(pay.withdrawal_fees),
+        // Lifetime revenue the operator withdrew from the pool fee (after network fees).
+        operator_withdrawn_all: round9(opw.s),
+        operator_withdrawal_count: opw.n || 0
       };
 
       return { range, bucket_seconds: bucket, points, distribution, totals };

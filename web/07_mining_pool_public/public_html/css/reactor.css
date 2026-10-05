@@ -230,6 +230,10 @@ body {
   background: var(--rx-inset); box-shadow: inset 0 2px 8px var(--rx-shade);
 }
 .lamp small { display: block; font-size: 9px; letter-spacing: .08em; margin-top: 2px; color: inherit; opacity: .8; }
+/* Node uptime (reactor-dashboard.js, design §20.5) — its own row under the peer count, so the
+   Node lamp's <small> is exactly two rows at every width instead of wrapping to three when the
+   lamp is ~75px wide just above the 900px breakpoint. */
+.lamp-up { display: block; }
 .lamp.ok {
   color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--bg));
   background: color-mix(in srgb, var(--ok) 7%, var(--rx-inset));

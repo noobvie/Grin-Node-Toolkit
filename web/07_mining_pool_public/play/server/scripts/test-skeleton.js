@@ -135,7 +135,7 @@ async function main() {
   // ── [b] db: migrations, pragmas, the §19.4 contract ─────────────────────────────────
   console.log('\n[b] grinium-games.db: schema v1, idempotent migrations, pragmas\n');
   const mem = openDb(':memory:', { net: 'mainnet', log });
-  ok('b. :memory: opens at the latest version (3)', mem.schemaVersion() === LATEST_VERSION && LATEST_VERSION === 3);
+  ok('b. :memory: opens at the latest version (5)', mem.schemaVersion() === LATEST_VERSION && LATEST_VERSION === 5);
   const memSchema = schemaObjects(mem.raw);
   const again = mem.migrate();
   ok('b. :memory: migrate again = no-op, same schema, still latest',
@@ -222,10 +222,10 @@ async function main() {
   lines.length = 0;
   const dv1 = openDb(fv1, { net: 'mainnet', log });
   const v1tables = dv1.raw.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('moderators','chat_words','nicknames')").all().map((x) => x.name).sort();
-  ok('b. a v1 DB migrates v1 → v3: moderators + chat_words + nicknames added, data kept',
-    dv1.schemaVersion() === 3 && v1tables.join() === 'chat_words,moderators,nicknames'
+  ok('b. a v1 DB migrates v1 → v5: moderators + chat_words + nicknames added, data kept',
+    dv1.schemaVersion() === 5 && v1tables.join() === 'chat_words,moderators,nicknames'
       && dv1.raw.prepare("SELECT plays FROM players WHERE address = 'grin1keep'").get().plays === 7
-      && lines.some((l) => l.includes('migrated schema v1 → v3')), v1tables.join());
+      && lines.some((l) => l.includes('migrated schema v1 → v5')), v1tables.join());
   ok('b. …and the upgraded schema equals a fresh one', JSON.stringify(schemaObjects(dv1.raw)) === JSON.stringify(memSchema));
   dv1.close();
 
@@ -241,12 +241,92 @@ async function main() {
     r.close(); }
   lines.length = 0;
   const dv2 = openDb(fv2, { net: 'mainnet', log });
-  ok('b. a v2 DB migrates v2 → v3: nicknames added, players + moderators kept',
-    dv2.schemaVersion() === 3 && lines.some((l) => l.includes('migrated schema v2 → v3'))
+  ok('b. a v2 DB migrates v2 → v5: nicknames added, players + moderators kept',
+    dv2.schemaVersion() === 5 && lines.some((l) => l.includes('migrated schema v2 → v5'))
       && dv2.raw.prepare("SELECT COUNT(*) AS n FROM moderators").get().n === 1
       && dv2.raw.prepare("SELECT COUNT(*) AS n FROM nicknames").get().n === 0);
   ok('b. …and equals a fresh schema', JSON.stringify(schemaObjects(dv2.raw)) === JSON.stringify(memSchema));
   dv2.close();
+
+  // A DB made by the v3 build (Part 12) upgrades in place, and its nickname rows are re-checked
+  // under the v2 rule (§19.17.5): live names failing it are removed, pending ones go live when
+  // they pass and nobody else's live name reads the same, else they are rejected.
+  const fv3 = tmpDb('v3.db');
+  { const r = new DatabaseSync(fv3);
+    const { MIGRATIONS } = require(path.join(SERVER, 'lib/db.js'));
+    for (const m of MIGRATIONS.slice(0, 3)) r.exec(m.sql);
+    r.exec("INSERT INTO meta (key, value) VALUES ('schema_version', '3'), ('created_at', '1'), ('net', 'mainnet')");
+    for (const a of ['grin1a', 'grin1b', 'grin1c', 'grin1d', 'grin1e', 'grin1f']) r.exec(`INSERT INTO players (address, first_seen, last_seen) VALUES ('${a}', 1, 1)`);
+    r.exec("INSERT INTO chat_words (word, added_by, added_at) VALUES ('rugpull', 'op', 1)");
+    const ins = "INSERT INTO nicknames (address, name, norm, state, submitted_at) VALUES ";
+    r.exec(ins + "('grin1a', 'Alice', 'alice', 'approved', 1)");        // passes v2: stays live
+    r.exec(ins + "('grin1b', 'Big Miner', 'bigminer', 'approved', 1)"); // a space: removed
+    r.exec(ins + "('grin1c', 'Bob', 'bob', 'approved', 1)");            // live, and a pending change:
+    r.exec(ins + "('grin1c', 'Bobby', 'bobby', 'pending', 2)");         //   → Bobby live, Bob replaced
+    r.exec(ins + "('grin1d', 'Rugpull1', 'rugpulli', 'pending', 3)");   // the chat word list: rejected
+    r.exec(ins + "('grin1e', 'ALICE', 'alice', 'pending', 4)");         // reads as a's live name: rejected (taken)
+    r.exec(ins + "('grin1f', 'Mod', 'mod', 'pending', 5)");             // reserved: rejected
+    r.close(); }
+  lines.length = 0;
+  const dv3 = openDb(fv3, { net: 'mainnet', log });
+  const st = Object.fromEntries(dv3.raw.prepare('SELECT name, state, reason, decided_by FROM nicknames').all().map((x) => [x.name, x]));
+  ok('b. a v3 DB migrates v3 → v5 and says so', dv3.schemaVersion() === 5 && lines.some((l) => l.includes('migrated schema v3 → v5')));
+  ok('b. …a live name passing v2 stays live', st.Alice.state === 'approved');
+  ok('b. …a live name failing v2 (a space) → removed, reason rule_v2, by system',
+    st['Big Miner'].state === 'removed' && st['Big Miner'].reason === 'rule_v2' && st['Big Miner'].decided_by === 'system');
+  ok('b. …a passing pending change goes live and replaces the old live one',
+    st.Bobby.state === 'approved' && st.Bob.state === 'replaced'
+      && dv3.raw.prepare("SELECT nick_changed_at AS t FROM players WHERE address = 'grin1c'").get().t !== null);
+  ok('b. …a pending name hitting the chat word list → rejected rule_v2', st.Rugpull1.state === 'rejected' && st.Rugpull1.reason === 'rule_v2');
+  ok('b. …a pending name another player already holds → rejected taken', st.ALICE.state === 'rejected' && st.ALICE.reason === 'taken');
+  ok('b. …a reserved pending name → rejected rule_v2', st.Mod.state === 'rejected' && st.Mod.reason === 'rule_v2');
+  ok('b. …no pending row is left, and the schema equals a fresh one',
+    dv3.raw.prepare("SELECT COUNT(*) AS n FROM nicknames WHERE state = 'pending'").get().n === 0
+      && JSON.stringify(schemaObjects(dv3.raw)) === JSON.stringify(memSchema));
+  ok('b. …the new player columns have their defaults', (() => {
+    const p = dv3.raw.prepare("SELECT nick_blocked, nick_changed_at, nick_refused_day, nick_refused_n FROM players WHERE address = 'grin1a'").get();
+    return p.nick_blocked === 0 && p.nick_changed_at === null && p.nick_refused_day === null && p.nick_refused_n === 0;
+  })());
+  ok('b. CHECK: nick_blocked is 0 or 1', throwsLike(() => dv3.raw.prepare("UPDATE players SET nick_blocked = 2 WHERE address = 'grin1a'").run(), /CHECK/i));
+  dv3.close();
+
+  // A DB made by the v4 build (C3/C4) upgrades in place. v5 REBUILDS sessions (SQLite cannot
+  // ALTER a CHECK): every row must survive, every column intact, and the stored CREATE text must
+  // be the canonical one (no quoted name from a RENAME).
+  const fv4 = tmpDb('v4.db');
+  const sessRow = ['tokhash1', 'grin1a', 100, 200, 150, '203.0.113.0/24', 'Edge on Windows', 'password', 'set', 160, null];
+  { const r = new DatabaseSync(fv4);
+    const { MIGRATIONS } = require(path.join(SERVER, 'lib/db.js'));
+    for (const m of MIGRATIONS.slice(0, 4)) r.exec(m.sql);
+    r.exec("INSERT INTO meta (key, value) VALUES ('schema_version', '4'), ('created_at', '1'), ('net', 'mainnet'), ('launch', 'on')");
+    r.exec("INSERT INTO players (address, first_seen, last_seen, plays) VALUES ('grin1a', 1, 1, 9)");
+    r.prepare('INSERT INTO sessions (token_hash, address, created_at, expires_at, last_seen, ip_coarse, ua_hint, proof_kind, proof_slot, chat_ok_after, revoked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(...sessRow);
+    r.prepare("INSERT INTO sessions (token_hash, address, created_at, expires_at, last_seen, proof_kind, proof_slot, revoked_at) VALUES ('tokhash2', 'grin1a', 1, 2, 1, 'ip', 'anchor', 5)").run();
+    r.close(); }
+  lines.length = 0;
+  const dv4 = openDb(fv4, { net: 'mainnet', log });
+  ok('b. a v4 DB migrates v4 → v5 and says so', dv4.schemaVersion() === 5 && lines.some((l) => l.includes('migrated schema v4 → v5')));
+  const kept = dv4.raw.prepare("SELECT token_hash, address, created_at, expires_at, last_seen, ip_coarse, ua_hint, proof_kind, proof_slot, chat_ok_after, revoked_at FROM sessions WHERE token_hash = 'tokhash1'").get();
+  ok('b. …the sessions rebuild keeps every row and every column', kept && JSON.stringify(Object.values(kept)) === JSON.stringify(sessRow)
+    && dv4.raw.prepare('SELECT COUNT(*) AS n FROM sessions').get().n === 2, JSON.stringify(kept));
+  ok('b. …the rebuilt table is stored under its plain name, and the copy is gone',
+    /^CREATE TABLE sessions \(/.test(dv4.raw.prepare("SELECT sql FROM sqlite_master WHERE name = 'sessions'").get().sql)
+      && !dv4.raw.prepare("SELECT 1 AS x FROM sqlite_master WHERE name LIKE 'sessions_v4%'").get());
+  ok('b. …a guest session is accepted now, and the old values still are', (() => {
+    dv4.raw.exec("INSERT INTO players (address, first_seen, last_seen, kind) VALUES ('g:aaaaaaaaaaaaaaaa', 1, 1, 'guest')");
+    dv4.raw.exec("INSERT INTO sessions (token_hash, address, created_at, expires_at, last_seen, proof_kind, proof_slot) VALUES ('tokhash3', 'g:aaaaaaaaaaaaaaaa', 1, 2, 1, 'guest', 'set')");
+    return true;
+  })());
+  ok('b. …CHECK still refuses an unknown proof_kind', throwsLike(() => dv4.raw.exec("INSERT INTO sessions (token_hash, address, created_at, expires_at, last_seen, proof_kind, proof_slot) VALUES ('t4', 'grin1a', 1, 2, 1, 'sms', 'set')"), /CHECK/i));
+  ok('b. …existing players read as miners, not deleted, no top-up day', (() => {
+    const p = dv4.raw.prepare("SELECT kind, deleted_at, guest_day, plays FROM players WHERE address = 'grin1a'").get();
+    return p.kind === 'miner' && p.deleted_at === null && p.guest_day === null && p.plays === 9;
+  })());
+  ok('b. CHECK: players.kind is miner or guest', throwsLike(() => dv4.raw.exec("UPDATE players SET kind = 'robot' WHERE address = 'grin1a'"), /CHECK/i));
+  ok('b. …the launch state survives, and the schema equals a fresh one',
+    dv4.raw.prepare("SELECT value FROM meta WHERE key = 'launch'").get().value === 'on'
+      && JSON.stringify(schemaObjects(dv4.raw)) === JSON.stringify(memSchema));
+  dv4.close();
 
   const f3 = tmpDb('garbage.db');
   fs.writeFileSync(f3, 'this is not a sqlite database, just some bytes '.repeat(10));
@@ -350,9 +430,9 @@ async function main() {
   ok('e. the server is bound to 127.0.0.1', addr.address === '127.0.0.1');
 
   const hr = await request(port, { path: '/play/api/health' });
-  ok('e. health → 200 {ok, net, schema, uptime_s} and nothing else',
-    hr.status === 200 && JSON.stringify(Object.keys(hr.json).sort()) === JSON.stringify(['net', 'ok', 'schema', 'uptime_s'])
-    && hr.json.ok === true && hr.json.net === 'testnet' && hr.json.schema === LATEST_VERSION && hr.json.uptime_s === 42, hr.text);
+  ok('e. health → 200 {ok, net, schema, launch, uptime_s} and nothing else (launch: §19.17.2, Part C2)',
+    hr.status === 200 && JSON.stringify(Object.keys(hr.json).sort()) === JSON.stringify(['launch', 'net', 'ok', 'schema', 'uptime_s'])
+    && hr.json.ok === true && hr.json.net === 'testnet' && hr.json.schema === LATEST_VERSION && hr.json.launch === 'preview' && hr.json.uptime_s === 42, hr.text);
   ok('e. JSON responses: nosniff, no-store, application/json, inert CSP, a request id',
     hr.headers['x-content-type-options'] === 'nosniff' && hr.headers['cache-control'] === 'no-store'
     && /^application\/json; charset=utf-8$/.test(hr.headers['content-type']) && /default-src 'none'/.test(hr.headers['content-security-policy'] || '')

@@ -73,14 +73,15 @@ function createLeaderboard({ db, registry, sessions, names = MASK_ONLY, now = ()
     results: raw.prepare(
       'SELECT address, SUM(wins) AS wins, SUM(points) AS points, SUM(games) AS games FROM results_daily ' +
       'WHERE game_id = ? AND mode = ? AND day BETWEEN ? AND ? GROUP BY address'),
-    banned: raw.prepare('SELECT banned_until FROM players WHERE address = ?'),
+    banned: raw.prepare('SELECT banned_until, deleted_at FROM players WHERE address = ?'),
   };
   const cache = new Map();
 
   function notBanned(t) {
     return (r) => {
       const p = stmts.banned.get(r.address);
-      return !(p && p.banned_until !== null && p.banned_until > t);
+      // A deleted guest (§19.17.3) is not ranked either: its rows stay, its name is gone.
+      return !(p && ((p.banned_until !== null && p.banned_until > t) || p.deleted_at !== null));
     };
   }
 

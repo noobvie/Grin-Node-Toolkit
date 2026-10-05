@@ -1112,6 +1112,11 @@ stop_grin_node() {
     local pid; pid=$(get_pid_on_port "$GRIN_PORT")
     [ -z "$pid" ] && { log "Grin not running on port $GRIN_PORT — skipping"; return 0; }
 
+    # Planned-stop marker BEFORE the signal (lib/grin_node_control.sh) — this
+    # SIGTERM bypasses gnc_kill_grin_session, so nothing else would name the pid.
+    local _sess
+    if _sess=$(gnc_session_of_pid "$pid"); then gnc_mark_planned_stop "$_sess" "chain data share"; fi
+
     log "PID $pid on port $GRIN_PORT — sending SIGTERM..."
     kill -TERM "$pid" 2>/dev/null
     local count=0
@@ -2353,8 +2358,12 @@ add_grin_autostart() {
         # Grin Node Launch Contract (CLAUDE.md): run as the grin user with
         # HOME=$GRIN_DIR, after chown -R grin:grin. A root-run node leaves
         # root:root files in the node dir → next grin-user start hits EACCES.
-        # Mirrors gnk_autostart_enable in lib/grin_node_keepalive.sh.
-        local cron_line="@reboot sleep $delay && chown -R grin:grin '$GRIN_DIR' 2>/dev/null; su -s /bin/bash grin -c \"cd '$GRIN_DIR' && env HOME='$GRIN_DIR' SHELL=/bin/bash tmux new-session -d -s $TMUX_SESSION '$GRIN_BINARY server run'\" $cron_marker"
+        # Mirrors gnk_autostart_enable in lib/grin_node_keepalive.sh, including
+        # the launcher's pane command (_gnc_node_run_cmd, cron-escaped): exit-code
+        # capture + a `read` tail, so a crash after a reboot keeps its panic text.
+        local run_cmd
+        run_cmd=$(_gnc_node_run_cmd "$GRIN_DIR" "$GRIN_BINARY" cron)
+        local cron_line="@reboot sleep $delay && chown -R grin:grin '$GRIN_DIR' 2>/dev/null; su -s /bin/bash grin -c \"cd '$GRIN_DIR' && env HOME='$GRIN_DIR' SHELL=/bin/bash tmux new-session -d -s $TMUX_SESSION '$run_cmd'\" $cron_marker"
 
         # Check for existing entry
         if echo "$existing_cron" | grep -qF "$cron_marker"; then

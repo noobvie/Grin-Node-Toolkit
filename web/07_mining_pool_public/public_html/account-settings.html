@@ -882,8 +882,8 @@
                             </div>
                             <div class="table-scroll">
                                 <table class="data-table" aria-label="Withdrawal history">
-                                    <thead><tr><th>Requested</th><th>Method</th><th>Status</th><th class="num">Amount</th><th class="num">Fee</th><th>Confirmed</th><th>Proof</th></tr></thead>
-                                    <tbody id="log-wd"><tr><td colspan="7">—</td></tr></tbody>
+                                    <thead><tr><th>Requested</th><th>Method</th><th>Status</th><th class="num">Amount</th><th class="num" title="The flat withdrawal fee charged on this payout. It covers the Grin network fee, which the pool wallet pays.">Withdrawal fee</th><th class="num" title="What reached your wallet: the amount minus the withdrawal fee">You received</th><th>Confirmed</th><th>Proof</th></tr></thead>
+                                    <tbody id="log-wd"><tr><td colspan="8">—</td></tr></tbody>
                                 </table>
                             </div>
                             <div class="pager-row">
@@ -900,8 +900,9 @@
 
                 <!-- ═══ P-09 · DONOR PROFILE (design §18.8) ═══════════════════════════════════
                      The donor's nickname + banner on the donor wall, set here and nowhere else.
-                     Everything is PRE-moderated: a submission is invisible to the public until the
-                     operator approves it. Rendered by renderDonor() from `donor_profile` on the
+                     A NAME is checked automatically and goes live at once (design §19.17.6, Part
+                     C4); a BANNER is pre-moderated: invisible to the public until the operator
+                     approves it. Rendered by renderDonor() from `donor_profile` on the
                      summary, which never carries the pending name or image (anyone holding the
                      address can open this page) — a pending item is shown from THIS tab's own
                      submit response only (dpMine), and after a reload by its submit time alone.
@@ -909,7 +910,7 @@
                      or remove: removing your own data is always allowed (§18.11 Part 2 #3). -->
                 <div class="deck-row" id="acct-donor" style="display:none">
                     <div class="panel"><span class="screws"></span>
-                        <h2 class="panel-title"><span class="tag">P-09</span> Donor profile <span class="right">reviewed before it appears</span></h2>
+                        <h2 class="panel-title"><span class="tag">P-09</span> Donor profile <span class="right">names checked at once · banners reviewed</span></h2>
                         <div class="panel-body">
                             <div id="dp-lead" class="dp-lines"></div>
                             <div id="dp-body" style="display:none">
@@ -952,7 +953,7 @@
                                             </div>
                                         </div>
                                         <div class="dp-actions">
-                                            <button class="btn-save" id="dp-name-submit" style="display:none">Submit name for review</button>
+                                            <button class="btn-save" id="dp-name-submit" style="display:none">Set this name</button>
                                             <button type="button" class="btn-save btn-quiet" id="dp-name-withdraw" style="display:none">Withdraw request</button>
                                             <button type="button" class="btn-save btn-quiet" id="dp-name-remove" style="display:none">Remove from wall</button>
                                         </div>
@@ -1615,7 +1616,7 @@
             } else {
                 lead = dpLine('', '', 'Choose the name the donor wall shows for this address' +
                     (slots > 0 ? ', and a banner for when you rank in the top ' + slots + '.' : '.') +
-                    ' The pool reviews every name and banner before it appears. If one is not approved, the reason is shown here, on a page anyone with your address can open.');
+                    ' A name is checked automatically and shows at once if it passes; you can change it once every 7 days. A banner is reviewed by the pool before it appears. If the pool turns down a banner or takes either one off the wall, the reason is shown here, on a page anyone with your address can open.');
             }
             $id('dp-lead').innerHTML = lead;
 
@@ -1627,17 +1628,21 @@
             const nl = [];
             if (n.state === 'shown') nl.push(dpLine('ok', 'Showing', 'on the donor wall as “' + String(n.live || '') + '”.'));
             else if (n.state === 'expired') nl.push(dpLine('warn', 'Expired', 'Your approved name is off the wall because you have not donated for a while. It shows again after your next donation.'));
+            // Since C4 a name is never pending; a pre-C4 request still waiting is decided at the
+            // pool's next start, so this line can only show between an upgrade and that start.
             if (n.pending_at) {
-                const mine = dpMine.name && dpMine.addr === currentAddr && dpMine.name.at === n.pending_at ? dpMine.name.text : null;
-                nl.push(dpLine('warn', 'Waiting for review', (mine !== null ? '“' + mine + '”, submitted ' : 'A name submitted ') + fmtWhen(n.pending_at) + '. Nothing shows on the wall until the pool approves it.'));
+                nl.push(dpLine('warn', 'Being checked', 'A name submitted ' + fmtWhen(n.pending_at) + ' is waiting for the pool\'s automatic check.'));
             }
             nl.push(dpVerdict('name', 'rejected', n.rejected));
             nl.push(dpVerdict('name', 'removed', n.removed));
-            if (!nl.join('')) nl.push(dpLine('', '', 'No donor name yet. Until one is approved, the wall shows your address, masked.'));
+            if (Number.isFinite(n.change_available_at) && n.change_available_at > 0) {
+                nl.push(dpLine('', 'Next change', 'A donor name can be changed once every 7 days. You can change yours again from ' + fmtWhen(n.change_available_at) + '.'));
+            }
+            if (!nl.join('')) nl.push(dpLine('', '', 'No donor name yet. Until you set one, the wall shows your address, masked.'));
             $id('dp-name-lines').innerHTML = nl.join('');
             $id('dp-name-form').style.display = canSubmit ? '' : 'none';
             $id('dp-name-submit').style.display = canSubmit ? '' : 'none';
-            $id('dp-name-submit').textContent = n.pending_at ? 'Replace the name waiting' : (dpHasLive(n) ? 'Submit a new name' : 'Submit name for review');
+            $id('dp-name-submit').textContent = dpHasLive(n) ? 'Change the name' : 'Set this name';
             $id('dp-name-withdraw').style.display = n.pending_at ? '' : 'none';
             $id('dp-name-remove').style.display = dpHasLive(n) ? '' : 'none';
 
@@ -1707,7 +1712,7 @@
             if (name.length < DP_NAME.min || name.length > DP_NAME.max) return { ok: false, name, text: 'Use 2–32 characters (this is ' + name.length + ').' };
             if (!DP_NAME.re.test(name)) return { ok: false, name, text: 'Only letters, digits, spaces and - _ . & \' are allowed — no accents, emoji or other symbols.' };
             if (!/[A-Za-z0-9]/.test(name)) return { ok: false, name, text: 'Include at least one letter or digit.' };
-            return { ok: true, name, text: '✓ “' + name + '” fits the rules. The pool still reviews it before it appears.' };
+            return { ok: true, name, text: '✓ “' + name + '” fits the rules. The pool checks the words and that no other donor uses it when you submit.' };
         }
         function dpNameHint() {
             const v = dpCheckName($id('dp-name').value);
@@ -1836,14 +1841,11 @@
                 const json = await r.json().catch(() => null);
                 if (addr !== currentAddr) return;
                 if (r.ok && json && json.success) {
-                    // The typed name comes back ONLY in this response; keep it for this tab.
-                    dpMine = { addr: addr, name: { text: String(json.name || v.name), at: json.submitted_at },
-                               banner: dpMine.addr === addr ? dpMine.banner : null };
+                    // C4: a name that passes is live at once — the summary re-read shows it.
                     dpClearProofs();
                     $id('dp-name').value = '';
                     dpNameHint();
-                    setMsg(msg, 'Submitted. The pool reviews it before it appears' +
-                        (json.replaced_pending ? '; it replaced the name that was waiting.' : '.'), true);
+                    setMsg(msg, 'Done — “' + String(json.name || v.name) + '” is on the donor wall now.', true);
                     await dpRefresh(addr);
                 } else {
                     setMsg(msg, dpErr(json, r.status, 'The name could not be submitted'), false);
@@ -2164,7 +2166,7 @@
             wallet_offline_cleared: { offer: true, text: '✗ Your wallet did not answer over Tor — your balance is back. Start your wallet listener and try again, or get it as a Slatepack now.' },
             wallet_unreachable: { offer: true, text: '✗ The payout could not reach your wallet over Tor — your balance is back. Try again, or get it as a Slatepack now.' },
             pool_send_path: { offer: true, text: '✗ The pool could not deliver over Tor — your balance is back. Please use Slatepack; the operator has been alerted.' },
-            pool_busy: { offer: false, tone: '', text: 'The pool could not send this payout right now — your balance is back. Try again later.' },
+            pool_busy: { offer: false, tone: '', text: 'Another payment was ahead of yours, so this one could not be sent — your balance is back. Please try again in about 15 minutes.' },
             unknown: { offer: true, text: '✗ This payout did not go out — your balance is back.' }
         };
         const TOR_FAIL_GENERIC = { offer: false, text: '✗ Payout failed — the full amount is back in your balance.' };
@@ -2576,23 +2578,35 @@
             tbody.textContent = '';
             if (!rows.length) {
                 const tr = document.createElement('tr'), td = document.createElement('td');
-                td.colSpan = 7; td.textContent = wd.page > 0 ? 'No more entries' : 'No payouts yet';
+                td.colSpan = 8; td.textContent = wd.page > 0 ? 'No more entries' : 'No payouts yet';
                 tr.appendChild(td); tbody.appendChild(tr);
             }
             rows.forEach(row => {
                 const tr = document.createElement('tr');
+                // The fee shown is the FLAT withdrawal fee the miner was charged (fee_charged),
+                // never row.fee — that is the real chain fee the POOL wallet paid (~0.02), and
+                // showing it here contradicted the 0.04 the request form quoted (2026-10-05).
+                // The fee is taken only when a payout is paid: a pending one shows the fee it
+                // WILL take (received follows once it lands), a failed / cancelled / expired one
+                // returned the whole amount, so it shows neither. Payouts from before the flat
+                // fee carry fee_charged 0, which is what they were charged.
+                const fee = Number(row.fee_charged || 0);
+                const paid = row.status === 'confirmed';
+                const pending = PENDING_IN_FLIGHT.indexOf(row.status) !== -1 ||
+                                PENDING_SLOW.indexOf(row.status) !== -1 || row.status === 'slatepack_pending';
                 const cells = [
                     fmtShort(row.created_at),
                     PayoutMethods.methodLabel(row.method),
                     PayoutMethods.statusLabel(row),
                     '−' + Number(row.amount || 0).toFixed(4),
-                    Number(row.fee || 0).toFixed(4),
+                    (paid || pending) ? fee.toFixed(4) : '—',
+                    paid ? (Number(row.amount || 0) - fee).toFixed(4) : '—',
                     row.confirmed_at ? fmtShort(row.confirmed_at) : '—'
                 ];
                 cells.forEach((text, i) => {
                     const td = document.createElement('td');
                     if (i === 3) td.className = 'num amt-out';
-                    else if (i === 4) td.className = 'num';
+                    else if (i === 4 || i === 5) td.className = 'num';
                     td.textContent = text;
                     tr.appendChild(td);
                 });
@@ -2668,13 +2682,13 @@
                 return;
             }
             const tbody = $id('log-wd');
-            tbody.innerHTML = '<tr><td colspan="7">Loading…</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8">Loading…</td></tr>';
             try {
                 const data = await getJson('/api/account/' + encodeURIComponent(currentAddr) +
                     '/withdrawals?limit=' + PAGE_SIZE + '&offset=' + (wd.page * PAGE_SIZE));
                 renderWithdrawals((data && data.withdrawals) || [], (data && data.total) || 0);
             } catch (e) {
-                tbody.innerHTML = '<tr><td colspan="7">History unavailable</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8">History unavailable</td></tr>';
             }
         }
 
@@ -3219,7 +3233,8 @@
                     // a banner.live_url to see the other states.
                     donor_profile: {
                         eligible: true, blocked: false, refusal: null,
-                        name: { live: 'Demo Mining Co.', state: 'shown', pending_at: null, rejected: null, removed: null },
+                        name: { live: 'Demo Mining Co.', state: 'shown', pending_at: null, rejected: null, removed: null,
+                                change_available_at: now + 3 * 86400 },
                         banner: { live_url: null, width: null, height: null, state: 'none', pending_at: now - 2 * 3600,
                                   rejected: null, removed: null, slot_rank: 3, slots: 5, showing: false }
                     },
@@ -3230,13 +3245,13 @@
                 price: { data: { usd: 0.0181, btc: 0.00000028 } },
                 ledger: { in: logIn, out: logOut },
                 withdrawals: [
-                    { created_at: now - 2 * 86400,  confirmed_at: now - 2 * 86400 + 900,  method: 'tor',       status: 'confirmed', amount: 25.0, fee: 0.008, kernel_excess: '08b1f6d2c4a3e5079b8c1d2e3f405162738495a6b7c8d9e0f1a2b3c4d5e6f70819' },
-                    { created_at: now - 9 * 86400,  confirmed_at: now - 9 * 86400 + 1200, method: 'slatepack', status: 'confirmed', amount: 25.0, fee: 0.008, kernel_excess: '09a2e7c3d5b40618ac9d0e1f2031425364758697a8b9cadbecfd0e1f203142536' },
-                    { created_at: now - 16 * 86400, confirmed_at: null,                   method: 'tor',       status: 'tor_failed', fail_code: 'wallet_offline', amount: 20.0, fee: 0.0 },
-                    { created_at: now - 23 * 86400, confirmed_at: now - 23 * 86400 + 800,  method: 'tor',       status: 'confirmed', amount: 30.0, fee: 0.008, kernel_excess: '08c3d8e4f60517b2ad0e1f2031425364758697a8b9cadbecfd0e1f2031425364a' },
-                    { created_at: now - 38 * 86400, confirmed_at: now - 38 * 86400 + 600,  method: 'nostr',     status: 'confirmed', amount: 28.5, fee: 0.008, kernel_excess: '09d4e9f5071628c3be1f20314253647586a7b8c9daebfc0d1e2f3041526374859' },
-                    { created_at: now - 52 * 86400, confirmed_at: now - 52 * 86400 + 700,  method: 'tor',       status: 'confirmed', amount: 40.0, fee: 0.008, kernel_excess: '08e5f0061728d3c4af203142536475869708b9cadbecfd0e1f2031425364758a6' },
-                    { created_at: now - 70 * 86400, confirmed_at: now - 70 * 86400 + 900,  method: 'tor',       status: 'confirmed', amount: 35.0, fee: 0.008, kernel_excess: '09f6010728e3d4b5c02031425364758697a8b9c0d1e2f30415263748596a7b8c9' }
+                    { created_at: now - 2 * 86400,  confirmed_at: now - 2 * 86400 + 900,  method: 'tor',       status: 'confirmed', amount: 25.0, fee: 0.008, fee_charged: 0.04, kernel_excess: '08b1f6d2c4a3e5079b8c1d2e3f405162738495a6b7c8d9e0f1a2b3c4d5e6f70819' },
+                    { created_at: now - 9 * 86400,  confirmed_at: now - 9 * 86400 + 1200, method: 'slatepack', status: 'confirmed', amount: 25.0, fee: 0.008, fee_charged: 0.04, kernel_excess: '09a2e7c3d5b40618ac9d0e1f2031425364758697a8b9cadbecfd0e1f203142536' },
+                    { created_at: now - 16 * 86400, confirmed_at: null,                   method: 'tor',       status: 'tor_failed', fail_code: 'wallet_offline', amount: 20.0, fee: 0.0, fee_charged: 0.04 },
+                    { created_at: now - 23 * 86400, confirmed_at: now - 23 * 86400 + 800,  method: 'tor',       status: 'confirmed', amount: 30.0, fee: 0.008, fee_charged: 0.04, kernel_excess: '08c3d8e4f60517b2ad0e1f2031425364758697a8b9cadbecfd0e1f2031425364a' },
+                    { created_at: now - 38 * 86400, confirmed_at: now - 38 * 86400 + 600,  method: 'nostr',     status: 'confirmed', amount: 28.5, fee: 0.008, fee_charged: 0.04, kernel_excess: '09d4e9f5071628c3be1f20314253647586a7b8c9daebfc0d1e2f3041526374859' },
+                    { created_at: now - 52 * 86400, confirmed_at: now - 52 * 86400 + 700,  method: 'tor',       status: 'confirmed', amount: 40.0, fee: 0.008, fee_charged: 0.04, kernel_excess: '08e5f0061728d3c4af203142536475869708b9cadbecfd0e1f2031425364758a6' },
+                    { created_at: now - 70 * 86400, confirmed_at: now - 70 * 86400 + 900,  method: 'tor',       status: 'confirmed', amount: 35.0, fee: 0.008, fee_charged: 0.04, kernel_excess: '09f6010728e3d4b5c02031425364758697a8b9c0d1e2f30415263748596a7b8c9' }
                 ]
             };
         })();

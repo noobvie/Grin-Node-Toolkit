@@ -95,5 +95,15 @@ function ipv4Header(srcIp, srcPort, dstIp = '10.66.66.1', dstPort = 3391) {
   check('IPv6 source IP recovered', r.ip === '2001:db8:0:0:0:0:0:1');
 }
 
+// 9) The gateway's hub health check (design §21.12): bytes captured 2026-10-05 from HAProxy
+// 2.8.16 running the rendered 07_lib_gateway.sh config ('send-proxy-v2 check', no port/addr).
+// It sends this LOCAL header and closes; the hub must consume it and keep the socket address.
+{
+  const probe = Buffer.from('0d0a0d0a000d0a515549540a20000000', 'hex');
+  const r = parseProxyV2Header(probe);
+  check('HAProxy check header → parsed LOCAL, ip null, all 16 bytes consumed',
+    r.state === 'parsed' && r.ip === null && r.consumed === probe.length);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

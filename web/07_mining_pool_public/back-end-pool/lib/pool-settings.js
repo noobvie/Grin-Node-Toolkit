@@ -9,6 +9,51 @@ function hashStr(s) {
   return h;
 }
 
+// Stratum pause (design §21.8/§21.9). The overlay text defaults, used both as the `notices`
+// defaults and as the fallback for a value the operator saved EMPTY (an empty title would put a
+// bare icon on every public page).
+const STRATUM_PAUSE_TITLE_DEFAULT = 'Mining paused';
+const STRATUM_PAUSE_MESSAGE_DEFAULT = 'Mining on this pool is paused for maintenance and will resume automatically. ' +
+  'Your balance is safe. Keep a backup pool configured in your miner — it switches back here on its own.';
+// Q5: a planned window is announced from this long before its start.
+const STRATUM_WINDOW_NOTICE_MS = 24 * 3600 * 1000;
+
+// '2026-10-05T14:00:00Z' → '05 Oct 14:00 UTC'. Built from the UTC fields, never the server's
+// locale, so the banner reads the same on every box (memory: all public-pool times are UTC).
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function utcLabel(isoStr, withDate = true) {
+  const t = Date.parse(isoStr);
+  if (!Number.isFinite(t)) return '';
+  const d = new Date(t);
+  const p2 = (n) => String(n).padStart(2, '0');
+  const hm = `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`;
+  return withDate ? `${p2(d.getUTCDate())} ${MONTHS[d.getUTCMonth()]} ${hm} UTC` : `${hm} UTC`;
+}
+
+// The non-dismissible banner a stratum pause adds to `announcements` (§21.9, Q5): while paused,
+// and from 24 h before a planned window's start. It is what an EXEMPT page (the account page,
+// login) shows, since the overlay does not run there. `stratum` is StratumPause.publicStatus().
+function stratumPauseBanners(stratum, nowMs = Date.now()) {
+  if (!stratum) return [];
+  const base = { type: 'maintenance', link: '', link_text: '', dismissible: false };
+  if (stratum.accepting === false) {
+    const back = stratum.resumes_at ? utcLabel(stratum.resumes_at) : '';
+    return [Object.assign({ id: 'stratum-pause', message:
+      `Mining is paused${back ? ` until about ${back}` : ''}. Balances are safe; keep a backup pool configured in your miner.` }, base)];
+  }
+  const w = stratum.planned;
+  if (w && w.start && w.end) {
+    const start = Date.parse(w.start), end = Date.parse(w.end);
+    if (Number.isFinite(start) && Number.isFinite(end) && nowMs < end && start - nowMs <= STRATUM_WINDOW_NOTICE_MS) {
+      const sameDay = w.start.slice(0, 10) === w.end.slice(0, 10);
+      return [Object.assign({ id: `stratum-window-${Math.floor(start / 1000)}`, message:
+        `Mining will pause ${utcLabel(w.start)}–${utcLabel(w.end, !sameDay)} for planned maintenance. ` +
+        'Keep a backup pool configured in your miner.' }, base)];
+    }
+  }
+  return [];
+}
+
 // Normalise a settings value (JSON array OR comma/newline-separated string) into a
 // deduped JSON-array string. `each(s)` validates+transforms one entry (return null to
 // drop it); an empty result falls back to `opts.fallback`. Throws on malformed JSON.
@@ -49,7 +94,9 @@ function parseJsonArray(val, fallback) {
 // The shipped donor-name starter list (design §16) is the DEFAULT of a setting, so it lives
 // with the rest of the name logic and is imported here — never the other way round.
 const { STARTER_BLOCKLIST } = require('./donor-names');
+const NameRule = require('./name-rule');
 const explorers = require('./explorers');
+const { MIN_WITHDRAWAL_FEE } = require('./config');
 
 // Own-property membership tests for the settings schema. `defaults[section]` and
 // `key in defaults[section]` both walk Object.prototype, so `constructor`, `toString`,
@@ -62,6 +109,53 @@ const hasSection = (section) =>
   PoolSettings.defaults[section] !== null && typeof PoolSettings.defaults[section] === 'object';
 const hasKey = (section, key) =>
   Object.prototype.hasOwnProperty.call(PoolSettings.defaults[section], key);
+
+// Keys deleted for a SECURITY reason whose stored rows must never be read back. An ordinary
+// retired key just goes inert (getSection layers every stored row, but no consumer asks for
+// it); these are hidden outright, because "inert" still meant shipping the value to the admin
+// panel, and threat note #22 (design §19.13) says a stored legacy value never reaches a
+// browser. Rows are left in pool_config, not deleted: nothing reads them, and an operator who
+// needs the old verification tag can still recover it from a backup of the DB.
+const RETIRED_KEYS = {
+  incentives: {
+    donor_name_blocklist: 'Donor names are checked automatically since design §19.17.6 (Part C4): add words on Settings → Names',
+  },
+  analytics: {
+    custom_head_html: 'Custom HTML was removed for security (design §19.17 D22)',
+    custom_body_html: 'Custom HTML was removed for security (design §19.17 D22)',
+  },
+};
+const retiredReason = (section, key) =>
+  (Object.prototype.hasOwnProperty.call(RETIRED_KEYS, section) &&
+   Object.prototype.hasOwnProperty.call(RETIRED_KEYS[section], key))
+    ? RETIRED_KEYS[section][key] : null;
+
+// Analytics provider fields — the ONLY values that reach a <script> on a public page
+// (design §19.17 D22: provider-ID loaders only). Each is a strict pattern, never free text.
+// public_html/js/branding.js carries the same patterns and re-checks before loading.
+const ANALYTICS_PATTERNS = {
+  ga_tracking_id: /^G-[A-Z0-9]{1,32}$/,
+  plausible_domain: /^[A-Za-z0-9.-]{1,253}(,[A-Za-z0-9.-]{1,253}){0,9}$/,
+  umami_website_id: /^[A-Za-z0-9-]{1,64}$/,
+  matomo_site_id: /^[0-9]{1,9}$/,
+};
+// An https URL with a host and no credentials. http: is mixed content on an https pool, and
+// javascript:/data: — both of which `new URL()` happily parses — would run as the script.
+const isHttpsScriptUrl = (v) => {
+  if (typeof v !== 'string' || v === '') return false;
+  try {
+    const u = new URL(v);
+    return u.protocol === 'https:' && !!u.hostname && !u.username && !u.password;
+  } catch (e) { return false; }
+};
+// The publish-side twin of the validators: a value stored before they were tightened is
+// published as '' (so its loader stays silent), never passed through.
+const publishAnalytics = (key, v) => {
+  if (v === undefined || v === null || v === '') return '';
+  const s = String(v);
+  if (ANALYTICS_PATTERNS[key]) return ANALYTICS_PATTERNS[key].test(s) ? s : '';
+  return isHttpsScriptUrl(s) ? s : '';
+};
 
 class PoolSettings {
   constructor(db) {
@@ -200,10 +294,14 @@ class PoolSettings {
       umami_src: 'https://cloud.umami.is/script.js',
       matomo_url: '',
       matomo_site_id: '',
-      // custom_head_html: raw HTML injected into <head> on every public page
-      custom_head_html: '',
-      // custom_body_html: raw HTML injected before </body> (chat widgets, etc.)
-      custom_body_html: '',
+      // custom_head_html / custom_body_html (raw HTML whose <script> nodes branding.js
+      // re-created so they ran, on every public page) were REMOVED 2026-10-03 — design
+      // §19.17 D22, Option B, Part C1. Not filtered: deleted. `<img onerror>` runs code, so a
+      // sanitiser would be a second thing to get right forever, and with a sign-in form on
+      // every page there is no page left that may carry operator script. A row already stored
+      // on a deployed pool is inert: RETIRED_KEYS below keeps it out of getSection() — so out
+      // of the admin GET and the public branding payload — and updateSection() refuses a write
+      // to either key with a message that says why.
       cookie_consent_enabled: 'false',
       cookie_consent_text: 'We use analytics cookies to improve your experience.',
     },
@@ -211,7 +309,8 @@ class PoolSettings {
       min_withdrawal: 25.0,
       // Flat withdrawal fee (GRIN) deducted from every payout on every rail — recovers the
       // sender-paid on-chain network fee (~0.023 GRIN typical, weight-based not amount-based).
-      // Must stay < min_withdrawal. 0 = the pool absorbs the network fee.
+      // Must stay < min_withdrawal, and is never below MIN_WITHDRAWAL_FEE (0.04) — there is no
+      // "pool absorbs the fee" setting any more (2026-10-05).
       withdrawal_fee: 0.04,
       // `auto_payout` + `payout_frequency` were REMOVED 2026-09-25 (impl doc D10, like D4): an
       // automatic-payout switch and schedule with a UI, read by nothing. Payouts are
@@ -222,6 +321,10 @@ class PoolSettings {
       confirm_depth_testnet: 100,
       max_pending_withdrawals: 100,
       max_user_pending: 10,
+      // Change splitting (2026-10-05, impl doc §10.18): while the pool wallet holds fewer than this
+      // many spendable outputs, a payout's change is split into 2–3 outputs so the next payouts
+      // find coins of their own instead of "another payment is ahead". 0 disables.
+      payout_target_outputs: 8,
       // `withdrawal_retry_delays` was REMOVED 2026-09-26: a Tor payout is tried once, so the retry
       // ladder it configured is gone (it was also shadowed, audit §J9-8, and had no field). A stored
       // row stays inert, like auto_payout above.
@@ -633,8 +736,9 @@ PASS      any-password-you-choose</code>
       // through donorSettings() in lib/donor-names.js, which bounds every value on read.
       // `donor_censored_display` was REMOVED 2026-09-24 (§18 Part 3): names are pre-moderated,
       // so there is no censored name to display. A row still stored for it is inert.
-      donor_name_blocklist: STARTER_BLOCKLIST.join('\n'),  // FLAG words, one per line: a substring hit on the
-                                                           // normalised name is highlighted in the review queue
+      // `donor_name_blocklist` (the review queue's flag words) was RETIRED by Part C4 (§19.17.6):
+      // donor names are checked by the name rule against `names.blocked_words`, and the
+      // operator's own entries were carried over once (retireDonorNameBlocklist below).
       donor_rank_window_days: 365,           // league window; 0 = lifetime
       donor_loyalty_percent_per_month: 10,   // +% per distinct month with a donation debit
       donor_loyalty_cap: 3,                  // multiplier ceiling (×3)
@@ -677,22 +781,40 @@ PASS      any-password-you-choose</code>
     //   mode   off     = /play/ answers 404 everywhere except its health check
     //          preview = /play/ works by direct URL, the public nav link stays HIDDEN
     //          on      = /play/ is live and the nav shows it (while the games service is up)
-    //   OFF by default — the opposite of `incentives`: the pool is live, and a fresh deploy
-    //   must not announce a feature the operator has not accepted yet. Do not set `on` before
-    //   the chat moderation tools exist (§19.14: moderation ships before anyone can post).
+    //   ON by default since Part C2 (§19.17.2, D30) — and still safe for a live pool, because
+    //   this is only HALF the switch: what the pages see is the EFFECTIVE mode, the lower of
+    //   this value and the games service's own launch state, which starts at `preview` on a
+    //   fresh games DB and moves to `on` only from the games admin's Go live. So installing
+    //   the games never announces them, yet no operator has to find a hidden switch to turn
+    //   them on; `off` here still closes /play/ whatever the launch state says. A SAVED
+    //   Settings → Games row overrides these defaults (the live pool may have saved `off`).
     // Typed values only: chat_enabled is a real boolean, and the reader accepts nothing but
     // true / 'true', so a quoted "false" can never switch chat on (memory
     // project_config_loader_type_traps). The games port and link-secret path are pool.json
     // keys, not settings — see lib/config.js.
     games: {
-      mode: 'off',
-      chat_enabled: false,
+      mode: 'on',
+      chat_enabled: true,
+    },
+    // Names (design §19.17.5, D28): the ONE blocked-word list for every public name a player
+    // types. Empty by default because the code seed (lib/name-rule.js SEED) always applies on
+    // top; these are the operator's ADDITIONS, one per line, stored in the matching form, with an
+    // optional `*` (match anywhere) or `=` (whole name only) prefix. Sent to the games service
+    // in /internal/games/config (nicknames), and read by the pool itself for donor names (C4).
+    names: {
+      blocked_words: '',
     },
     // Site-wide maintenance mode + announcement banners.
     notices: {
       maintenance_mode: 'false',
       maintenance_title: 'Under Maintenance',
       maintenance_message: 'We are performing scheduled maintenance and will be back shortly.',
+      // The overlay shown while STRATUM is paused and the operator's own maintenance_mode is off
+      // (design §21.8, Q4). Text only — these keys cannot flip the pause: its state is the
+      // stratum_control table, never a setting (§21.1). The "back at about … UTC" line is added
+      // by the page from the live resume time, so it is not part of this text.
+      stratum_pause_title: STRATUM_PAUSE_TITLE_DEFAULT,
+      stratum_pause_message: STRATUM_PAUSE_MESSAGE_DEFAULT,
       // banners: JSON array of {id,type,message,link,link_text,dismissible,enabled,start,end}
       // Seeded ON by default: a fresh pool is pre-launch, so every new operator wants the
       // testing-phase notice up from day one. It renders site-wide via branding.js
@@ -908,24 +1030,35 @@ PASS      any-password-you-choose</code>
         }
         return val;
       },
+      // Every value below ends up building a <script> on every public page, so each is a
+      // strict pattern (design §19.17 D22). The script URLs used to accept anything
+      // `new URL()` parses — javascript: and data: included.
       ga_tracking_id: (val) => {
-        if (val && !/^G-[A-Z0-9]+$/.test(val)) throw new Error('invalid GA tracking ID format');
+        if (val && !ANALYTICS_PATTERNS.ga_tracking_id.test(String(val))) throw new Error('invalid GA tracking ID format (G- then letters/digits)');
+        return val;
+      },
+      plausible_domain: (val) => {
+        if (val && !ANALYTICS_PATTERNS.plausible_domain.test(String(val))) throw new Error('plausible_domain must be a domain name (comma-separate several)');
+        return val;
+      },
+      umami_website_id: (val) => {
+        if (val && !ANALYTICS_PATTERNS.umami_website_id.test(String(val))) throw new Error('umami_website_id must be letters, digits and hyphens');
         return val;
       },
       matomo_site_id: (val) => {
-        if (val && !/^\d+$/.test(String(val))) throw new Error('matomo_site_id must be numeric');
+        if (val && !ANALYTICS_PATTERNS.matomo_site_id.test(String(val))) throw new Error('matomo_site_id must be numeric');
         return val;
       },
       plausible_src: (val) => {
-        if (val) { try { new URL(val); } catch (err) { throw new Error('plausible_src must be a valid URL'); } }
+        if (val && !isHttpsScriptUrl(val)) throw new Error('plausible_src must be an https:// URL');
         return val;
       },
       umami_src: (val) => {
-        if (val) { try { new URL(val); } catch (err) { throw new Error('umami_src must be a valid URL'); } }
+        if (val && !isHttpsScriptUrl(val)) throw new Error('umami_src must be an https:// URL');
         return val;
       },
       matomo_url: (val) => {
-        if (val) { try { new URL(val); } catch (err) { throw new Error('matomo_url must be a valid URL'); } }
+        if (val && !isHttpsScriptUrl(val)) throw new Error('matomo_url must be an https:// URL');
         return val;
       },
     },
@@ -946,6 +1079,35 @@ PASS      any-password-you-choose</code>
         throw new Error('chat_enabled must be true or false');
       },
     },
+    names: {
+      // A textarea (one entry per line) or an array. Each entry is folded to the name rule's
+      // matching form (lower-case, separators out, leet digits back) so what is stored is what is
+      // compared, keeping a leading `*` / `=`; duplicates go. An entry that cannot match a name
+      // is REFUSED with its line, not dropped: the operator should learn that `café` does nothing.
+      blocked_words: (val) => {
+        const lines = Array.isArray(val) ? val : String(val == null ? '' : val).split(/\r?\n/);
+        if (lines.length > 2000) throw new Error('blocked_words: too many lines');
+        const out = [];
+        const seen = new Set();
+        lines.forEach((raw, i) => {
+          if (typeof raw !== 'string') throw new Error(`blocked_words line ${i + 1} is not text`);
+          let s = raw.trim();
+          if (s === '') return;
+          let pre = '';
+          if (s[0] === '*' || s[0] === '=') { pre = s[0]; s = s.slice(1).trim(); }
+          const norm = NameRule.matchForm(s);
+          if (!/^[a-z0-9]{1,32}$/.test(norm)) {
+            throw new Error(`blocked_words line ${i + 1} ("${raw.trim().slice(0, 40)}"): use 1–32 letters A–Z / digits (spaces, - _ . & ' are ignored), with an optional leading * or =`);
+          }
+          const entry = pre + norm;
+          if (seen.has(entry)) return;
+          seen.add(entry);
+          out.push(entry);
+        });
+        if (out.length > 500) throw new Error('blocked_words: at most 500 entries');
+        return out.join('\n');
+      },
+    },
     notices: {
       banners: (val) => {
         let arr = val;
@@ -956,6 +1118,18 @@ PASS      any-password-you-choose</code>
         if (!Array.isArray(arr)) throw new Error('banners must be a JSON array');
         return JSON.stringify(arr);
       },
+      // Plain text, rendered escaped on every public page that is not exempt (branding.js
+      // showMaintenance). Bounded here because the payload is memoised and served on every page.
+      stratum_pause_title: (val) => {
+        const s = String(val == null ? '' : val).replace(/\s+/g, ' ').trim();
+        if (s.length > 120) throw new Error('stratum_pause_title: at most 120 characters');
+        return s;
+      },
+      stratum_pause_message: (val) => {
+        const s = String(val == null ? '' : val).trim();
+        if (s.length > 1000) throw new Error('stratum_pause_message: at most 1000 characters');
+        return s;
+      },
     },
     payout: {
       // Number.isFinite, not !isNaN (audit §J9-4): parseFloat('Infinity') and parseFloat('1e400')
@@ -963,9 +1137,11 @@ PASS      any-password-you-choose</code>
       // a `number` row of +Inf that applyToConfig copied into config.min_withdrawal, where every
       // rail's `amount < minW` test refused forever. It survived restart and rendered as an EMPTY
       // field in the panel (JSON.stringify(Infinity) === 'null'), so it did not even look wrong.
+      // At least 1 GRIN (2026-10-05): it must stay above the withdrawal fee, which is now never
+      // below MIN_WITHDRAWAL_FEE — a floor at or under the fee makes every payout at it unpayable.
       min_withdrawal: (val) => {
         const n = parseFloat(val);
-        if (!Number.isFinite(n) || n <= 0) throw new Error('min_withdrawal must be a finite number > 0');
+        if (!Number.isFinite(n) || n < 1) throw new Error('min_withdrawal must be a finite number >= 1 GRIN');
         return n;
       },
       // Blocks a found block must be buried under before its reward is credited and becomes
@@ -993,9 +1169,13 @@ PASS      any-password-you-choose</code>
       // Upper bound is a sanity rail, not a policy: a fat-fingered 40 instead of 0.04 would
       // silently swallow a whole payout. The hard invariant (fee < min_withdrawal) is enforced
       // in validateConfig, which sees BOTH values — a per-field validator only sees its own.
+      // Floor = MIN_WITHDRAWAL_FEE (operator decision 2026-10-05: the fee is always charged; a
+      // promotion runs at pool_fee_percent 0 instead). Number.isFinite, like min_withdrawal.
       withdrawal_fee: (val) => {
         const n = parseFloat(val);
-        if (isNaN(n) || n < 0) throw new Error('withdrawal_fee must be >= 0');
+        if (!Number.isFinite(n) || n < MIN_WITHDRAWAL_FEE) {
+          throw new Error(`withdrawal_fee must be at least ${MIN_WITHDRAWAL_FEE} GRIN`);
+        }
         if (n > 1) throw new Error('withdrawal_fee must be <= 1 GRIN (typical network fee is ~0.023)');
         return n;
       },
@@ -1014,6 +1194,15 @@ PASS      any-password-you-choose</code>
         const n = Number(String(val == null ? '' : val).trim());
         if (String(val == null ? '' : val).trim() === '' || !Number.isInteger(n) || n < 1 || n > 10000) {
           throw new Error('max_pending_withdrawals must be a whole number 1-10000');
+        }
+        return n;
+      },
+      // Same whole-number rule as the caps above. 0 is valid (splitting off); the ceiling keeps a
+      // typo from turning every payout into a 3-way split for the life of the pool.
+      payout_target_outputs: (val) => {
+        const n = Number(String(val == null ? '' : val).trim());
+        if (String(val == null ? '' : val).trim() === '' || !Number.isInteger(n) || n < 0 || n > 50) {
+          throw new Error('payout_target_outputs must be a whole number 0-50');
         }
         return n;
       },
@@ -1192,17 +1381,7 @@ PASS      any-password-you-choose</code>
           }
           return v;
         },
-        // Flag words (design §16.10 / §18.9 type traps): the list is stored as cleaned text — one
-        // trimmed entry per line, empties dropped, size-capped — and is only ever SPLIT by the
-        // matcher, never compiled. Bounded so a pasted novel cannot make every review-queue read
-        // slow. The numbers carry the same bounds donorSettings() re-applies on read.
-        donor_name_blocklist: (val) => {
-          const text = val == null ? '' : String(val);
-          if (text.length > 65536) throw new Error('donor_name_blocklist must be under 64 KB');
-          const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '');
-          if (lines.length > 4000) throw new Error('donor_name_blocklist must have at most 4000 entries');
-          return lines.join('\n');
-        },
+        // The numbers carry the same bounds donorSettings() re-applies on read (§18.9 type traps).
         donor_rank_window_days: intRange('donor_rank_window_days', 0, 3650),
         donor_loyalty_percent_per_month: percent('donor_loyalty_percent_per_month'),
         donor_loyalty_cap: (val) => {
@@ -1290,6 +1469,7 @@ PASS      any-password-you-choose</code>
     const rows = stmt.all(section);
 
     for (const row of rows) {
+      if (retiredReason(section, row.key)) continue; // RETIRED_KEYS: never read back
       if (row.value_type === 'number') {
         defaults[row.key] = parseFloat(row.value);
       } else if (row.value_type === 'boolean') {
@@ -1323,7 +1503,10 @@ PASS      any-password-you-choose</code>
   // Build the curated, public-safe white-label payload served at /api/public/branding.
   // assetUrlFor(type) -> URL string (or '') for an active uploaded asset; injected so this
   // module stays free of the AssetManager dependency.
-  buildPublicConfig(assetUrlFor = () => '') {
+  // `stratum` is StratumPause.publicStatus() (design §21.9) — null/omitted reads as accepting.
+  // It drives the COMPUTED maintenance overlay (§21.8): the pause never writes maintenance_mode,
+  // so a resume can neither switch off an overlay the operator set nor leave one on they didn't.
+  buildPublicConfig(assetUrlFor = () => '', stratum = null) {
     const pool = this.getSection('pool_info');
     const b = this.getSection('branding');
     const seo = this.getSection('seo');
@@ -1338,8 +1521,11 @@ PASS      any-password-you-choose</code>
     // Light obfuscation for contact emails in the public payload (base64, not encryption).
     const b64 = (v) => (v ? Buffer.from(String(v), 'utf8').toString('base64') : '');
 
-    // GA id can live in analytics (new) or seo (legacy leftover) — prefer analytics.
-    const gaId = a.ga_tracking_id || seo.ga_tracking_id || '';
+    // GA id can live in analytics (new) or seo (legacy leftover) — prefer analytics. The seo
+    // copy has no validator at all (no seo key by that name exists any more), so both go
+    // through publishAnalytics(): a value that is not a strict G- id publishes as ''.
+    const gaId = publishAnalytics('ga_tracking_id', a.ga_tracking_id) ||
+      publishAnalytics('ga_tracking_id', seo.ga_tracking_id);
 
     return {
       pool: {
@@ -1411,30 +1597,51 @@ PASS      any-password-you-choose</code>
         structured_data_enabled: seo.structured_data_enabled === true || seo.structured_data_enabled === 'true',
         robots_noindex: seo.robots_noindex === true || seo.robots_noindex === 'true',
       },
+      // Provider-ID loaders only (design §19.17 D22): every field that reaches a <script> is
+      // re-checked against its strict pattern here, and the two custom-HTML keys are gone.
       analytics: {
         provider: a.provider || 'none',
         ga_tracking_id: gaId,
-        plausible_domain: a.plausible_domain || '',
-        plausible_src: a.plausible_src || '',
-        umami_website_id: a.umami_website_id || '',
-        umami_src: a.umami_src || '',
-        matomo_url: a.matomo_url || '',
-        matomo_site_id: a.matomo_site_id || '',
-        custom_head_html: a.custom_head_html || '',
-        custom_body_html: a.custom_body_html || '',
+        plausible_domain: publishAnalytics('plausible_domain', a.plausible_domain),
+        plausible_src: publishAnalytics('plausible_src', a.plausible_src),
+        umami_website_id: publishAnalytics('umami_website_id', a.umami_website_id),
+        umami_src: publishAnalytics('umami_src', a.umami_src),
+        matomo_url: publishAnalytics('matomo_url', a.matomo_url),
+        matomo_site_id: publishAnalytics('matomo_site_id', a.matomo_site_id),
         cookie_consent_enabled: a.cookie_consent_enabled === true || a.cookie_consent_enabled === 'true',
         cookie_consent_text: a.cookie_consent_text || '',
       },
       // Footer link list: content pages that have been authored (content present).
       pages: this.listEnabledPages(),
-      // Maintenance mode (rendered as a full-page overlay by branding.js).
-      maintenance: {
-        enabled: n.maintenance_mode === true || n.maintenance_mode === 'true',
-        title: n.maintenance_title || 'Under Maintenance',
-        message: n.maintenance_message || '',
-      },
-      // Currently-active announcement banners (enabled + within date window).
-      announcements: this.getActiveBanners(),
+      // Maintenance mode (rendered as a full-page overlay by branding.js). `source` says who
+      // turned it on: 'operator' (their own flag — wins, exactly as before §21) or 'stratum'
+      // (computed from a stratum pause; `until` is when it auto-resumes, ISO-8601 Z).
+      maintenance: this._maintenanceBlock(n, stratum),
+      // Live stratum intake, for any page that wants it (§21.9). reason is never in here.
+      stratum: stratum || { accepting: true, paused_since: null, resumes_at: null, planned: null },
+      // Currently-active announcement banners (enabled + within date window), led by the
+      // synthetic non-dismissible stratum-pause banner when one applies (§21.9, Q5).
+      announcements: stratumPauseBanners(stratum).concat(this.getActiveBanners()),
+    };
+  }
+
+  _maintenanceBlock(n, stratum) {
+    const operatorOn = n.maintenance_mode === true || n.maintenance_mode === 'true';
+    if (!operatorOn && stratum && stratum.accepting === false) {
+      return {
+        enabled: true,
+        source: 'stratum',
+        title: String(n.stratum_pause_title || '').trim() || STRATUM_PAUSE_TITLE_DEFAULT,
+        message: String(n.stratum_pause_message || '').trim() || STRATUM_PAUSE_MESSAGE_DEFAULT,
+        until: stratum.resumes_at || null,
+      };
+    }
+    return {
+      enabled: operatorOn,
+      source: operatorOn ? 'operator' : null,
+      title: n.maintenance_title || 'Under Maintenance',
+      message: n.maintenance_message || '',
+      until: null,
     };
   }
 
@@ -1540,6 +1747,8 @@ PASS      any-password-you-choose</code>
       const beforeState = this.getSection(section);
 
       for (const [key, value] of Object.entries(values)) {
+        const retired = retiredReason(section, key);
+        if (retired) throw new Error(`'${key}': ${retired}`);
         if (!hasKey(section, key)) {
           throw new Error(`Unknown key '${key}' in section '${section}'`);
         }
@@ -1672,6 +1881,46 @@ PASS      any-password-you-choose</code>
     return this.getAll();
   }
 
+  // Part C4 (design §19.17.6): `incentives.donor_name_blocklist` is retired into
+  // `names.blocked_words`. The entries the operator added BEYOND the v1 starter list are carried
+  // over ONCE: the old row is deleted in the same transaction as the merge, so its absence is the
+  // "done" marker — a word the operator later deletes from Settings → Names never comes back.
+  // Called at every start (index.js); a pool that never saved the old key has no row → null.
+  // Each entry goes through the names validator on its own; one that can never match a name (an
+  // accent, > 32 characters) is skipped and reported, never fatal to the boot. A carried entry
+  // gets the DEFAULT matching (≤ 4 characters → the whole name or one of its words): v1 matched
+  // substrings only to FLAG a name for a human, and an automatic refusal needs the Scunthorpe
+  // rule — the operator can add a `*` on the Names page.
+  // → null | { carried: [entry], skipped: [line], over_cap: [entry] }
+  retireDonorNameBlocklist() {
+    const row = this.db.prepare(
+      "SELECT value FROM pool_config WHERE section = 'incentives' AND key = 'donor_name_blocklist'"
+    ).get();
+    if (!row) return null;
+    const V = PoolSettings.validators.names.blocked_words;
+    const starter = new Set(STARTER_BLOCKLIST.map((w) => NameRule.matchForm(w)));
+    const current = String(this.getSection('names').blocked_words || '').split('\n').filter((l) => l !== '');
+    const have = new Set(current);
+    const carried = [];
+    const skipped = [];
+    const overCap = [];
+    for (const raw of String(row.value == null ? '' : row.value).split(/\r?\n/)) {
+      const line = raw.trim();
+      if (line === '') continue;
+      let entry;
+      try { entry = V(line); } catch (_) { skipped.push(line.slice(0, 40)); continue; }
+      if (entry === '' || have.has(entry) || starter.has(entry.replace(/^[*=]/, ''))) continue;
+      if (current.length + carried.length >= 500) { overCap.push(entry); continue; }
+      have.add(entry);
+      carried.push(entry);
+    }
+    this.db.transaction(() => {
+      if (carried.length) this.updateSection('names', { blocked_words: current.concat(carried).join('\n') }, null);
+      this.db.prepare("DELETE FROM pool_config WHERE section = 'incentives' AND key = 'donor_name_blocklist'").run();
+    })();
+    return { carried, skipped, over_cap: overCap };
+  }
+
   // Merge DB settings into a config object (called at startup)
   static applyToConfig(config, allSettings) {
     const { pool_info, payout } = allSettings;
@@ -1685,16 +1934,26 @@ PASS      any-password-you-choose</code>
     if (payout.withdrawal_fee !== undefined) {
       config.withdrawal_fee = payout.withdrawal_fee;
     }
+    // Floor first: a row stored before the 0.04 minimum (2026-10-05) may hold 0 or 0.02, and
+    // applyToConfig runs on values the validator never saw. Raised, never rejected.
+    if (!(Number(config.withdrawal_fee) >= MIN_WITHDRAWAL_FEE)) {
+      console.warn(
+        `[settings] withdrawal_fee ${JSON.stringify(config.withdrawal_fee)} is below the ` +
+        `${MIN_WITHDRAWAL_FEE} GRIN minimum — using ${MIN_WITHDRAWAL_FEE}`
+      );
+      config.withdrawal_fee = MIN_WITHDRAWAL_FEE;
+    }
     // Cross-field guard, applied AFTER both are merged. The per-field validator can't see the
     // other value, and lowering min_withdrawal on its own can strand an already-stored fee above
-    // the new floor. A fee >= the floor makes an at-minimum payout net <= 0, so fall back to
-    // absorbing it rather than letting the scheduler reject every threshold withdrawal.
-    if (!(config.withdrawal_fee >= 0) || config.withdrawal_fee >= config.min_withdrawal) {
+    // the new floor. A fee >= the floor makes an at-minimum payout net <= 0. The old fallback was
+    // 0 ("the pool absorbs it"), which no longer exists, so fall back to the minimum fee — the
+    // min_withdrawal validator keeps the floor above it, so that is always payable.
+    if (config.withdrawal_fee >= config.min_withdrawal) {
       console.warn(
         `[settings] withdrawal_fee ${config.withdrawal_fee} is invalid against min_withdrawal ` +
-        `${config.min_withdrawal} — falling back to 0 (pool absorbs the network fee)`
+        `${config.min_withdrawal} — falling back to the ${MIN_WITHDRAWAL_FEE} GRIN minimum`
       );
-      config.withdrawal_fee = 0;
+      config.withdrawal_fee = MIN_WITHDRAWAL_FEE;
     }
     // §J5-9: these were readable and writable in the admin panel and applied by NOBODY, so
     // every consumer kept reading pool.json's default. Coerced defensively — the validator is
@@ -1731,6 +1990,9 @@ PASS      any-password-you-choose</code>
     if (payout.max_user_pending !== undefined) {
       config.max_user_pending = payout.max_user_pending;
     }
+    if (payout.payout_target_outputs !== undefined) {
+      config.payout_target_outputs = payout.payout_target_outputs;
+    }
     if (payout.withdrawal_cooldown_minutes !== undefined) {
       config.withdrawal_cooldown_minutes = payout.withdrawal_cooldown_minutes;
     }
@@ -1766,3 +2028,4 @@ PASS      any-password-you-choose</code>
 }
 
 module.exports = PoolSettings;
+module.exports.stratumPauseBanners = stratumPauseBanners;

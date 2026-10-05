@@ -28,7 +28,9 @@
 const { HttpError } = require('./http');
 const { PoolLinkError, isUnusableClientIp, GRIN_ADDR_RE } = require('./pool-link');
 const { createTokenBuckets, createFailureBackoff } = require('./ratelimit');
-const { maskAddr } = require('./mask');
+const { maskAddr, isGuestId } = require('./mask');
+const { CHAT_MIN_AGE_FLOOR } = require('./sessions');
+const { NO_TICKETS } = require('./tickets');
 const { publicBadges } = require('./badges');
 const { utcDay } = require('./plays');
 
@@ -64,7 +66,7 @@ const LIMITS = Object.freeze({
   addrFail: { capacity: 20, refillPerSec: 1 / 180 },                      // failures per address
 });
 
-function createAuth({ config, db, sessions, settings, poolLink, mode, log, clock = () => Date.now() }) {
+function createAuth({ config, db, sessions, settings, poolLink, mode, log, tickets = NO_TICKETS, clock = () => Date.now() }) {
   const nowS = () => Math.floor(clock() / 1000);
   const prefix = config.net === 'mainnet' ? 'grin1' : 'tgrin1';
   const ipBucket = createTokenBuckets({ ...LIMITS.ipBucket, clock });
@@ -77,6 +79,7 @@ function createAuth({ config, db, sessions, settings, poolLink, mode, log, clock
   const minedStmt = db.raw.prepare('SELECT COALESCE(SUM(seconds), 0) AS s FROM activity_daily WHERE address = ? AND day >= ?');
   const isModStmt = db.raw.prepare('SELECT 1 AS x FROM moderators WHERE address = ?');
   const namesRef = { current: null };
+  const guestsRef = { current: null };
 
   const tooMany = (retryAfter) => new HttpError(429, 'too_many_requests', { retry_after: retryAfter }, { 'Retry-After': String(retryAfter) });
 
@@ -88,7 +91,13 @@ function createAuth({ config, db, sessions, settings, poolLink, mode, log, clock
   }
 
   // ignoreChatSwitch: the same bar with the pool's chat switch treated as on — used by the
-  // nicknames (§19.16), which are shown on the boards whether chat is open or not.
+  // nicknames (§19.17.5), which are shown on the boards whether chat is open or not.
+  //
+  // A GUEST (D26, §19.17.3) is gated by its own switch and the ACCOUNT's age, recomputed here
+  // from guests.created_at (not the session's stored chat_ok_after), so raising
+  // guest_chat_min_age mid-flood closes chat to guest sessions already open. The recent-mining
+  // gate is not applied — a guest can never pass it — and a guest session counts as a password
+  // session for chat_requires_password (it was opened with a password).
   function chatStatus(s, { ignoreChatSwitch = false } = {}) {
     const t = nowS();
     const m = mode.get();
@@ -97,6 +106,12 @@ function createAuth({ config, db, sessions, settings, poolLink, mode, log, clock
     let availableAt = null;
     if (!enabled) reason = 'chat_off';
     else if (s.muted_until !== null && s.muted_until > t) { reason = 'muted'; availableAt = s.muted_until; }
+    else if (s.proof_kind === 'guest') {
+      const okAt = s.guest_created_at + Math.max(CHAT_MIN_AGE_FLOOR, settings.get('guest_chat_min_age'));
+      if (!settings.get('chat_guests_enabled')) reason = 'guests_off';
+      else if (!(okAt <= t)) { reason = 'account_too_new'; availableAt = okAt; }
+      return { enabled, can_post: enabled && reason === null, available_at: availableAt, reason };
+    }
     else if (s.chat_ok_after === null) reason = s.proof_slot === 'anchor' ? 'anchor_proof' : 'password_required';
     // chat_ok_after is fixed at login; the password-only switch is re-read here so an
     // operator who turns it on mid-incident closes chat to IP-proof sessions already open.
@@ -130,17 +145,23 @@ function createAuth({ config, db, sessions, settings, poolLink, mode, log, clock
   }
 
   function me(s) {
+    // A guest's tickets are SET to the daily number at the first /me of a UTC day (§19.17.4).
+    if (isGuestId(s.address)) tickets.topUp(s.address);
     const p = playerStmt.get(s.address) || { plays: 0, points: 0, badges_json: '[]' };
+    const guest = isGuestId(s.address) && guestsRef.current ? guestsRef.current.meFor(s) : null;
     return {
-      address: s.address,                    // the caller's own; this is not a list
+      kind: isGuestId(s.address) ? 'guest' : 'miner',
+      address: s.address,                    // the caller's own (a guest's id); this is not a list
       address_masked: maskAddr(s.address),
+      // The ONLY response that carries a guest's login name (§19.13 #29).
+      ...(guest ? { guest } : {}),
       plays: p.plays,
       points: p.points,
       badges: publicBadges(p.badges_json),   // event badges (§19.9): server-side ids + our labels
       chat: chatStatus(s),
       moderator: modStatus(s),
       sessions: sessions.liveCount(s.address),
-      // §19.16: the caller's own nickname state. Set by app.js once names exists (names
+      // §19.17.5: the caller's own nickname state. Set by app.js once names exists (names
       // needs this module's chatStatus, so it is built after it).
       ...(namesRef.current ? { nickname: namesRef.current.meView(s) } : {}),
     };
@@ -243,6 +264,7 @@ function createAuth({ config, db, sessions, settings, poolLink, mode, log, clock
   return {
     requireSession, me, chatStatus, modStatus, sweep,
     setNames: (n) => { namesRef.current = n; },
+    setGuests: (g) => { guestsRef.current = g; },
     routes: [
       ['POST', '/play/api/login', login, { bodyLimit: LOGIN_BODY_LIMIT }],
       ['POST', '/play/api/logout', logout],

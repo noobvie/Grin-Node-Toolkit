@@ -299,6 +299,8 @@
           'port ' + (d.games_port == null ? 'invalid in pool config' : d.games_port),
           'link secret: ' + (d.link_configured ? 'configured' : 'NOT configured'),
           'last check: ' + checked,
+          // §19.17.2: the games' own switch, read from the health answer (null until healthy).
+          'launch state: ' + (d.launch === 'on' ? 'live' : d.launch === 'preview' ? 'preview' : 'unknown'),
           'public menu sees: ' + (d.public_mode || 'off')
         ];
         if (p.healthy && p.schema != null) parts.splice(1, 0, 'schema v' + p.schema);

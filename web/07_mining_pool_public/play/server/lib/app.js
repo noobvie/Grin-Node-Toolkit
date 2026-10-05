@@ -10,7 +10,7 @@ const { createPoolLink } = require('./pool-link');
 const { createSettings } = require('./settings');
 const { createLedger } = require('./ledger');
 const { createSessions, CHAT_MIN_AGE_FLOOR } = require('./sessions');
-const { createModeCache } = require('./mode');
+const { createModeCache, createLaunchState, withLaunch } = require('./mode');
 const { createActivitySync } = require('./plays');
 const { createAuth } = require('./auth');
 const { loadGames } = require('./registry');
@@ -18,9 +18,11 @@ const { createMatches } = require('./matches');
 const { createAdmin } = require('./admin');
 const { createLeaderboard } = require('./leaderboard');
 const { createEvents } = require('./events');
-const { createChat } = require('./chat');
+const { createChat, GUEST_MIN_INTERVAL_S, GUEST_POSTS_PER_HOUR } = require('./chat');
 const { createModeration } = require('./moderation');
 const { createNames } = require('./names');
+const { createTickets } = require('./tickets');
+const { createGuests } = require('./guests');
 
 // mod_actions is kept a year (§19.10), then dropped by the hourly tier.
 const MOD_ACTIONS_KEEP_S = 365 * 86400;
@@ -34,25 +36,36 @@ function buildApp({ config, db, log, startedAt = Date.now(), clock = () => Date.
   const nowS = () => Math.floor(clock() / 1000);
 
   const link = poolLink || createPoolLink({ config, clock });
-  const modeCache = mode || createModeCache({ poolLink: link, log, clock });
+  // Admin routes (/internal/admin/*) register themselves on the router through admin.add(),
+  // behind the link-secret guard — never through publicRoute() below.
+  const admin = createAdmin({ router, poolLink: link, db, now: nowS });
+  // The pool's mode (cached, §19.2) combined with this DB's launch state (§19.17.2, D30):
+  // every consumer below gets the EFFECTIVE mode — min(pool mode, launch) — through `modeCache`.
+  // The same config fetch carries the pool's half of the name lists (§19.17.5); `names` is
+  // built below, and the cache's first fetch only runs at start(), after this function returns.
+  const poolMode = mode || createModeCache({ poolLink: link, log, clock, onConfig: (c) => names.updatePoolLists(c) });
+  const launch = createLaunchState({ db, admin, poolMode: () => poolMode.get() });
+  const modeCache = withLaunch(poolMode, launch);
   const settings = createSettings({ db, log, clock });
   const ledger = createLedger({ db, now: nowS });
   const sessions = createSessions({ db, settings, now: nowS });
   const activity = createActivitySync({ db, poolLink: link, ledger, settings, log, now: nowS });
-  const auth = createAuth({ config, db, sessions, settings, poolLink: link, mode: modeCache, log, clock });
+  const tickets = createTickets({ db, ledger, settings, now: nowS });
+  const auth = createAuth({ config, db, sessions, settings, poolLink: link, mode: modeCache, log, tickets, clock });
   const games = registry || loadGames({ gamesDir: config.gamesDir, log });
-  // Admin routes (/internal/admin/*) register themselves on the router through admin.add(),
-  // behind the link-secret guard — never through publicRoute() below.
-  const admin = createAdmin({ router, poolLink: link, db, now: nowS });
-  // Approved nicknames (§19.16): every public name below goes through names.label. The word
-  // list is chat's; it is read at queue time, after `chat` exists.
-  const names = createNames({ db, auth, sessions, settings, admin, ledger, config, words: () => chat.words(), now: nowS });
+  // Nicknames (§19.17.5): every public name below goes through names.label. The chat word list
+  // is chat's; it is read at check time, after `chat` exists.
+  const names = createNames({ db, auth, settings, admin, ledger, config, log, words: () => chat.words(), now: nowS });
   auth.setNames(names);
-  const matches = createMatches({ db, registry: games, ledger, settings, sessions, auth, admin, config, log, names, now: nowS });
+  const matches = createMatches({ db, registry: games, ledger, settings, sessions, auth, admin, config, log, names, tickets, now: nowS });
+  // Guest accounts (§19.17.3). Built after names (the sign-up name check) and matches (a
+  // delete cancels the guest's open seeks); /me reads its guest block through auth.setGuests.
+  const guests = createGuests({ config, db, sessions, settings, auth, names, admin, matches, log, clock, now: nowS });
+  auth.setGuests(guests);
   const leaderboard = createLeaderboard({ db, registry: games, sessions, names, now: nowS, clock });
   const events = createEvents({ db, registry: games, ledger, sessions, admin, log, names, now: nowS, clock });
   const chat = createChat({ db, sessions, settings, auth, mode: modeCache, log, names, now: nowS });
-  const moderation = createModeration({ db, chat, sessions, settings, auth, admin, ledger, log, config, names, now: nowS });
+  const moderation = createModeration({ db, chat, sessions, settings, auth, admin, ledger, log, config, names, guests, tickets, now: nowS });
 
   // The live rules a player can see (§19.15 Part 6 #10): how plays are earned and what chat
   // asks for. Settings only — nothing per player, nothing the operator would not publish.
@@ -60,6 +73,10 @@ function buildApp({ config, db, log, startedAt = Date.now(), clock = () => Date.
     const v = settings.all();
     return {
       ok: true,
+      // The EFFECTIVE mode (§19.17.2): 'preview' or 'on' — 'off' never gets here (publicRoute
+      // 404s). The /play/ shell reads it to leave the pool's chat-bubble loader its preview hint
+      // (§19.17.7); the same fact the page already shows by answering at all.
+      mode: modeCache.get().mode,
       plays: { minutes_per_play: v.minutes_per_play, daily_cap: v.plays_daily_cap, balance_cap: v.plays_balance_cap, bot_play_cost: v.bot_play_cost, pvp_play_cost: v.pvp_play_cost },
       pvp: { pair_rated_daily: v.pair_rated_daily, active_max: v.pvp_active_max, open_max: v.pvp_open_max },
       points: { daily_cap: v.points_daily_cap },
@@ -70,12 +87,22 @@ function buildApp({ config, db, log, startedAt = Date.now(), clock = () => Date.
         requires_password: v.chat_requires_password, hold_links: v.chat_hold_links,
         slow_seconds: v.chat_slow_seconds, posts_per_hour: v.chat_posts_per_hour, retention_days: v.chat_retention_days,
       },
+      // §19.17.3/§19.17.4: what a guest gets and waits for — the "How tickets are earned" fold
+      // (C6) explains miner vs guest from these, never from numbers baked into the page.
+      guests: {
+        signup_enabled: v.guest_signup_enabled, daily_tickets: v.guest_daily_plays,
+        chat_enabled: v.chat_guests_enabled, chat_min_age_s: Math.max(CHAT_MIN_AGE_FLOOR, v.guest_chat_min_age),
+        chat_min_interval_s: GUEST_MIN_INTERVAL_S, chat_posts_per_hour: Math.min(GUEST_POSTS_PER_HOUR, v.chat_posts_per_hour),
+        idle_days: v.guest_idle_days,
+      },
     };
   }
 
   // Every PUBLIC route except health goes through this (§19.5, D12):
-  //   - mode 'off' → 404, as if /play/ did not exist. Nothing public is served on a guess:
-  //     until the pool has answered once, and after 10 min without an answer, the mode is off.
+  //   - EFFECTIVE mode 'off' → 404, as if /play/ did not exist. Nothing public is served on a
+  //     guess: until the pool has answered once, and after 10 min without an answer, the pool
+  //     mode is off. The launch state can only lower the pool's mode (§19.17.2), never raise
+  //     it, so 'off' here is exactly the pool's 'off' — preview vs on changes the nav, not this.
   //   - a write must be same-origin (CSRF layer 3; layers 1–2 are SameSite=Strict and the JSON
   //     content type, enforced by the cookie and http.js).
   // Admin routes (/internal/admin/*, Part 7+) do NOT use this: they are gated by the link
@@ -87,20 +114,25 @@ function buildApp({ config, db, log, startedAt = Date.now(), clock = () => Date.
       return handler(ctx);
     }, opts);
   }
-  for (const [method, pattern, handler, opts] of [...auth.routes, ...matches.routes, ...leaderboard.routes, ...events.routes, ...chat.routes, ...moderation.routes, ...names.routes, ['GET', '/play/api/rules', rules]]) {
+  for (const [method, pattern, handler, opts] of [...auth.routes, ...guests.routes, ...matches.routes, ...leaderboard.routes, ...events.routes, ...chat.routes, ...moderation.routes, ...names.routes, ['GET', '/play/api/rules', rules]]) {
     publicRoute(method, pattern, handler, opts);
   }
 
-  // The pool's probe target (§19.3): { ok, net, schema, uptime_s } — no secrets, no counts.
-  // It reads the schema version live, so a DB that stopped answering reports unhealthy
-  // (503) instead of a cached "fine". It stays up whatever the games mode is (§19.3, D12).
+  // The pool's probe target (§19.3): { ok, net, schema, launch, uptime_s } — no secrets, no
+  // counts. It reads the schema version and the launch state live, so a DB that stopped
+  // answering reports unhealthy (503) instead of a cached "fine". It stays up whatever the
+  // games mode is (§19.3, D12). `launch` is how the pool learns the launch state: it combines
+  // it with its own mode for the branding payload (§19.17.2 — no second probe). Disclosure,
+  // accepted there: health is public through nginx, and /play/ already answers in preview.
   router.add('GET', '/play/api/health', () => {
     let schema;
-    try { schema = db.schemaVersion(); } catch { throw new HttpError(503, 'db_unavailable'); }
+    let launchState;
+    try { schema = db.schemaVersion(); launchState = launch.get(); } catch { throw new HttpError(503, 'db_unavailable'); }
     return {
       ok: true,
       net: config.net,
       schema,
+      launch: launchState,
       uptime_s: Math.max(0, Math.floor((clock() - startedAt) / 1000)),
     };
   });
@@ -122,7 +154,11 @@ function buildApp({ config, db, log, startedAt = Date.now(), clock = () => Date.
       const n = sessions.purge();
       if (n) log.info(`[sessions] purged ${n} expired/revoked session(s)`);
     }, { tier: '1h' });
-    maintenance.register('limiter_sweep', () => { auth.sweep(); }, { tier: '1h' });
+    maintenance.register('limiter_sweep', () => { auth.sweep(); guests.sweep(); }, { tier: '1h' });
+    maintenance.register('guest_idle', () => {
+      const r = guests.idleSweep();
+      if (r.deleted) log.info(`[guests] idle: deleted ${r.deleted} guest account(s) with no login for ${settings.get('guest_idle_days')} days`);
+    }, { tier: '1h' });
     maintenance.register('ledger_verify', () => {
       const drift = ledger.verify();
       // Logged, never fixed (§19.6): a "repair" would hide the bug that caused it.
@@ -166,7 +202,7 @@ function buildApp({ config, db, log, startedAt = Date.now(), clock = () => Date.
     registerJobs,
     start: () => modeCache.start(),
     stop: () => modeCache.stop(),
-    services: { poolLink: link, mode: modeCache, settings, ledger, sessions, activity, auth, games, matches, admin, leaderboard, events, chat, moderation, names },
+    services: { poolLink: link, mode: modeCache, launch, settings, ledger, sessions, activity, auth, games, matches, admin, leaderboard, events, chat, moderation, names, tickets, guests },
   };
 }
 

@@ -33,10 +33,12 @@
 //     POST /play/api/mod/messages/:id/delete  {reason?}
 //     POST /play/api/mod/messages/:id/approve {}
 //     POST /play/api/mod/messages/:id/mute    {minutes ≤ 1440}   mutes the message's author
+//     POST /play/api/mod/messages/:id/remove-name {reason?}      removes the author's nickname
+//                                                  (§19.17.5, D21 amended: remove only)
 //
-//   A moderator cannot touch an operator message or another moderator (their messages or
-//   their mute), cannot approve or mute themselves, cannot shorten a longer mute, and has no
-//   ban, purge, word list, settings, events or points. Every action is a mod_actions row
+//   A moderator cannot touch an operator message or another moderator (their messages, their
+//   mute, their nickname), cannot approve, mute or un-name themselves, cannot shorten a longer
+//   mute, and has no ban, purge, word list, settings, events, points, name ban or nickname block. Every action is a mod_actions row
 //   with admin_user = `mod:<full address>`, so the operator's mod log says exactly who.
 //   Removing a moderator takes effect on their next request.
 //
@@ -45,13 +47,15 @@
 
 const { HttpError, parseIntStrict } = require('./http');
 const { GRIN_ADDR_RE } = require('./pool-link');
-const { maskAddr } = require('./mask');
+const { maskAddr, isGuestId, playerParam } = require('./mask');
 const { LedgerError } = require('./ledger');
 const { createTokenBuckets } = require('./ratelimit');
 const { SPEC } = require('./settings');
 const { CHAT_MIN_AGE_FLOOR } = require('./sessions');
-const { normaliseBody, normaliseWord, MIN_INTERVAL_S, IP_PER_HOUR, WORDS_MAX, PAGE } = require('./chat');
+const { normaliseBody, normaliseWord, MIN_INTERVAL_S, IP_PER_HOUR, WORDS_MAX, PAGE, GUEST_MIN_INTERVAL_S, GUEST_POSTS_PER_HOUR } = require('./chat');
+const { POW_BITS_FLOOR } = require('./guests');
 const { publicBadges } = require('./badges');
+const { NO_TICKETS } = require('./tickets');
 
 const DAY = 86400;
 const FOREVER = 253402300799;             // §19.4: banned_until for "forever"
@@ -68,7 +72,7 @@ const MOD_ACTIONS_PER_HOUR = 120;
 const MOD_LOG_MAX = 200;
 const LIST_MAX = 200;
 
-function createModeration({ db, chat, sessions, settings, auth, admin, ledger, log, config, names = null, now = () => Math.floor(Date.now() / 1000) }) {
+function createModeration({ db, chat, sessions, settings, auth, admin, ledger, log, config, names = null, guests = null, tickets = NO_TICKETS, now = () => Math.floor(Date.now() / 1000) }) {
   const raw = db.raw;
   const prefix = config.net === 'mainnet' ? 'grin1' : 'tgrin1';
   const COLS = 'id, room, role, address, admin_user, body, state, hold_reason, created_at, deleted_by, reason';
@@ -80,7 +84,7 @@ function createModeration({ db, chat, sessions, settings, auth, admin, ledger, l
     openReports: raw.prepare(
       'SELECT message_id, COUNT(*) AS n, MIN(created_at) AS first_at FROM chat_reports WHERE resolved_at IS NULL GROUP BY message_id ORDER BY first_at ASC LIMIT ?'),
     reportsOf: raw.prepare('SELECT reporter, reason, created_at FROM chat_reports WHERE message_id = ? AND resolved_at IS NULL ORDER BY id ASC LIMIT 20'),
-    player: raw.prepare('SELECT address, first_seen, last_seen, plays, points, banned_until, muted_until, badges_json FROM players WHERE address = ?'),
+    player: raw.prepare('SELECT address, first_seen, last_seen, plays, points, banned_until, muted_until, badges_json, deleted_at FROM players WHERE address = ?'),
     setMute: raw.prepare('UPDATE players SET muted_until = ? WHERE address = ?'),
     setBan: raw.prepare('UPDATE players SET banned_until = ? WHERE address = ?'),
     muted: raw.prepare('SELECT address, muted_until AS until FROM players WHERE muted_until > ? ORDER BY muted_until DESC LIMIT ?'),
@@ -100,15 +104,32 @@ function createModeration({ db, chat, sessions, settings, auth, admin, ledger, l
     matches1: raw.prepare('SELECT id, game_id, mode, state, seat1, seat2, result, reason, rated, ply, created_at, finished_at FROM matches WHERE seat1 = ? ORDER BY id DESC LIMIT ?'),
     matches2: raw.prepare('SELECT id, game_id, mode, state, seat1, seat2, result, reason, rated, ply, created_at, finished_at FROM matches WHERE seat2 = ? ORDER BY id DESC LIMIT ?'),
     activity: raw.prepare('SELECT day, seconds, plays_awarded FROM activity_daily WHERE address = ? AND day >= ? ORDER BY day DESC'),
+    kindOf: raw.prepare('SELECT kind FROM players WHERE address = ?'),
     insertModAction: raw.prepare('INSERT INTO mod_actions (admin_user, action, target, details_json, created_at) VALUES (?, ?, ?, ?, ?)'),
   };
 
   const bad = (field) => new HttpError(400, 'bad_request', { field });
   const { onlyKeys, messageId } = chat;
 
+  // A MINER address only — the moderator routes use this (D21/D32: a guest can never be
+  // appointed; the explicit isGuestId test says so rather than leaning on the address regex).
   function addressParam(ctx) {
     const a = ctx.params.addr;
-    if (typeof a !== 'string' || !GRIN_ADDR_RE.test(a) || !a.startsWith(prefix)) throw bad('address');
+    if (typeof a !== 'string' || isGuestId(a) || !GRIN_ADDR_RE.test(a) || !a.startsWith(prefix)) throw bad('address');
+    return a;
+  }
+  // Any player: a miner address, or a guest as 'g.<16>' (mask.js playerParam). Every player
+  // route but the moderator ones — the operator mutes, bans, purges and adjusts guests too.
+  // A guest id that names no guest is a 404: a miner address may be acted on before it was ever
+  // seen (ensurePlayer creates its row), but a guest exists only by signing up — an admin write
+  // must never create a players row for an id nobody holds.
+  function playerParamOf(ctx) {
+    const a = playerParam(ctx.params.addr, prefix);
+    if (a === null) throw bad('address');
+    if (isGuestId(a)) {
+      const p = stmts.kindOf.get(a);
+      if (!p || p.kind !== 'guest') throw new HttpError(404, 'not_found');
+    }
     return a;
   }
 
@@ -146,8 +167,8 @@ function createModeration({ db, chat, sessions, settings, auth, admin, ledger, l
     if (limit === null) throw bad('limit');
     let rows;
     if (q.get('address') !== null) {
-      const a = q.get('address');
-      if (!GRIN_ADDR_RE.test(a) || !a.startsWith(prefix)) throw bad('address');
+      const a = playerParam(q.get('address'), prefix);
+      if (a === null) throw bad('address');
       rows = stmts.listAddr.all(a, limit).filter((r) => r.id < before && (st === null || r.state === st));
     } else if (st !== null) {
       rows = stmts.listState.all(st, before, limit);
@@ -259,6 +280,9 @@ function createModeration({ db, chat, sessions, settings, auth, admin, ledger, l
     const mod = stmts.mods.all().find((r) => r.address === a) || null;
     return {
       address: a,
+      kind: isGuestId(a) ? 'guest' : 'miner',
+      // A guest's account dates — never its login name (§19.13 #29).
+      ...(isGuestId(a) ? { guest: guests ? guests.adminFor(a) : null, deleted_at: p ? p.deleted_at : null } : {}),
       known: !!p,
       player: p ? {
         first_seen: p.first_seen, last_seen: p.last_seen, plays: p.plays, points: p.points,
@@ -268,7 +292,7 @@ function createModeration({ db, chat, sessions, settings, auth, admin, ledger, l
       } : null,
       moderator: mod,
       nickname: names ? names.adminFor(a) : null,   // §19.16: live + pending, full rows (operator only)
-      sessions: { ip: sessionsByKind.ip || 0, password: sessionsByKind.password || 0 },
+      sessions: { ip: sessionsByKind.ip || 0, password: sessionsByKind.password || 0, guest: sessionsByKind.guest || 0 },
       activity: stmts.activity.all(a, new Date((t - 13 * DAY) * 1000).toISOString().slice(0, 10))
         .map((r) => ({ day: r.day, minutes: Math.floor(r.seconds / 60), plays_awarded: r.plays_awarded })),
       matches,
@@ -288,11 +312,11 @@ function createModeration({ db, chat, sessions, settings, auth, admin, ledger, l
   }
 
   function adminPlayer(ctx) {
-    return { ok: true, ...playerView(addressParam(ctx)) };
+    return { ok: true, ...playerView(playerParamOf(ctx)) };
   }
 
   function adminMute(ctx) {
-    const a = addressParam(ctx);
+    const a = playerParamOf(ctx);
     const b = onlyKeys(ctx.body, ['minutes', 'reason']);
     const minutes = intIn(b.minutes, 1, OPERATOR_MUTE_MAX_MIN, 'minutes');
     const reason = reasonOf(b);
@@ -306,7 +330,7 @@ function createModeration({ db, chat, sessions, settings, auth, admin, ledger, l
   }
 
   function adminUnmute(ctx) {
-    const a = addressParam(ctx);
+    const a = playerParamOf(ctx);
     onlyKeys(ctx.body, []);
     db.transaction(() => {
       if (stmts.player.get(a)) stmts.setMute.run(null, a);
@@ -318,7 +342,7 @@ function createModeration({ db, chat, sessions, settings, auth, admin, ledger, l
   // A ban revokes every session of the address at once (§19.5, closing §19.15 Part 4 #14),
   // blocks login, games and chat, and ends a moderator appointment and a nickname (§19.16).
   function adminBan(ctx) {
-    const a = addressParam(ctx);
+    const a = playerParamOf(ctx);
     const b = onlyKeys(ctx.body, ['days', 'forever', 'reason']);
     if ((b.days === undefined) === (b.forever === undefined)) throw bad('days');
     let until;
@@ -334,8 +358,8 @@ function createModeration({ db, chat, sessions, settings, auth, admin, ledger, l
       stmts.setBan.run(until, a);
       const revoked = sessions.revokeAll(a);
       const wasMod = stmts.delMod.run(a).changes === 1;
-      // §19.16: a ban also ends the nickname (and refuses a pending one). An unban does not
-      // restore it — the player submits again and it is reviewed again.
+      // A ban also ends the nickname (§19.16, kept by §19.17.5). An unban does not restore it —
+      // the player sets one again, through the same automatic check.
       const nick = names ? names.removeLiveOf(a, ctx.admin.user, 'ban') : null;
       admin.audit(ctx, 'ban', a, { until, forever: until === FOREVER, reason, sessions_revoked: revoked, moderator_removed: wasMod, nickname_removed: nick ? nick.name : null });
       return { revoked, wasMod };
@@ -345,7 +369,7 @@ function createModeration({ db, chat, sessions, settings, auth, admin, ledger, l
   }
 
   function adminUnban(ctx) {
-    const a = addressParam(ctx);
+    const a = playerParamOf(ctx);
     onlyKeys(ctx.body, []);
     db.transaction(() => {
       if (stmts.player.get(a)) stmts.setBan.run(null, a);
@@ -355,7 +379,7 @@ function createModeration({ db, chat, sessions, settings, auth, admin, ledger, l
   }
 
   function adminPurge(ctx) {
-    const a = addressParam(ctx);
+    const a = playerParamOf(ctx);
     const b = onlyKeys(ctx.body, ['days', 'reason']);
     const days = intIn(b.days, 1, PURGE_MAX_DAYS, 'days');
     const reason = reasonOf(b) || 'purge';
@@ -370,7 +394,7 @@ function createModeration({ db, chat, sessions, settings, auth, admin, ledger, l
   }
 
   function adminAdjust(ctx) {
-    const a = addressParam(ctx);
+    const a = playerParamOf(ctx);
     const b = onlyKeys(ctx.body, ['kind', 'delta', 'note']);
     if (b.kind !== 'plays' && b.kind !== 'points') throw bad('kind');
     const delta = intIn(b.delta, -ADJUST_MAX, ADJUST_MAX, 'delta');
@@ -382,6 +406,9 @@ function createModeration({ db, chat, sessions, settings, auth, admin, ledger, l
     }
     try {
       db.transaction(() => {
+        // A guest's day starts with its daily tickets (§19.17.4): apply that SET first, or a
+        // grant made before the guest's first /me of the day is wiped by the top-up that follows.
+        if (b.kind === 'plays') tickets.topUp(a, now());
         const r = ledger.post({ address: a, kind: b.kind, delta, reason: 'admin_adjust', ref: null });
         admin.audit(ctx, 'adjust', a, { kind: b.kind, delta, balance: r.balance, note });
       });
@@ -437,6 +464,10 @@ function createModeration({ db, chat, sessions, settings, auth, admin, ledger, l
     chat_ip_posts_per_hour: IP_PER_HOUR,
     mod_mute_max_minutes: MOD_MUTE_MAX_MIN,
     operator_mute_max_minutes: OPERATOR_MUTE_MAX_MIN,
+    // §19.17.3 guests (Part C5)
+    signup_pow_bits: POW_BITS_FLOOR,
+    guest_chat_min_age: CHAT_MIN_AGE_FLOOR,
+    guest_chat_pace: { min_interval_s: GUEST_MIN_INTERVAL_S, posts_per_hour: GUEST_POSTS_PER_HOUR },
   });
 
   function adminSettings() {
@@ -616,12 +647,36 @@ function createModeration({ db, chat, sessions, settings, auth, admin, ledger, l
     return { ok: true, muted_until: until };
   }
 
+  // Removes the nickname of a message's AUTHOR (§19.17.5). Keyed by a message, like mute, so a
+  // moderator never needs a full address. Remove only: a name ban and a nickname block are the
+  // operator's. Refused on the operator, another moderator, and the moderator's own name (they
+  // use the player's own remove for that).
+  function modRemoveName(ctx) {
+    const s = requireModerator(ctx);
+    const id = messageId(ctx);
+    const reason = reasonOf(onlyKeys(ctx.body, ['reason']));
+    if (!names || typeof names.modRemove !== 'function') throw new HttpError(404, 'not_found');
+    modTake(s);
+    const removed = db.transaction(() => {
+      const m = chat.byId(id);
+      if (!m) throw new HttpError(404, 'not_found');
+      if (m.role === 'operator' || m.address === null) throw new HttpError(403, 'mod_protected', { reason: 'operator_message' });
+      if (m.address === s.address) throw new HttpError(403, 'mod_protected', { reason: 'own_message' });
+      if (chat.moderators().has(m.address)) throw new HttpError(403, 'mod_protected', { reason: 'moderator_message' });
+      const n = names.modRemove(m.address, `mod:${s.address}`, reason);
+      if (n) auditMod(s, 'nickname_remove', m.address, { name: n.name, reason, message: id });
+      return n;
+    });
+    return { ok: true, changed: removed !== null };
+  }
+
   return {
     routes: [
       ['GET', '/play/api/mod/queue', modQueue],
       ['POST', '/play/api/mod/messages/:id/delete', modDelete, { bodyLimit: 1024 }],
       ['POST', '/play/api/mod/messages/:id/approve', modApprove, { bodyLimit: 256 }],
       ['POST', '/play/api/mod/messages/:id/mute', modMute, { bodyLimit: 1024 }],
+      ['POST', '/play/api/mod/messages/:id/remove-name', modRemoveName, { bodyLimit: 1024 }],
     ],
     FLOORS,
   };

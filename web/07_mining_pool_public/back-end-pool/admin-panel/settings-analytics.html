@@ -29,14 +29,14 @@
               <option value="umami">Umami (privacy-friendly)</option>
               <option value="matomo">Matomo (self-hosted)</option>
             </select>
-            <div class="helper-text">Self-hosted Plausible/Umami/Matomo on a custom domain may require adding that domain to the nginx Content-Security-Policy.</div>
+            <div class="helper-text">Script URLs must be <code>https://</code>. Self-hosted Plausible/Umami/Matomo on a custom domain may require adding that domain to the nginx Content-Security-Policy.</div>
           </div>
 
           <div class="provider-fields" data-provider="ga4">
             <div class="form-group">
               <label for="ga_tracking_id">GA4 Measurement ID</label>
               <input type="text" id="ga_tracking_id" name="ga_tracking_id" class="settings-allow-empty" placeholder="G-XXXXXXXXXX">
-              <div class="helper-text">Format: G-XXXXXXXXXX</div>
+              <div class="helper-text">Format: G-XXXXXXXXXX — e.g. <code>G-GMYJ4PVG4L</code> (grinium.com's own property; use yours on any other site)</div>
             </div>
           </div>
 
@@ -92,19 +92,12 @@
           </div>
         </div>
 
+        <!-- The custom <head>/<body> HTML fields were deleted (design §19.17 D22, Option B):
+             a sign-in form is on every public page, so no page may carry operator script.
+             A value saved earlier is ignored — never sent to the site or back to this page. -->
         <div class="form-section">
-          <h3 class="section-title" data-sec="Custom head HTML">Custom &lt;head&gt; HTML (Advanced)</h3>
-          <div class="form-group">
-            <label for="custom_head_html">Raw HTML injected into every page's &lt;head&gt;</label>
-            <textarea id="custom_head_html" name="custom_head_html" placeholder="<!-- verification tags, custom pixels, etc. -->" rows="5"></textarea>
-            <div class="helper-text">Use for site-verification meta tags or pixels. External scripts must be permitted by the page CSP.</div>
-          </div>
-
-          <div class="form-group">
-            <label for="custom_body_html">Raw HTML injected before &lt;/body&gt;</label>
-            <textarea id="custom_body_html" name="custom_body_html" placeholder="<!-- chat widget, live-support snippet, etc. -->" rows="4"></textarea>
-            <div class="helper-text">For chat widgets and end-of-body scripts.</div>
-          </div>
+          <h3 class="section-title" data-sec="Custom HTML">Custom HTML</h3>
+          <p class="helper-text" id="custom-html-removed">Custom HTML was removed for security — design §19.17 D22.</p>
         </div>
 
         <div class="form-actions">

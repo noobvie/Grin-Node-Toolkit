@@ -845,9 +845,17 @@ async function submitRegion() {
           '⚠ The stratum listener for this region did NOT bind: ' + r.stratum_bind_error +
           ' — miners in this region cannot connect until it does. Restart the pool backend after freeing the port.';
       }
+      // Stratum is paused (design §21.4): nothing was bound, on purpose. "No error" must not
+      // read as "listener live" — it opens when stratum resumes.
+      if (r.stratum_bind_deferred) {
+        warn = (warn ? warn + ' ' : '') + 'ℹ ' + (r.stratum_bind_note ||
+          'Stratum is paused — this region\'s listener opens when stratum resumes.');
+      }
       const bindFailed = !!r.stratum_bind_error;
       flash(bindFailed
         ? 'Region saved and peer written — but the region stratum listener did not bind (see below).'
+        : r.stratum_bind_deferred
+        ? 'Region saved and gateway paired — stratum is paused, so its listener opens when stratum resumes.'
         : (r.sync_warning
           ? 'Region saved and peer written — but the running tunnel did not pick it up (see below).'
           : 'Region saved and gateway paired — listener live, no restart needed.'),

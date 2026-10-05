@@ -210,6 +210,10 @@ source "$SCRIPT_DIR/lib/grin_node_control.sh"
 # Source-guarded, no side effects; provides gnk_autostart_enable / gnk_watchdog_install
 # used by Super Auto's post-build hardening.
 source "$SCRIPT_DIR/lib/grin_node_keepalive.sh"
+# Node event recorder (086 design §8): read-only down/up ledger + evidence at
+# the moment of failure. Source-guarded, no side effects; provides gne_install,
+# used by Super Auto's hardening and the post-build offer (_offer_event_recorder).
+source "$SCRIPT_DIR/lib/grin_node_events.sh"
 # Persistent API-secret vault (/opt/grin/keys) + consumer self-heal. Provides
 # grin_secret_vault_ensure (Step 8b) and grin_secrets_sync_all (post-build), so a
 # rebuild keeps the node's api/foreign secrets instead of rotating them and
@@ -234,8 +238,10 @@ RESTRICTED_NETWORK=""  # set by check_grin_running if one slot is already occupi
 STREAM_MODE=false      # true = on-the-fly pipe extraction (no local .tar.gz saved)
 SLOW_SYNC_MODE=false   # true = no archive; start node and sync from network peers (grin default)
 SUPER_AUTO=false       # true = one-hit auto path: wipe & rebuild BOTH nodes (pruned, streamed)
-                       #        + reboot autostart + sync watchdog + log rotation. Suppresses
-                       #        the per-step prompts (archive mode / transfer mode / zone).
+                       #        + reboot autostart + sync watchdog + event recorder + log
+                       #        rotation. Suppresses the per-step prompts (archive mode /
+                       #        transfer mode / zone).
+RECORDER_OFFERED=false # the custom wizard offers the event recorder once per run, not per node
 READY_SOURCES=()       # ordered list of base URLs that passed sync-status check
 SELECTED_ZONE=""       # zone chosen at Step 9 (america|asia|europe|africa|all)
 
@@ -298,6 +304,10 @@ step_header() { echo ""; echo -e "${BOLD}${DIM}━━━ $* ━━━━━━�
 # =============================================================================
 stop_grin_gracefully() {
     local stop_timeout=300
+
+    # Planned-stop markers for the node event recorder, BEFORE any signal: the
+    # SIGTERMs below bypass gnc_kill_*, and a marker must name the live pid.
+    gnc_mark_all_planned_stops "stop all nodes"
 
     # Step 1+2: graceful stop for each running node, identified by P2P port
     for port in 3414 13414; do
@@ -395,6 +405,10 @@ stop_grin_one() {
         warn "No process found on port $target_port."
         return
     fi
+
+    # Planned-stop marker BEFORE the signal (this SIGTERM bypasses gnc_kill_*).
+    local _sess
+    if _sess=$(gnc_session_of_pid "$pid"); then gnc_mark_planned_stop "$_sess" "stop node"; fi
 
     info "PID $pid on port $target_port — sending SIGTERM..."
     kill -TERM "$pid" 2>/dev/null || true
@@ -945,7 +959,8 @@ _start_installed_node() {
 # Opinionated, minimal-interaction path offered from every Step-1 branch:
 #   • both networks, PRUNED only     • on-the-fly streamed chain data
 #   • kills every running node and deletes existing binaries + chain_data first
-#   • after each build: @reboot autostart + node-sync watchdog + log rotation
+#   • after each build: @reboot autostart + node-sync watchdog + node event
+#     recorder + log rotation
 # The ONLY interaction is a soft 20 GB free-space gate (warn + FORCE override)
 # and a single state-aware confirmation. Reuses the existing K-path helpers
 # (stop_grin_gracefully / _remove_instance_dirs) — no duplicated kill/wipe logic.
@@ -993,15 +1008,55 @@ EOF
     log "[SUPER AUTO] logrotate → $conf for $logpath"
 }
 
-# Post-build hardening bundle for one network (autostart + watchdog + logrotate).
-# Runs from setup_one_node AFTER save_instance_location so gnk_autostart_enable
-# can resolve the node dir from INSTANCES_CONF. All three steps are idempotent.
+# Post-build hardening bundle for one network (autostart + watchdog + event
+# recorder + logrotate). Runs from setup_one_node AFTER save_instance_location so
+# gnk_autostart_enable can resolve the node dir from INSTANCES_CONF. Every step
+# is idempotent; the recorder is one install for both nets, so the second call
+# only refreshes it (its check creates the second net's dir on its own).
+# The watchdog goes BEFORE the recorder: the recorder install is what makes the
+# watchdog's capture hook live, and both are regenerated from this checkout.
 _super_auto_harden() {
     local network="$1" node_dir="$2"
     step_header "Super Auto: Post-build hardening (${network})"
     gnk_autostart_enable "$network" || warn "Autostart enable failed for ${network} — set it up later via Script 03 → G."
     gnk_watchdog_install            || warn "Watchdog install failed — set it up later via Script 07 health menu."
+    gne_install                     || warn "Event recorder install failed — set it up later via hub 08 → Diagnostics → Node event recorder."
     _install_grin_logrotate "$network" "$node_dir" || warn "Log rotation setup failed for ${network}."
+}
+
+# _offer_event_recorder — the custom wizard's post-build offer (default YES),
+# once per run. Super Auto installs it without asking (_super_auto_harden).
+# The recorder is READ-ONLY: it never restarts a node, so it does not compete
+# with the sync watchdog — it records what happened and keeps the evidence.
+_offer_event_recorder() {
+    [[ "$RECORDER_OFFERED" == "true" ]] && return 0
+    RECORDER_OFFERED=true
+    declare -F gne_install >/dev/null 2>&1 || return 0
+    local _ans=""
+    step_header "Step 14c: Node event recorder"
+    echo -e "  Records every down/up of this node (crash, hang, failed start, chain_data"
+    echo -e "  corruption), keeps planned stops out of the count, and saves the node's"
+    echo -e "  console and logs at the moment of failure. ${DIM}Read-only — it never restarts a node.${RESET}"
+    echo -e "  ${DIM}Timer every 30 s · view it in hub 08 → Diagnostics → Node event recorder.${RESET}"
+    echo ""
+    if [[ -x "$GNE_BIN" ]]; then
+        echo -ne "  ${BOLD}The recorder is installed — refresh it to this toolkit version? [Y/n]: ${RESET}"
+    else
+        echo -ne "  ${BOLD}Install the node event recorder? [Y/n]: ${RESET}"
+    fi
+    # EOF declines (project_prompt_default_catchall); only an explicit n is no.
+    read -r _ans || _ans="n"
+    if [[ "${_ans,,}" == "n" || "${_ans,,}" == "no" ]]; then
+        info "Skipped — install it later from hub 08 → Diagnostics → Node event recorder."
+        log "[STEP 14c] event recorder declined"
+        return 0
+    fi
+    if gne_install; then
+        log "[STEP 14c] event recorder installed/refreshed"
+    else
+        warn "Event recorder install failed — retry from hub 08 → Diagnostics → Node event recorder."
+    fi
+    return 0
 }
 
 # run_super_auto — the one-hit handler. Returns 0 on completion (caller exits 0),
@@ -1055,7 +1110,7 @@ run_super_auto() {
     echo ""
     echo -e "${BOLD}  Super Auto will:${RESET}"
     echo -e "    • Build ${BOLD}mainnet-prune${RESET} + ${BOLD}testnet-prune${RESET}  ${DIM}(on-the-fly streamed chain data)${RESET}"
-    echo -e "    • Enable ${GREEN}@reboot autostart${RESET}, ${GREEN}sync watchdog${RESET}, and ${GREEN}log rotation${RESET}"
+    echo -e "    • Enable ${GREEN}@reboot autostart${RESET}, ${GREEN}sync watchdog${RESET}, ${GREEN}event recorder${RESET}, and ${GREEN}log rotation${RESET}"
     echo -e "    • Set up a ${GREEN}Tor .onion${RESET} mirror per node"
 
     if $_running || $_installed; then
@@ -1131,7 +1186,7 @@ run_super_auto() {
     setup_one_node "testnet"
 
     echo ""
-    success "Super Auto complete — both nodes built; autostart + watchdog + log rotation enabled."
+    success "Super Auto complete — both nodes built; autostart + watchdog + event recorder + log rotation enabled."
     log "[SUPER AUTO] Completed both networks."
     return 0
 }
@@ -2182,6 +2237,11 @@ generate_config() {
 #   log_file_path           → <node_dir>/grin-server.log
 #   api_secret_path         → <node_dir>/.api_secret
 #   foreign_api_secret_path → <node_dir>/.foreign_api_secret
+#   peer_max_inbound_count  → 999
+#   peer_max_outbound_count → 199
+#   peer_min_preferred_outbound_count → 199
+#   log_max_files           → 10
+#   file_log_level          → "Debug" (grin default "Info")
 # chain_type and ports are already correct from 'grin [--testnet] server config'
 # and do not need patching here.
 # If any key is missing from the generated config, it is appended with a warning.
@@ -2261,12 +2321,25 @@ patch_config() {
         warn "peer_min_preferred_outbound_count not found in config — appended."
     fi
 
-    # log_max_files — keep only 3 rotated log files to save disk space
+    # log_max_files — keep 10 rotated log files: Debug logging fills each file
+    # fast, and 3 held only ~10 days even at Info (086 design F-6)
     if grep -qE '^#?[[:space:]]*log_max_files' "$config"; then
-        sed -i -E 's/^#?[[:space:]]*log_max_files[[:space:]]*=.*/log_max_files = 3/' "$config"
+        sed -i -E 's/^#?[[:space:]]*log_max_files[[:space:]]*=.*/log_max_files = 10/' "$config"
     else
-        echo "log_max_files = 3" >> "$config"
+        echo "log_max_files = 10" >> "$config"
         warn "log_max_files not found in config — appended."
+    fi
+
+    # file_log_level — Debug instead of grin's default Info, so a failure leaves
+    # its detail in the log (e.g. the PMMR 'verify failed' lines of a corrupted
+    # start are DEBUG-only). stdout_log_level is left at grin's default (Warning)
+    # so the tmux pane stays readable. Debug fills log_max_size faster, so the
+    # rotated history covers fewer days than at Info.
+    if grep -qE '^#?[[:space:]]*file_log_level' "$config"; then
+        sed -i -E 's/^#?[[:space:]]*file_log_level[[:space:]]*=.*/file_log_level = "Debug"/' "$config"
+    else
+        echo 'file_log_level = "Debug"' >> "$config"
+        warn "file_log_level not found in config — appended."
     fi
 
     # enable_stratum_server — deliberately NOT patched here. Stratum is a mining
@@ -2287,10 +2360,11 @@ patch_config() {
     info "  peer_max_inbound_count            = 999"
     info "  peer_max_outbound_count           = 199"
     info "  peer_min_preferred_outbound_count = 199"
-    info "  log_max_files                     = 3"
-    info "  enable_stratum_server             = (untouched — Script 07 owns stratum)"
+    info "  log_max_files                     = 10"
+    info "  file_log_level                    = \"Debug\"  (grin default: Info)"
+    info "  enable_stratum_server            = (untouched — Script 07 owns stratum)"
     info "  host (p2p)                        = \"::\"  (v5.5 default — IPv4 + IPv6 dual-stack)"
-    log "[STEP 8] archive_mode=$archive_val db_root=$db_root api_secret=$GRIN_DIR/.api_secret peer_limits=999in/199out/199min log_max_files=3 stratum=untouched p2p_host=default(::)"
+    log "[STEP 8] archive_mode=$archive_val db_root=$db_root api_secret=$GRIN_DIR/.api_secret peer_limits=999in/199out/199min log_max_files=10 file_log_level=Debug stratum=untouched p2p_host=default(::)"
 }
 
 # =============================================================================
@@ -3171,19 +3245,14 @@ stream_extract_chain_data() {
 # =============================================================================
 # HELPER: CHECK IF A GRIN PROCESS IS RUNNING FOR A SPECIFIC NODE DIRECTORY
 # -----------------------------------------------------------------------------
-# Uses /proc/<pid>/cwd to match the process working directory so we distinguish
-# mainnet vs testnet nodes even when both are installed.
+# Matches the process BINARY (gnc_grin_pids_for_dir), so mainnet and testnet
+# stay distinct even when both are installed. Never cwd: the tmux server both
+# nodes share has the first node's dir as its cwd and `grin server run` in its
+# argv, so a cwd match "found" a node that was not running (086 design F-7).
 # Returns 0 (found) or 1 (not found).
 # =============================================================================
 _grin_proc_for_dir() {
-    local dir="$1"
-    local pid
-    while IFS= read -r pid; do
-        local cwd
-        cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null) || continue
-        [[ "$cwd" == "$dir" ]] && return 0
-    done < <(pgrep -f 'grin server run' 2>/dev/null || true)
-    return 1
+    [[ -n "$(gnc_grin_pids_for_dir "$1")" ]]
 }
 
 # =============================================================================
@@ -3223,14 +3292,15 @@ start_grin_tmux() {
             return 0
         else
             warn "Orphaned Grin process detected in $GRIN_DIR (no tmux session). Killing stale process..."
+            # Binary-matched (gnc_grin_pids_for_dir): a cwd match would SIGKILL the
+            # tmux server that hosts the OTHER network's node. Marker first, so
+            # the node event recorder logs this as a planned stop.
+            gnc_mark_planned_stop "$session" "orphan cleared before start"
             while IFS= read -r _stale_pid; do
-                local _stale_cwd
-                _stale_cwd=$(readlink "/proc/$_stale_pid/cwd" 2>/dev/null) || continue
-                if [[ "$_stale_cwd" == "$GRIN_DIR" ]]; then
-                    info "  Killing PID $_stale_pid (cwd=$_stale_cwd)"
-                    kill -KILL "$_stale_pid" 2>/dev/null || true
-                fi
-            done < <(pgrep -f 'grin server run' 2>/dev/null || true)
+                [[ -n "$_stale_pid" ]] || continue
+                info "  Killing PID $_stale_pid ($GRIN_DIR/grin)"
+                kill -KILL "$_stale_pid" 2>/dev/null || true
+            done < <(gnc_grin_pids_for_dir "$GRIN_DIR")
             sleep 1
             info "Stale process cleared — proceeding with fresh start."
         fi
@@ -3312,7 +3382,7 @@ show_summary() {
     echo -e "     ${DIM}  systemctl restart tor   # full restart required to re-read keys${RESET}"
     echo ""
     if [[ "$SUPER_AUTO" == "true" ]]; then
-        echo -e "  ${GREEN}✓  Auto-start, watchdog & log rotation${RESET} are being configured automatically."
+        echo -e "  ${GREEN}✓  Auto-start, watchdog, event recorder & log rotation${RESET} are being configured automatically."
     else
         echo -e "  ${YELLOW}⚠  Remember:${RESET} schedule auto-start on reboot via"
         echo -e "     ${BOLD}3) Share Grin Chain Data / Schedule${RESET} → option ${GREEN}G) Auto startup Grin node${RESET}"
@@ -3556,6 +3626,9 @@ setup_one_node() {
     # which keeps the existing "remember to schedule autostart" reminder instead.
     if [[ "$SUPER_AUTO" == "true" ]]; then
         _super_auto_harden "$network" "$GRIN_DIR"
+    else
+        # The custom wizard asks instead (default YES), once per run.
+        _offer_event_recorder
     fi
 
     # Reset per-node state for the next network (if "both" selected).

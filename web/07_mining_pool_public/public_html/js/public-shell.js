@@ -14,7 +14,7 @@
    you saw each page's (inconsistent) hardcoded fallback nav, and maintaining the
    markup meant editing 7 files. Now the nav lives HERE, once, and renders before
    any fetch. branding.js still ENHANCES this injected DOM (logo/slogan via
-   .brand, [data-brand] hooks, and hiding the incentives-gated Prize Pool links); it no
+   .brand, [data-brand] hooks, and showing/hiding the gated Community links); it no
    longer owns the base nav.
 
    Load order at the end of <body>:  public-shell.js → public-theme.js → branding.js
@@ -28,17 +28,24 @@
 
   // ── Canonical public navigation (single source of truth) ────────────────
   // Grouped by what the visitor is after (2026-09-23): the POOL's numbers under Stats,
-  // the prize pool's two halves (money out = Fortune Board, money in = the donate page)
-  // under Prize Pool, and the visitor's OWN page — Account — split out to the right of
-  // the header (ACCOUNT below), so the pool-wide "Payouts" and your own withdrawals no
-  // longer sit side by side as peers.
+  // the "extras" under Community — the prize pool's two halves (money out = Fortune Board,
+  // money in = the donate page) and the /play/ games (design §19.17.8, D31, Part C2) —
+  // and the visitor's OWN page — Account — split out to the right of the header (ACCOUNT
+  // below), so the pool-wide "Payouts" and your own withdrawals no longer sit side by
+  // side as peers.
   // Each item carries an icon: on narrow screens the header collapses to icons-only
   // (the .nav-label is hidden via CSS) so the mobile header stays tidy; desktop shows
   // icon + label. The footer "Pool" column reuses the labels only (always text).
   // An item is either a leaf link ({href,label,icon}) or a GROUP
   // ({label,icon,children:[…leaf links…]}). A group has NO href of its own — it
-  // only opens a dropdown of its children. A group marked `incentives: true` is hidden
-  // by branding.js when the operator has incentives switched off (applyIncentivesNav).
+  // only opens a dropdown of its children. Gates live on the CHILDREN, never on the group
+  // (§19.17.8): a child marked `incentives: true` renders with data-incentives (shown by
+  // default, hidden by branding.js applyIncentivesNav when the operator has incentives
+  // off); one marked `games: true` renders HIDDEN with data-games (shown by applyGamesNav
+  // only on an effective games mode of 'on'). A group with any gated child carries
+  // data-nav-gated, and branding.js applyNavGroups shows it while at least one child is
+  // shown — hidden, never an empty dropdown — so one child's flag can never hide the
+  // other children's links.
   var NAV = [
     // "Home", not "Dashboard": "Dashboard" read as "my dashboard" when this is in fact the
     // POOL-wide overview. The 🏠 icon already says home, and index.html's own <h1> still
@@ -50,19 +57,21 @@
       { href: 'payment-history.html', label: 'Payouts',      icon: '💸' },
       { href: 'network-map.html',    label: 'Network Map',   icon: '🛰️' }
     ] },
+    // "Community" (operator's choice, design §19.17 C0 answer 1) — it was "Prize Pool"
+    // with a 🎁 until Play joined it; the gift box was the prize pool's, so the group now
+    // carries 👥 and the gift stays on the footer's Fortune Board link.
     // Every prize-pool GRIN is paid back out to miners, never to the operator — so the
     // donate page is "Contribute" here, not "Donate" (reads as tipping the operator) and
     // not "Sponsors" (reads as companies funding the operator). Its <h1> stays
     // "Support the Prize Pool".
-    { label: 'Prize Pool', icon: '🎁', incentives: true, children: [
-      { href: 'fortune-board.html',  label: 'Fortune Board', icon: '🏆' },
-      { href: 'donate.html',         label: 'Contribute',    icon: '💚' }
-    ] },
-    // The /play/ games platform (design §19). `games: true` renders it HIDDEN, with
-    // data-games, and branding.js applyGamesNav shows it only when the branding payload says
-    // games.mode === 'on' — the opposite default of `incentives`. Absolute href: /play/ is
-    // served from its own docroot, not this one.
-    { href: '/play/',                label: 'Play',          icon: '🎮', games: true }
+    // Play is the /play/ games platform (design §19): `games: true` renders it HIDDEN —
+    // the opposite default of `incentives`. Absolute href: /play/ is served from its own
+    // docroot, not this one. On /play/ itself the group lights as active through it.
+    { label: 'Community', icon: '👥', children: [
+      { href: 'fortune-board.html',  label: 'Fortune Board', icon: '🏆', incentives: true },
+      { href: 'donate.html',         label: 'Contribute',    icon: '💚', incentives: true },
+      { href: '/play/',              label: 'Play',          icon: '🎮', games: true }
+    ] }
   ];
   // "Account", not "My Stats": the page's <title> and <h1> both say Account, and it is
   // where withdrawals happen. Rendered as a chip in .nav-right, not in NAV: it is the only
@@ -93,17 +102,29 @@
 
   var here = currentPath();
 
-  // A games-gated link starts hidden (inline display:none — .nav-link sets its own display in
-  // CSS, which beats the UA [hidden] rule) so it never flashes before the branding fetch.
-  function gamesAttrs(l) {
-    return l.games ? ' data-games="1" style="display:none"' : '';
+  // A link's gate attributes. A games-gated link starts hidden (inline display:none —
+  // .nav-link sets its own display in CSS, which beats the UA [hidden] rule) so it never
+  // flashes before the branding fetch; an incentives-gated one starts shown (incentives ship
+  // ON, and a failed fetch must not strip working links).
+  function gateAttrs(l) {
+    if (l.games) return ' data-games="1" style="display:none"';
+    if (l.incentives) return ' data-incentives="1"';
+    return '';
+  }
+  // A group whose children are ALL hidden at first render starts hidden too (no empty
+  // dropdown before the fetch); branding.js applyNavGroups decides from then on.
+  function groupAttrs(l) {
+    var gated = l.children.some(function (c) { return c.games || c.incentives; });
+    if (!gated) return '';
+    var anyShown = l.children.some(function (c) { return !c.games; });
+    return ' data-nav-gated="1"' + (anyShown ? '' : ' style="display:none"');
   }
 
   // Render one leaf link (also used for the items inside a group dropdown).
   function leafLink(l, extraClass) {
     var active = fileOf(l.href) === here ? ' active' : '';
     var cls = 'nav-link' + (extraClass ? ' ' + extraClass : '') + active;
-    return '<a href="' + abs(l.href) + '" class="' + cls + '" title="' + esc(l.label) + '"' + gamesAttrs(l) + '>' +
+    return '<a href="' + abs(l.href) + '" class="' + cls + '" title="' + esc(l.label) + '"' + gateAttrs(l) + '>' +
       '<span class="nav-ico" aria-hidden="true">' + (l.icon || '') + '</span>' +
       '<span class="nav-label">' + esc(l.label) + '</span>' +
     '</a>';
@@ -114,8 +135,7 @@
     // Group: a caret trigger (no href) + a dropdown of children. The trigger carries
     // .active when the current page is one of the children so the parent stays lit.
     var childActive = l.children.some(function (c) { return fileOf(c.href) === here; });
-    return '<div class="nav-group' + (childActive ? ' active' : '') + '"' +
-        (l.incentives ? ' data-incentives="1"' : '') + '>' +
+    return '<div class="nav-group' + (childActive ? ' active' : '') + '"' + groupAttrs(l) + '>' +
       '<button type="button" class="nav-link nav-group-trigger" aria-haspopup="true" ' +
         'aria-expanded="false" title="' + esc(l.label) + '">' +
         '<span class="nav-ico" aria-hidden="true">' + (l.icon || '') + '</span>' +
@@ -167,7 +187,7 @@
   var POOL_COL_SKIP = { '/blog.html': 1, '/index.html': 1, '/fortune-board.html': 1, '/donate.html': 1 };
   var poolCol = poolLeaves.filter(function (l) { return !POOL_COL_SKIP[fileOf(l.href)]; })
     .map(function (l) {
-      return '<a href="' + abs(l.href) + '"' + gamesAttrs(l) + '>' + esc(l.label) + '</a>';
+      return '<a href="' + abs(l.href) + '"' + gateAttrs(l) + '>' + esc(l.label) + '</a>';
     }).join('');
 
   var footer = document.createElement('footer');
@@ -190,8 +210,8 @@
         // Donate lives in the brand column, highlighted with a heart, as the primary
         // community call-to-action (moved out of the Legal column). Fortune Board sits
         // right below it (moved out of the Pool column to keep the columns balanced).
-        // Both carry data-incentives: hidden with the header's Prize Pool group when the
-        // operator has incentives off (branding.js applyIncentivesNav).
+        // Both carry data-incentives: hidden with the header's Fortune Board + Contribute
+        // links when the operator has incentives off (branding.js applyIncentivesNav).
         '<a class="footer-donate" href="/donate.html" data-incentives="1">' +
           '<span class="footer-donate-ico" aria-hidden="true">❤</span> Donate' +
         '</a>' +
@@ -370,11 +390,13 @@
     document.querySelectorAll('body > header, body > footer').forEach(function (el) { el.remove(); });
     document.body.insertBefore(header, document.body.firstChild);
     document.body.insertBefore(skipLink(), header);
-    // No ads where a credential is typed. A `code` ad is operator HTML/JS that ads.js
-    // re-creates as executing <script> nodes — the same sink branding.js keeps off these
-    // pages for custom_head_html (audit §J1-1), under the same opt-out attribute. The games
-    // shell (/play/, a rig password in its login card) sets it; its CSP would also refuse
-    // an ad network's script, as a console full of violations.
+    // No ads where a credential is typed, under the same opt-out attribute branding.js uses
+    // (audit §J1-1). This was first written against the `code` ad type, operator HTML/JS that
+    // ads.js re-created as executing <script> nodes; that type is gone (design §19.17 D22),
+    // and ads are now an image or a text card only. The rule stays because it still costs
+    // nothing: a banner image from an operator-chosen origin is a visit beacon to that
+    // origin, and a sign-in page has no use for one. The games shell (/play/, a rig password
+    // in its login card) sets the attribute, and so does login.html.
     var noAds = document.documentElement.getAttribute('data-untrusted-html') === 'exempt';
     // Header ad slot directly after the header.
     if (!noAds) header.insertAdjacentElement('afterend', adSlot('header'));

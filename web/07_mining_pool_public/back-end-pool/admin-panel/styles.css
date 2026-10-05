@@ -274,6 +274,96 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   background: color-mix(in srgb, var(--primary) 12%, transparent);
 }
 
+/* ── Sidebar search (admin-shell.js wireSidebarSearch) — sits between the brand and
+   the nav; while a query is typed the results list REPLACES the nav in the same
+   scrolling slot, so the sidebar never grows a floating overlay. ─────────────── */
+.admin-search {
+  padding: .7rem .6rem 0;
+}
+.admin-search input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: .5rem .7rem;
+  border-radius: 8px;
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: .86rem;
+}
+.admin-search input::placeholder { color: var(--text-muted); }
+.admin-search input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+/* .admin-nav sets display:flex, which beats the UA's [hidden] rule — restate it. */
+.admin-nav[hidden],
+.admin-search-results[hidden] { display: none; }
+.admin-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: .6rem .6rem .8rem;
+  overflow-y: auto;
+  flex: 1;
+}
+.admin-search-results .srch-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: .5rem .7rem;
+  border-radius: 8px;
+  border-left: 3px solid transparent;
+  text-decoration: none;
+  color: var(--text);
+}
+.admin-search-results .srch-item:hover,
+.admin-search-results .srch-item.is-sel {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-left-color: var(--accent);
+}
+.admin-search-results .srch-label { font-size: .88rem; font-weight: 500; line-height: 1.3; }
+.admin-search-results .srch-label mark {
+  background: transparent;
+  color: var(--accent);
+  font-weight: 700;
+}
+.admin-search-results .srch-ctx {
+  font-size: .72rem;
+  color: var(--text-muted);
+  line-height: 1.3;
+}
+.admin-search-results .srch-tag {
+  display: inline-block;
+  margin-right: .4rem;
+  padding: 0 .35em;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: .65rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.admin-search-results .srch-empty,
+.admin-search-results .srch-status {
+  padding: .5rem .7rem;
+  font-size: .8rem;
+  color: var(--text-muted);
+}
+/* The setting a search result landed on. Outline, not border/background, so the
+   flash never shifts layout or fights a card's own fill. */
+.admin-find-flash {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 6px;
+  animation: admin-find-flash 2.4s ease-out forwards;
+}
+@keyframes admin-find-flash {
+  0%, 60% { outline-color: var(--accent); }
+  100%    { outline-color: transparent; }
+}
+@media (prefers-reduced-motion: reduce) { .admin-find-flash { animation: none; } }
+
 /* ============================================================================
    Topbar
    ========================================================================== */
@@ -771,6 +861,67 @@ a.btn-icon, a.btn-icon:hover { text-decoration: none; }
 @media (prefers-reduced-motion: reduce) { .admin-tip { transition: none; } }
 
 /* ============================================================================
+   Stratum pause strip (admin-shell.js renderStratumStrip, design §21) — between the
+   topbar and the section rail, on every page while intake is not normal. Created and
+   removed by the script, never hidden by a class, so no display rule can strand it.
+   Literal fills, the same in both themes: the theme --danger (#f56565) under white
+   ink is ~3:1 and the strip must read at a glance. #9b1c1c / #7a4a00 with #fff are
+   both above 7:1.
+   ========================================================================== */
+.admin-stratum-strip {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .35rem 1rem;
+  padding: .55rem 1.75rem;
+  background: #9b1c1c;
+  color: #fff;
+  font-size: .86rem;
+  line-height: 1.45;
+}
+.admin-stratum-strip.tone-amber { background: #7a4a00; }
+.admin-stratum-strip .strip-text { flex: 1 1 28rem; min-width: 0; overflow-wrap: anywhere; }
+.admin-stratum-strip .strip-note { opacity: .9; font-style: italic; }
+.admin-stratum-strip a { color: #fff; font-weight: 600; text-decoration: underline; white-space: nowrap; }
+.admin-stratum-strip a:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+/* Stratum section on settings-announcements.html. The tone colours its left edge only;
+   text stays --text so both themes keep their own contrast. */
+.stratum-status {
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--border);
+  border-radius: 8px;
+  padding: .75rem 1rem;
+  margin: .4rem 0 1rem;
+  background: var(--bg-card2);
+  font-size: .9rem;
+  line-height: 1.55;
+}
+.stratum-status.tone-ok    { border-left-color: var(--success); }
+.stratum-status.tone-red   { border-left-color: var(--danger); }
+.stratum-status.tone-amber { border-left-color: var(--warning); }
+.stratum-status .st-head { font-size: 1rem; margin-bottom: .25rem; }
+.stratum-status .st-meta { color: var(--text-dim); font-size: .84rem; }
+.stratum-status ul { margin: .4rem 0 0 1.1rem; padding: 0; }
+.stratum-status li { margin: .1rem 0; }
+.stratum-status .st-bad  { color: var(--danger); font-weight: 600; }
+.stratum-status .st-good { color: var(--success); }
+.stratum-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin: .2rem 0 1rem; }
+.stratum-window {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: .2rem 1rem;
+  align-items: end;
+}
+.stratum-guide { margin-top: 1rem; font-size: .88rem; }
+.stratum-guide summary { cursor: pointer; font-weight: 600; }
+.stratum-guide ol { margin: .6rem 0 .4rem 1.2rem; padding: 0; }
+.stratum-guide li { margin: .35rem 0; }
+.stratum-guide code { font-family: var(--font-mono); font-size: .84em; }
+#stratum-dialog .modal { max-width: 480px; }
+
+/* ============================================================================
    Responsive — collapse to an off-canvas drawer
    ========================================================================== */
 @media (max-width: 900px) {
@@ -784,4 +935,5 @@ a.btn-icon, a.btn-icon:hover { text-decoration: none; }
   body.admin-drawer-open .admin-scrim { display: block; }
   .admin-topbar .admin-burger { display: inline-flex; align-items: center; justify-content: center; }
   .admin-main > main { padding: 1rem 1rem 2.5rem; }
+  .admin-stratum-strip { padding: .55rem 1rem; }
 }

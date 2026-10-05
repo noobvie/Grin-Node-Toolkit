@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Names · Settings | Grin Pool</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" href="/admin/styles.css">
+  <link rel="stylesheet" href="/admin/settings.css">
+  <style>
+    #blocked_words { font-family: var(--font-mono); font-size: .82rem; min-height: 220px; }
+  </style>
+</head>
+<body>
+  <main>
+  <div class="settings-container">
+    <div class="page-head">
+      <h1>Names</h1>
+      <p class="page-sub">The blocked-word list for every name a player types</p>
+    </div>
+
+    <!-- The pool-owned name list (design §19.17.5, D28). Every id inside .settings-form is a
+         `names` key: the harvester posts each one and an unknown key fails the whole save. -->
+    <div id="names" class="settings-content active">
+      <div class="settings-form">
+        <div class="form-section">
+          <h3 class="section-title">Blocked words</h3>
+          <div class="form-group">
+            <label for="blocked_words">Your additions, one per line</label>
+            <textarea id="blocked_words" name="blocked_words" rows="12" spellcheck="false" placeholder="one entry per line, e.g.&#10;rugpull&#10;*crap&#10;=scammer"></textarea>
+            <div class="helper-text">
+              Game nicknames on <a href="/play/" target="_blank" rel="noopener">/play/</a> and donor names
+              on the donate page are checked against this list and go live at once, with no review
+              queue. A built-in list of common slurs and profanity, and the reserved words, always apply
+              on top, so leave this empty unless you need more. Reserved for nicknames: operator, admin,
+              moderator, support, staff, official, mod, bot, pool, this pool's name, names starting with
+              "guest". Reserved for donor names: admin, official, operator, support, staff, pool,
+              grinium, prize, jackpot, winner, this pool's name. A donor name may contain spaces, and a
+              short entry also matches one <em>word</em> of it (<code>moon</code> refuses
+              <em>Moon Boys</em>).
+              <br><br>
+              <strong>How an entry matches.</strong> Case, spaces, <code>-</code> <code>_</code>
+              <code>.</code> <code>&amp;</code> <code>'</code> and look-alike digits
+              (<code>0 1 3 4 5 7</code> for <code>o i e a s t</code>) are ignored, so
+              <code>sc4m</code> and <code>Scam</code> are the same entry. An entry of
+              <strong>4 letters or fewer</strong> matches only a name that <em>is</em> that word (with
+              digits at either end ignored): <code>ass</code> refuses <em>Ass</em> and <em>A55</em> but not
+              <em>Classic</em>. An entry of <strong>5 letters or more</strong> matches anywhere in a
+              name. Start a line with <code>*</code> to make a short entry match anywhere
+              (<code>*crap</code> also refuses <em>Scrapbook</em>), or with <code>=</code> to make a long
+              one match only the whole name (<code>=scammer</code> refuses <em>Scammer</em>, not
+              <em>Scammers</em>).
+              <br><br>
+              A player or donor whose name hits the list is told only that the name isn't allowed — never
+              which word. The list does not remove names that are already live: Games →
+              <a href="games-names.html">Nicknames</a> and <a href="donors.html#names-section">Donors → Donor
+              names</a> mark every live name the list would now refuse, so you can remove it there. Up to
+              500 entries of up to 32 letters or digits each. Donor names use a change at once; the games
+              service picks it up within a minute and keeps the last list it received if the pool is
+              unreachable.
+            </div>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveSection('names')">Save Changes</button>
+          <button class="btn btn-secondary" onclick="restoreSection('names')">Restore Defaults</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  </main>
+
+  <script src="/js/auth.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/stepup.js"></script>
+  <script src="/admin/admin-shell.js"></script>
+  <script>window.SETTINGS_SECTION = "names";</script>
+  <script src="/admin/settings-common.js"></script>
+</body>
+</html>

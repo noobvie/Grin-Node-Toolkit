@@ -309,8 +309,17 @@ console.log('\n[8] §J12-3 / -5 / -9 / -11 / -12 — the remaining resolution pa
     /function isLocalRequest\([\s\S]{0,600}?x-forwarded-for/.test(indexSrc));
 
   // §J12-5 — the pool-wide admin exports must be capped, paged, throttled and streamed.
-  ok('§J12-5 both admin CSV exports go through the export bucket',
-    (indexSrc.match(/adminCsvGate\(req, res\)/g) || []).length === 2);
+  // Every pool-wide admin export, not a count: the operator revenue CSV (2026-10-05) made it three,
+  // and a fixed number would pass again the day a fourth one forgot the gate while one was removed.
+  {
+    const exportRoutes = [...indexSrc.matchAll(/app\.get\('(\/api\/admin\/export\/[^']+)'/g)].map((m) => m[1]);
+    const ungated = exportRoutes.filter((p) => {
+      const i = indexSrc.indexOf(`app.get('${p}'`);
+      return !/adminCsvGate\(req, res\)/.test(indexSrc.slice(i, i + 600));
+    });
+    ok('§J12-5 every admin CSV export goes through the export bucket',
+      exportRoutes.length >= 3 && ungated.length === 0, `routes ${exportRoutes.join(', ')}; ungated: ${ungated.join(', ')}`);
+  }
   ok('§J12-5 neither admin export still runs an uncapped SELECT',
     !/FROM withdrawals WHERE status = 'confirmed' ORDER BY confirmed_at DESC`\s*\n\s*\)\.all\(\)/.test(indexSrc) &&
     !/FROM blocks ORDER BY height DESC`\s*\n\s*\)\.all\(\)/.test(indexSrc) &&

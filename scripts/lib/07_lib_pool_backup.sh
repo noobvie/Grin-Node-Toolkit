@@ -178,6 +178,49 @@ process.exit(r && r.frozen === 1 ? 0 : 1);
 " "$db" "$reason" "$by" 2>/dev/null
 }
 
+# ─── Stratum pause — a restored pool.db boots NOT accepting miners (design §21.13 Q1) ─
+# pbk_pause_stratum <pool.db> <reason> <paused_by>. Writes the single stratum_control row the
+# pool's lib/stratum-pause.js load() reads BEFORE the stratum server binds anything, so the
+# next service start opens no listener until the operator resumes it in admin → Announcements
+# → Stratum — or it auto-resumes at `until` (now + PBK_STRATUM_PAUSE_S). Why: a restored or
+# migrated ledger must be checked before it acks a share it may not be able to credit.
+# The DDL is lib/db.js's VERBATIM (one line here) — change one, change both; the test
+# test-stratum-pause-restore.js compares them. `until` is ALWAYS written (load() would cap a
+# NULL one at boot+2 h, but the row must say what the operator was told). settled_at = now:
+# the service is stopped, so nothing is in flight. planned_* (a scheduled window) is kept —
+# it is the operator's own plan and load()/evaluate() handle it; last_result is cleared (it
+# describes the OLD process's binds). source/by/reason travel as argv, so the JS carries no
+# single quote and stays in a single-quoted node -e (the test extracts it from this file).
+# MUST run while the service is STOPPED (a running pool holds the row in memory and its next
+# write would overwrite this one) and BEFORE the de-root sweep — this read-write open as root
+# creates the WAL sidecars. Prints the `until` (unix s) on stdout; rc 0 only when the row
+# reads back paused with that `until` in the future.
+PBK_STRATUM_PAUSE_S="${PBK_STRATUM_PAUSE_S:-7200}"
+pbk_pause_stratum() {
+    local db="$1" reason="$2" by="$3"
+    [[ -f "$db" ]] || { error "No pool.db at $db — cannot pause stratum."; return 1; }
+    node -e '
+const { DatabaseSync } = require("node:sqlite");
+const [db, reason, by, secs] = process.argv.slice(1);
+if (!/^[1-9][0-9]*$/.test(secs || "")) process.exit(1);
+const d = new DatabaseSync(db);
+d.exec("PRAGMA busy_timeout = 15000");
+d.exec("CREATE TABLE IF NOT EXISTS stratum_control (id INTEGER PRIMARY KEY CHECK (id = 1), paused INTEGER NOT NULL DEFAULT 0, source TEXT DEFAULT NULL, reason TEXT DEFAULT NULL, paused_by TEXT DEFAULT NULL, since INTEGER DEFAULT NULL, settled_at INTEGER DEFAULT NULL, until INTEGER DEFAULT NULL, planned_start INTEGER DEFAULT NULL, planned_end INTEGER DEFAULT NULL, planned_reason TEXT DEFAULT NULL, planned_by TEXT DEFAULT NULL, last_result TEXT DEFAULT NULL, updated_at INTEGER NOT NULL DEFAULT (unixepoch()))");
+const now = Math.floor(Date.now() / 1000);
+const until = now + Number(secs);
+d.prepare("INSERT INTO stratum_control (id, paused, source, reason, paused_by, since, settled_at, until, last_result, updated_at) VALUES (1, 1, ?, ?, ?, ?, ?, ?, NULL, ?) ON CONFLICT(id) DO UPDATE SET paused = 1, source = excluded.source, reason = excluded.reason, paused_by = excluded.paused_by, since = excluded.since, settled_at = excluded.settled_at, until = excluded.until, last_result = NULL, updated_at = excluded.updated_at").run("restore", reason, by, now, now, until, now);
+const r = d.prepare("SELECT paused, until FROM stratum_control WHERE id = 1").get();
+d.close();
+if (!r || r.paused !== 1 || r.until !== until || !(until > now)) process.exit(1);
+process.stdout.write(String(until));
+' "$db" "$reason" "$by" "$PBK_STRATUM_PAUSE_S" 2>/dev/null
+}
+
+# Human UTC time for a unix-seconds value (empty in → empty out).
+_pbk_utc() {
+    if [[ -n "${1:-}" ]]; then date -u -d "@$1" '+%Y-%m-%d %H:%M UTC' 2>/dev/null || echo "@$1"; fi
+}
+
 # Backend CODE at the top of the app dir. lib/, admin-panel/, scripts/ and node_modules/ were
 # always excluded, but these three were not, so a restore put the ARCHIVE's index.js and
 # package files next to THIS box's lib/ — two code versions in one app, silently (audit Part 9
@@ -340,10 +383,16 @@ pbk_backup_now() {
 # rc 0 = extracted + frozen · 1 = extraction failed · 2 = extracted, freeze FAILED — never
 # start the service on this · 3 = no pool.db in it. PBK_EXTRACT_FROZEN = 1 when payouts on
 # the pool.db now in place are frozen (set on EVERY path, rc 1 included), else 0.
+# It also PAUSES STRATUM on that pool.db (design §21.13 Q1): PBK_EXTRACT_PAUSED = 1 and
+# PBK_EXTRACT_PAUSE_UNTIL = <unix s> when it took, else 0 / "". A failed pause NEVER changes
+# rc — an open stratum is not a money loss the way live payouts are; callers warn loudly
+# (_pbk_report_stratum_pause) and the restore stands.
 _pbk_restore_extract() {
     local clear="$1" reason="$2" by="$3" rc=0 x
     local -a ex=()
     PBK_EXTRACT_FROZEN=0
+    PBK_EXTRACT_PAUSED=0
+    PBK_EXTRACT_PAUSE_UNTIL=""
     systemctl stop "$POOL_SERVICE" 2>/dev/null || true
     if declare -F pw_listener_stop >/dev/null 2>&1; then pw_listener_stop 2>/dev/null || true; fi
 
@@ -361,6 +410,7 @@ _pbk_restore_extract() {
         if [[ -f "$POOL_APP_DIR/pool.db" ]] && pbk_freeze_payouts "$POOL_APP_DIR/pool.db" "$reason" "$by"; then
             PBK_EXTRACT_FROZEN=1
         fi
+        _pbk_restore_pause_stratum
         return 1
     fi
 
@@ -378,10 +428,41 @@ _pbk_restore_extract() {
     # are swept back to the service user with everything else.
     if [[ -f "$POOL_APP_DIR/pool.db" ]]; then
         if pbk_freeze_payouts "$POOL_APP_DIR/pool.db" "$reason" "$by"; then PBK_EXTRACT_FROZEN=1; else rc=2; fi
+        # Same moment and the same reason to be here (before the de-root sweep): the pool
+        # must come up NOT accepting miners on a ledger nobody has checked yet.
+        _pbk_restore_pause_stratum
     else
         rc=3
     fi
     return "$rc"
+}
+
+# Sets PBK_EXTRACT_PAUSED / PBK_EXTRACT_PAUSE_UNTIL for whatever pool.db is in place now.
+# Reason + paused_by are fixed: the restore core serves 2) Restore and Migrate IN alike.
+_pbk_restore_pause_stratum() {
+    local u=""
+    [[ -f "$POOL_APP_DIR/pool.db" ]] || return 0
+    if u=$(pbk_pause_stratum "$POOL_APP_DIR/pool.db" \
+            'pool.db restored (restore / Migrate IN) — check the pool, then Resume' 'system:restore') \
+            && [[ "$u" =~ ^[0-9]+$ ]]; then
+        PBK_EXTRACT_PAUSED=1
+        PBK_EXTRACT_PAUSE_UNTIL="$u"
+    fi
+    return 0
+}
+
+# The operator's message for that pause — the SAME words after 2) Restore and Migrate IN.
+_pbk_report_stratum_pause() {
+    if [[ "${PBK_EXTRACT_PAUSED:-0}" == "1" ]]; then
+        warn "Stratum PAUSED on the restored pool.db until $(_pbk_utc "$PBK_EXTRACT_PAUSE_UNTIL") ($(( PBK_STRATUM_PAUSE_S / 60 )) min from now)."
+        echo -e "  ${DIM}The pool will start NOT accepting miners. Check the pool, then Resume in${RESET}"
+        echo -e "  ${DIM}admin → Announcements → Stratum (or it resumes on its own at that time — a pool${RESET}"
+        echo -e "  ${DIM}started AFTER it boots accepting: pause it there first if you are not ready).${RESET}"
+    else
+        error "Could NOT pause stratum on the restored pool.db — stratum will OPEN on start."
+        echo -e "  ${DIM}Miners will be accepted on a ledger nobody has checked. Once the pool is up,${RESET}"
+        echo -e "  ${DIM}pause it at once in admin → Announcements → Stratum, check it, then resume.${RESET}"
+    fi
 }
 
 # Perms: tar extracts as root — re-assert the de-rooted ownership (§13.9) and
@@ -458,18 +539,21 @@ pbk_restore() {
     fi
     rm -f "$tmp_clear"
     case "$xrc" in
-        0) warn "Payouts FROZEN on the restored ledger — the wallet has spent money this DB no longer knows about." ;;
+        0) warn "Payouts FROZEN on the restored ledger — the wallet has spent money this DB no longer knows about."
+           _pbk_report_stratum_pause ;;
         1) error "Extraction failed — this box may now hold a PARTIAL restore (disk full? df -h)."
            if [[ "$PBK_EXTRACT_FROZEN" == "1" ]]; then
                warn "Payouts FROZEN on the pool.db now in place. Restore again cleanly before starting anything."
            else
                error "Payouts could NOT be frozen — do NOT start the service; freeze from the admin panel first."
            fi
+           if [[ -f "$POOL_APP_DIR/pool.db" ]]; then _pbk_report_stratum_pause; fi
            _pbk_restore_perms
            return 1 ;;
         2) error "Could not freeze payouts on the restored pool.db."
            error "  Do NOT start the service yet: freeze from the admin panel first, or the"
-           error "  scheduler may re-send payouts the chain has already made." ;;
+           error "  scheduler may re-send payouts the chain has already made."
+           _pbk_report_stratum_pause ;;
         *) : ;;   # 3 = the archive held no pool.db — nothing to freeze (as before)
     esac
     _pbk_restore_perms
@@ -497,6 +581,10 @@ pbk_restore() {
     echo -e "       ${DIM}Payouts once coverage reports clean. (Not an issue on a FRESH-box rebuild${RESET}"
     echo -e "       ${DIM}from the newest backup — but freeze/reconcile costs nothing there either.)${RESET}"
     echo -e "    5) ${BOLD}6) Service control → Start${RESET}, then check admin → health."
+    if [[ "${PBK_EXTRACT_PAUSED:-0}" == "1" ]]; then
+        echo -e "    6) ${BOLD}Resume stratum${RESET} in admin → Announcements → Stratum once the pool checks out."
+        echo -e "       ${DIM}It starts PAUSED (no miner accepted) and resumes on its own at $(_pbk_utc "$PBK_EXTRACT_PAUSE_UNTIL").${RESET}"
+    fi
     mkdir -p "$(dirname "$PBK_LOG")"
     echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] restore from: $(basename "$chosen")" >> "$PBK_LOG" 2>/dev/null || true
 }

@@ -48,6 +48,9 @@
 #                                gateway stops recognising, so losing this table changes the
 #                                RECEIVING ADDRESS of every wallet that ever connected. Accio
 #                                ships no product backup of its own, so this is the only copy.
+#   · /opt/grin/node-events/<net>/ledger.jsonl*  — node event recorder history
+#                                (086). Ledger only: no status.json, no evidence.
+#                                Restored only where no live ledger exists.
 #   · /etc/nginx/sites-available/*  (Grin-related configs only)
 #   · /etc/letsencrypt/live/ + renewal/  — SSL certs
 #   · root + www-data crontabs  — collector schedules
@@ -578,6 +581,24 @@ run_backup() {
             [[ "$auto" == false ]] && warn "  — Accio excluded. Its address table will NOT be in this archive."
         fi
     fi
+
+    # ── Step 5f: Node event recorder ledger (086 design §8.7) ────────────────
+    # ledger.jsonl (+ its logrotate siblings) is the node's availability
+    # HISTORY: one line per down/up transition, no secrets, no IPs, a few KB.
+    # It cannot be rebuilt — the recorder only appends what it saw — so it goes
+    # in without a prompt. Deliberately NOT included: status.json (live
+    # per-boot state; restored elsewhere it would misread the new box) and
+    # evidence/ (raw logs and console, up to 500 MB, IPs unmasked — export what
+    # you need from 086 → Node event recorder instead).
+    local _ne _nf
+    for _ne in /opt/grin/node-events/mainnet /opt/grin/node-events/testnet; do
+        for _nf in "$_ne"/ledger.jsonl "$_ne"/ledger.jsonl.[0-9]*; do
+            [[ -f "$_nf" && ! -L "$_nf" ]] || continue
+            sources+=("$_nf")
+            manifest_lines+=("node-events-ledger: $_nf")
+            [[ "$auto" == false ]] && info "  ✓ $_nf (node event recorder ledger)"
+        done
+    done
 
     # ── Step 6: Optional logs ────────────────────────────────────────────────
     if [[ "$auto" == false ]]; then
@@ -1220,6 +1241,39 @@ run_restore() {
         [[ $_acc_was_running -eq 1 ]] && systemctl start "$_acc_unit" 2>/dev/null || true
         success "Restored: Accio gateway state ($_acc_dir)"
         log "[RESTORE] accio $_acc_dir"
+    done
+
+    # Node event recorder ledger. Restored ONLY where this box has no ledger
+    # for that net yet: a live ledger is newer than any archive, and replacing
+    # it would erase what was recorded since the backup. A restored ledger is
+    # history only — the recorder (if installed later) starts with a fresh
+    # status, and 086's availability treats the span up to its first
+    # `recorder_start` line as unobserved, not as up.
+    local _ne_net _ne_src _ne_dst _ne_f
+    for _ne_net in mainnet testnet; do
+        _ne_src="$extract_dir/opt/grin/node-events/$_ne_net"
+        _ne_dst="/opt/grin/node-events/$_ne_net"
+        [[ -f "$_ne_src/ledger.jsonl" ]] || continue
+        if [[ -e "$_ne_dst/ledger.jsonl" ]]; then
+            info "Kept the live $_ne_net event ledger (newer than the archive) — the archived one was not restored."
+            log "[RESTORE] node-events $_ne_net: live ledger kept"
+            continue
+        fi
+        # 0755 root, 0644 files: the pool reads these as grinpool (§8.7).
+        if ! mkdir -p "$_ne_dst" || ! chmod 755 /opt/grin/node-events "$_ne_dst"; then
+            warn "Could not create $_ne_dst — $_ne_net event ledger not restored."
+            continue
+        fi
+        for _ne_f in "$_ne_src"/ledger.jsonl*; do
+            [[ -f "$_ne_f" && ! -L "$_ne_f" ]] || continue
+            if cp -- "$_ne_f" "$_ne_dst/" && chmod 644 "$_ne_dst/${_ne_f##*/}"; then
+                chown root:root "$_ne_dst/${_ne_f##*/}" 2>/dev/null || true
+            else
+                warn "Could not restore ${_ne_f##*/} for $_ne_net."
+            fi
+        done
+        success "Restored: $_ne_net node event ledger ($_ne_dst)"
+        log "[RESTORE] node-events $_ne_net ledger"
     done
 
     # Grin Drop dirs (individual files extracted from absolute paths)

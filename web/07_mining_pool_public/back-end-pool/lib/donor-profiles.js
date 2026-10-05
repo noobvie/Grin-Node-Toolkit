@@ -1,10 +1,16 @@
 'use strict';
 
-// Donor profiles — design §18.4–§18.6 (2026-09-24). A donor's public NICKNAME and BANNER, set
-// from the account page and shown only after an admin approves them. Everything that decides
-// what a profile IS lives here: name rules, the banner byte sniff + header-parsed dimensions,
-// the request state machine, the approved-file writes, and the two read shapes (the donor's own
-// view for /api/account/:addr, the public view for the wall).
+// Donor profiles — design §18.4–§18.6 (2026-09-24), names changed by §19.17.6 (Part C4,
+// 2026-10-04). A donor's public NICKNAME and BANNER, set from the account page. Everything that
+// decides what a profile IS lives here: the name check, the banner byte sniff + header-parsed
+// dimensions, the request state machine, the approved-file writes, and the two read shapes (the
+// donor's own view for /api/account/:addr, the public view for the wall).
+//
+// NAMES are AUTO-CHECKED and live at once (D29): lib/name-rule.js with the donor shape (§18.5's
+// character set, §16.4's reserved words, the code seed + the operator's `names.blocked_words`),
+// then banned_donor_names, then "taken" (another address's approved name with the same matching
+// form), then a 7-day change limit. BANNERS stay PRE-moderated — a word list can check text,
+// never an image — and their path below is unchanged by C4.
 //
 // No dependency on index.js (it starts a server on require) and none on donor-ledger.js:
 // §18 Part 4 makes donorWall() read publicProfiles() from here, so the require must only ever go
@@ -12,12 +18,15 @@
 // passed in by the caller as a plain value.
 //
 // State machine, per (address × kind), each transition ONE transaction:
-//   submit   → pending     an existing pending → replaced (its blob NULLed)
-//   approve  → approved    the previous approved → replaced, its file deleted
-//   reject   → rejected    (reason shown to the donor)
-//   withdraw → withdrawn   the donor drops their own pending request
-//   remove   → removed     the donor or an admin takes the live one down (file deleted)
-//   block    → every pending of the address → withdrawn; donor_blocks row
+//   name     submit   → approved at once (the previous approved → replaced), or refused with
+//                       nothing stored; `pending` is never written for a name since C4
+//   banner   submit   → pending     an existing pending → replaced (its blob NULLed)
+//            approve  → approved    the previous approved → replaced, its file deleted
+//            reject   → rejected    (reason shown to the donor)
+//            withdraw → withdrawn   the donor drops their own pending request
+//   both     remove   → removed     the donor or an admin takes the live one down (file deleted)
+//            block    → every pending of the address → withdrawn; donor_blocks row
+//   name     ban      → banned_donor_names row + every live holder of that matching form removed
 // The partial unique indexes (lib/db.js) make "one pending + one approved per kind" a database
 // fact; a constraint hit comes back as { ok:false, code:'conflict' }, never as a throw.
 //
@@ -37,41 +46,50 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { SNIFFERS } = require('./asset-manager');
-const { addMonthsUtc, nameFlagContext, nameFlags } = require('./donor-names');
+const { addMonthsUtc } = require('./donor-names');
+const NameRule = require('./name-rule');
 
 const KINDS = Object.freeze(['name', 'banner']);
 
-// ── Name (§18.5) ────────────────────────────────────────────────────────────────────────────
-const NAME_MIN = 2;
-const NAME_MAX = 32;
-// ASCII only: no homoglyphs (Cyrillic a, U+0430), no bidi overrides (U+202E), no zero-width joiners —
-// none of them are in this class, so every one is refused rather than normalised away.
-const NAME_CHARSET_RE = /^[A-Za-z0-9 \-_.&']+$/;
-const NAME_RULE = `2–${NAME_MAX} characters: letters, digits, spaces and - _ . & ' only, with at least one letter or digit`;
+// ── Name (§18.5 shape, §19.17.6 check) ──────────────────────────────────────────────────────
+// The shape is the name rule's `donor` shape (one definition, in lib/name-rule.js): trim,
+// collapse ASCII whitespace runs to one space, 2–32 of A–Z a–z 0–9 space - _ . & ', at least
+// one letter or digit, case kept (brands are cased). ASCII only: a homoglyph, a bidi override,
+// a zero-width joiner or a Unicode space is refused, never normalised away.
+const NAME_MIN = NameRule.DONOR_MIN;
+const NAME_MAX = NameRule.DONOR_MAX;
+const NAME_RULE = NameRule.DONOR_RULE;
+// One change per 7 days, counted from the donor's own last change (an admin removal does not
+// reset it). A code constant on purpose — §19.17.6: a form field for a knob nobody turns.
+const NAME_CHANGE_DAYS = 7;
+const NAME_CHANGE_SECS = NAME_CHANGE_DAYS * 86400;
 
-// Trim, collapse ASCII whitespace runs to one space, keep case (brands are cased). Only ASCII
-// whitespace is collapsed: a Unicode space (NBSP, ideographic space) is not "whitespace we
-// tidy", it is a character outside the charset and is refused with the rule.
-function normaliseName(raw) {
-  return String(raw == null ? '' : raw).replace(/[ \t\r\n\f\v]+/g, ' ').trim();
-}
+// The answers a refused name gets. The rule's own list (reserved / blocked) and the database's
+// (banned / taken) are deliberately GENERIC: which list hit, and whether a name is banned or
+// merely taken, is the admin's to know — a donor who could tell would probe the lists.
+const NAME_TEXT = Object.freeze({
+  name_not_allowed: "That name isn't allowed. Please choose another.",
+  name_unavailable: "That name isn't available. Please choose another.",
+  unchanged: 'That is already your donor name.',
+});
 
+// Shape only → { ok:true, name } | { ok:false, code, error }. These refusals explain themselves.
 function validateName(raw) {
-  if (raw !== null && raw !== undefined && typeof raw !== 'string') {
-    return { ok: false, code: 'name_invalid', error: `A donor name must be text: ${NAME_RULE}.` };
-  }
-  const name = normaliseName(raw);
-  if (name.length < NAME_MIN || name.length > NAME_MAX) {
-    return { ok: false, code: 'name_length', error: `A donor name must be ${NAME_RULE}.` };
-  }
-  if (!NAME_CHARSET_RE.test(name)) {
-    return { ok: false, code: 'name_charset', error: `That name contains a character that is not allowed. A donor name must be ${NAME_RULE}.` };
-  }
-  if (!/[A-Za-z0-9]/.test(name)) {
-    return { ok: false, code: 'name_no_alnum', error: `A donor name needs at least one letter or digit (${NAME_RULE}).` };
-  }
-  return { ok: true, name };
+  const r = NameRule.checkShape(raw, 'donor');
+  if (r.ok) return r;
+  return { ok: false, code: r.code, error: NameRule.DONOR_RULE_TEXT[r.code] || `A donor name must be ${NAME_RULE}.` };
 }
+
+// The rule's context for a donor name: the operator's `names.blocked_words` text as stored
+// (folded, one entry per line, optional * / =) and the pool's name. Compiled once per call
+// site; an unreadable list is the caller's '' — the code seed in the rule applies regardless.
+function nameRuleContext(blockedText, poolName) {
+  const lines = String(blockedText == null ? '' : blockedText).split('\n');
+  return { shape: 'donor', poolName: poolName == null ? '' : String(poolName), blocked: NameRule.compileList(lines) };
+}
+
+const nameNorm = (name) => NameRule.matchForm(name);
+const BAN_NORM_RE = /^[a-z0-9]{1,32}$/;
 
 // ── Banner (§18.5) ──────────────────────────────────────────────────────────────────────────
 const MAX_BANNER_BYTES = 300 * 1024;
@@ -192,11 +210,13 @@ function cleanReason(r) {
 
 const isConstraint = (e) => !!e && /constraint failed/i.test(String(e.message || ''));
 
-function audit(db, adminId, action, address, details, ip) {
+// target_type 'donor' + the address, or 'donor_name' + a matching form (a ban is about a NAME,
+// whoever holds it). adminId null = the system (the C4 migration).
+function audit(db, adminId, action, targetId, details, ip, targetType = 'donor') {
   db.prepare(`
     INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
-    VALUES (?, ?, 'donor', ?, ?, ?)
-  `).run(Number.isFinite(adminId) ? adminId : null, action, address, JSON.stringify(details || {}),
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(Number.isFinite(adminId) ? adminId : null, action, targetType, targetId, JSON.stringify(details || {}),
          ip == null ? null : String(ip));
 }
 
@@ -270,12 +290,196 @@ function submit(db, address, kind, fields, opts) {
   }
 }
 
-// → { ok:true, id, kind, name, replaced, submitted_at } | { ok:false, code, error? }
+// ── name: auto-checked, live at once (§19.17.6, Part C4) ─────────────────────────────────────
+const liveNameRow = (db, address) => db.prepare(
+  "SELECT id, name, submitted_at FROM donor_requests WHERE grin_address = ? AND kind = 'name' AND status = 'approved'"
+).get(address);
+
+// Every approved name of OTHER addresses whose matching form equals `norm`. Approved includes an
+// EXPIRED approval: it shows again the moment its donor donates, so it still owns the name. A
+// scan, not an index: the matching form is the rule's (JS), and the table holds one approved
+// name per donor — small, and read only on a submit (rate-limited) or an admin action.
+function nameHolders(db, norm, exceptAddress) {
+  return db.prepare("SELECT id, grin_address, name FROM donor_requests WHERE kind = 'name' AND status = 'approved'")
+    .all().filter((r) => r.grin_address !== exceptAddress && nameNorm(r.name) === norm);
+}
+const isBannedNorm = (db, norm) => !!db.prepare('SELECT 1 FROM banned_donor_names WHERE norm = ?').get(norm);
+
+// When this address may next change its name (unix), or null = now. Counted from its OWN last
+// change: the newest name row that was ever live or submitted (approved, replaced, removed) —
+// an admin removal keeps the row's submitted_at, so it does not reset the clock (the brake on
+// "set an offensive name, get it removed, set the next one").
+function nameChangeAvailableAt(db, address, now) {
+  const r = db.prepare(`
+    SELECT MAX(submitted_at) AS t FROM donor_requests
+    WHERE grin_address = ? AND kind = 'name' AND status IN ('approved', 'replaced', 'removed')
+  `).get(address);
+  const at = r && Number.isFinite(r.t) ? r.t + NAME_CHANGE_SECS : null;
+  return at !== null && at > now ? at : null;
+}
+
+// The checks that run BEFORE the route spends a proof attempt: none of them reads a word list,
+// so a stranger holding the address learns nothing from them that the account page does not
+// already show (the live name, and when it can change). → null | { ok:false, code, error?, available_at? }
+function namePrecheck(db, address, name, opts = {}) {
+  const now = clock(opts);
+  const live = liveNameRow(db, address);
+  if (live && live.name === name) return { ok: false, code: 'unchanged', error: NAME_TEXT.unchanged };
+  const at = nameChangeAvailableAt(db, address, now);
+  if (at !== null) {
+    return { ok: false, code: 'name_cooldown', available_at: at,
+             error: `A donor name can be changed once every ${NAME_CHANGE_DAYS} days. Your next change is possible from ${new Date(at * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC.` };
+  }
+  const lower = name.toLowerCase();
+  if (lower.startsWith('grin1') || lower.startsWith('tgrin1')) {
+    return { ok: false, code: 'name_address', error: NameRule.DONOR_RULE_TEXT.name_address };
+  }
+  return null;
+}
+
+// Submit → check → live. opts: { isDonor (MUST be true — see gateSubmit), rule: nameRuleContext(),
+// now }. Everything runs in ONE transaction, the precheck included (the route ran it already, but
+// the proof check awaited in between). A refused name's text is stored nowhere.
+// → { ok:true, id, kind, name, replaced_id, submitted_at }
+//   | { ok:false, code, error?, available_at?, hit? }   hit = { list, entry } on name_not_allowed
+//                                                       and { why: banned|taken } on name_unavailable —
+//                                                       for the server log / audit, NEVER the response
 function submitName(db, address, rawName, opts = {}) {
   const v = validateName(rawName);
   if (!v.ok) return v;
-  const r = submit(db, address, 'name', { name: v.name }, opts);
-  return r.ok ? Object.assign(r, { name: v.name }) : r;
+  const now = clock(opts);
+  const ctx = opts.rule || nameRuleContext('', '');
+  try {
+    return db.transaction(() => {
+      const bad = gateSubmit(db, address, opts);
+      if (bad) return { ok: false, code: bad };
+      const pre = namePrecheck(db, address, v.name, { now });
+      if (pre) return pre;
+      const r = NameRule.check(v.name, ctx);
+      if (!r.ok) {
+        if (r.code === 'name_reserved' || r.code === 'name_blocked') {
+          return { ok: false, code: 'name_not_allowed', error: NAME_TEXT.name_not_allowed, hit: { list: r.list, entry: r.entry } };
+        }
+        return { ok: false, code: r.code, error: NameRule.DONOR_RULE_TEXT[r.code] || NAME_TEXT.name_not_allowed };
+      }
+      if (isBannedNorm(db, r.norm)) return { ok: false, code: 'name_unavailable', error: NAME_TEXT.name_unavailable, hit: { why: 'banned' } };
+      if (nameHolders(db, r.norm, address).length) return { ok: false, code: 'name_unavailable', error: NAME_TEXT.name_unavailable, hit: { why: 'taken' } };
+
+      // A pre-C4 pending name cannot survive the startup migration, but never leave two rows
+      // the unique indexes would have to arbitrate: any pending name goes too.
+      db.prepare(`UPDATE donor_requests SET status = 'replaced', decided_at = ?
+                  WHERE grin_address = ? AND kind = 'name' AND status = 'pending'`).run(now, address);
+      const prev = liveNameRow(db, address);
+      if (prev) db.prepare("UPDATE donor_requests SET status = 'replaced', decided_at = ? WHERE id = ?").run(now, prev.id);
+      // decided_by NULL = the automatic check approved it (an admin id here means a human did,
+      // which since C4 only the pre-C4 history can say).
+      const info = db.prepare(`
+        INSERT INTO donor_requests (grin_address, kind, status, name, submitted_at, decided_at)
+        VALUES (?, 'name', 'approved', ?, ?, ?)
+      `).run(address, r.name, now, now);
+      return { ok: true, id: Number(info.lastInsertRowid), kind: 'name', name: r.name, replaced_id: prev ? prev.id : null, submitted_at: now };
+    })();
+  } catch (e) {
+    if (isConstraint(e)) return { ok: false, code: 'conflict' };
+    throw e;
+  }
+}
+
+// ── name bans (admin) ───────────────────────────────────────────────────────────────────────
+// Why a pool table of its own and not one banned-names table with a scope column (§19.17.6 left
+// the choice to C4): the pool has exactly ONE name namespace — donor names. Game nicknames are
+// banned in the games' own database (D5: the services share no table), so a scope column here
+// would hold one value forever and invite a second namespace nobody designed.
+
+// Ban a matching form: no spelling of it can be taken again, and every address that holds it
+// live loses it now (reason shown to them, as for a remove). One transaction, one audit row
+// (target_type 'donor_name') listing the holders removed.
+// → { ok:true, norm, removed: [{ id, address }] } | { ok:false, code:'bad_name'|'already_banned' }
+function banName(db, rawName, opts = {}) {
+  const shown = String(rawName == null ? '' : rawName).replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 64);
+  const norm = nameNorm(shown);
+  if (!BAN_NORM_RE.test(norm)) return { ok: false, code: 'bad_name' };
+  const now = clock(opts);
+  const reason = cleanReason(opts.reason);
+  const adminId = Number.isFinite(opts.adminId) ? opts.adminId : null;
+  try {
+    return db.transaction(() => {
+      if (isBannedNorm(db, norm)) return { ok: false, code: 'already_banned' };
+      db.prepare('INSERT INTO banned_donor_names (norm, name, banned_at, banned_by, reason) VALUES (?, ?, ?, ?, ?)')
+        .run(norm, shown, now, adminId, reason);
+      const holders = nameHolders(db, norm, null);
+      for (const h of holders) {
+        db.prepare("UPDATE donor_requests SET status = 'removed', decided_at = ?, decided_by = ?, reason = ? WHERE id = ?")
+          .run(now, adminId, reason, h.id);
+      }
+      const removed = holders.map((h) => ({ id: h.id, address: h.grin_address }));
+      audit(db, adminId, 'donor_name_ban', norm, { name: shown, reason, removed }, opts.ip, 'donor_name');
+      return { ok: true, norm, removed };
+    })();
+  } catch (e) {
+    if (isConstraint(e)) return { ok: false, code: 'already_banned' };
+    throw e;
+  }
+}
+
+// Lift a ban. Nothing is restored: a removed name stays removed. → { ok:true, norm } | { ok:false, code:'bad_name'|'not_banned' }
+function unbanName(db, norm, opts = {}) {
+  const n = String(norm == null ? '' : norm);
+  if (!BAN_NORM_RE.test(n)) return { ok: false, code: 'bad_name' };
+  return db.transaction(() => {
+    const row = db.prepare('SELECT name FROM banned_donor_names WHERE norm = ?').get(n);
+    if (!row) return { ok: false, code: 'not_banned' };
+    db.prepare('DELETE FROM banned_donor_names WHERE norm = ?').run(n);
+    audit(db, opts.adminId, 'donor_name_unban', n, { name: row.name }, opts.ip, 'donor_name');
+    return { ok: true, norm: n };
+  })();
+}
+
+// The ban list for the admin page, newest first.
+function bannedNames(db) {
+  return db.prepare('SELECT norm, name, banned_at, banned_by, reason FROM banned_donor_names ORDER BY banned_at DESC, norm').all();
+}
+
+// ── the C4 migration: pending names → the automatic check ─────────────────────────────────
+// Run at every start (index.js), after the blocked-word carry-over. Idempotent: since C4 nothing
+// writes a pending name, so after the first run it finds none. Each pending name, oldest first,
+// goes through the same check a submit does, minus the 7-day limit (the request predates it):
+// pass and available → approved (the address's previous approved → replaced), else → rejected
+// with a reason the donor can read. Already-APPROVED names are KEPT — a human approved them —
+// and the admin list flags any pair that now collides. Each decision writes one audit row
+// (admin_id NULL = the system), inside its own transaction.
+const MIGRATION_REASON = Object.freeze({
+  rule: 'Donor names are now checked automatically, and this one did not pass. Please choose another.',
+  unavailable: 'Donor names are now checked automatically, and this one is not available. Please choose another.',
+});
+function migratePendingNames(db, opts = {}) {
+  const now = clock(opts);
+  const ctx = opts.rule || nameRuleContext('', '');
+  const out = { approved: 0, rejected: 0 };
+  const rows = db.prepare("SELECT id, grin_address, name FROM donor_requests WHERE kind = 'name' AND status = 'pending' ORDER BY submitted_at, id").all();
+  for (const row of rows) {
+    db.transaction(() => {
+      const cur = db.prepare('SELECT status FROM donor_requests WHERE id = ?').get(row.id);
+      if (!cur || cur.status !== 'pending') return;
+      const r = NameRule.check(row.name, ctx);
+      let outcome = 'approved';
+      let reason = null;
+      if (!r.ok) { outcome = 'rejected'; reason = MIGRATION_REASON.rule; }
+      else if (isBannedNorm(db, r.norm) || nameHolders(db, r.norm, row.grin_address).length) { outcome = 'rejected'; reason = MIGRATION_REASON.unavailable; }
+      if (outcome === 'approved') {
+        const prev = liveNameRow(db, row.grin_address);
+        if (prev) db.prepare("UPDATE donor_requests SET status = 'replaced', decided_at = ? WHERE id = ?").run(now, prev.id);
+        db.prepare("UPDATE donor_requests SET status = 'approved', decided_at = ?, decided_by = NULL, reason = NULL WHERE id = ?").run(now, row.id);
+        out.approved++;
+      } else {
+        db.prepare("UPDATE donor_requests SET status = 'rejected', decided_at = ?, decided_by = NULL, reason = ? WHERE id = ?").run(now, reason, row.id);
+        out.rejected++;
+      }
+      audit(db, null, 'donor_name_auto_v2', row.grin_address,
+            { request_id: row.id, outcome, check: r.ok ? 'ok' : r.code }, null);
+    })();
+  }
+  return out;
 }
 
 // → { ok:true, id, kind, mime, width, height, bytes, replaced, submitted_at } | { ok:false, code, error? }
@@ -548,9 +752,12 @@ function profileFor(db, address, opts = {}) {
     name: {
       live: nameState === 'shown' ? nameAp.live_name : null,
       state: nameState,
+      // Always null since C4 (names go live at once); kept so the shape does not move.
       pending_at: namePend ? namePend.submitted_at : null,
       rejected: nameWord.rejected,
-      removed: nameWord.removed
+      removed: nameWord.removed,
+      // C4: when the 7-day change limit lets this address set a name again; null = now.
+      change_available_at: nameChangeAvailableAt(db, address, now)
     },
     banner: {
       live_url: liveUrl,
@@ -618,32 +825,37 @@ const QUEUE_MAX = 500;
 // The review queue (§18.6): rows of one status, oldest first for `pending` (first come, first
 // reviewed) and newest decision first for the rest. Never selects `image` — a banner row says
 // whether its bytes can be fetched (`has_image`), and the admin page asks the image route.
-//   opts: { status = 'pending', limit, ds = donorSettings() (listText, poolName) }
-// → { ok:true, status, total, rows } | { ok:false, code:'bad_status' }
+// Since C4 the queue is BANNERS: names are checked automatically and listed by adminNames().
+// `kind` narrows the rows (the admin page asks for banners); absent = both, for the history.
+//   opts: { status = 'pending', kind, limit }
+// → { ok:true, status, total, rows } | { ok:false, code:'bad_status'|'bad_kind' }
 // Each row: id, address, kind, status, name (name rows), mime/width/height/bytes/sha256 (banner
-// rows), has_image, submitted_at, decided_at, decided_by, reason, flags (name rows — see
-// donor-names.js nameFlags), current (the address's approved item of the same kind: its name,
-// or its banner URL — so a reviewer sees a rename as a rename), blocked.
+// rows), has_image, submitted_at, decided_at, decided_by, reason, current (the address's
+// approved item of the same kind: its name, or its banner URL — so a reviewer sees a
+// replacement as one), blocked. (The C3-era `flags` hints went with the name queue.)
 function adminQueue(db, opts = {}) {
   const status = opts.status === undefined || opts.status === null || opts.status === '' ? 'pending' : opts.status;
   if (!STATUSES.includes(status)) return { ok: false, code: 'bad_status' };
+  const kind = opts.kind === undefined || opts.kind === null || opts.kind === '' ? null : opts.kind;
+  if (kind !== null && !isKind(kind)) return { ok: false, code: 'bad_kind' };
   const lim = Number.isSafeInteger(opts.limit) && opts.limit > 0 ? Math.min(opts.limit, QUEUE_MAX) : QUEUE_MAX;
   const order = status === 'pending' ? 'submitted_at ASC, id ASC' : 'decided_at DESC, id DESC';
+  const kindSql = kind === null ? '' : ' AND kind = ?';
+  const args = kind === null ? [status] : [status, kind];
   const rows = db.prepare(`
     SELECT id, grin_address, kind, status, name, file, mime, width, height, bytes, sha256,
            submitted_at, decided_at, decided_by, reason,
            CASE WHEN image IS NULL THEN 0 ELSE 1 END AS has_blob
-    FROM donor_requests WHERE status = ? ORDER BY ${order} LIMIT ?
-  `).all(status, lim);
-  const total = db.prepare('SELECT COUNT(*) AS n FROM donor_requests WHERE status = ?').get(status).n;
+    FROM donor_requests WHERE status = ?${kindSql} ORDER BY ${order} LIMIT ?
+  `).all(...args, lim);
+  const total = db.prepare(`SELECT COUNT(*) AS n FROM donor_requests WHERE status = ?${kindSql}`).get(...args).n;
 
+  // `id` is selected so an APPROVED row (the history view) is not shown as replacing itself.
   const approved = db.prepare(`
-    SELECT grin_address AS address, kind, name, file FROM donor_requests WHERE status = 'approved'
+    SELECT id, grin_address AS address, kind, name, file FROM donor_requests WHERE status = 'approved'
   `).all();
   const liveOf = new Map();                       // `${address}|${kind}` → approved row
   for (const a of approved) liveOf.set(`${a.address}|${a.kind}`, a);
-  const ds = opts.ds || {};
-  const ctx = nameFlagContext(ds.listText, ds.poolName, approved.filter((a) => a.kind === 'name'));
   const blocked = new Set(db.prepare('SELECT grin_address FROM donor_blocks').all().map((r) => r.grin_address));
 
   return {
@@ -668,7 +880,6 @@ function adminQueue(db, opts = {}) {
         decided_at: r.decided_at,
         decided_by: r.decided_by,
         reason: r.reason,
-        flags: isBanner ? [] : nameFlags(r.name, r.grin_address, ctx),
         current: live && live.id !== r.id
           ? (isBanner ? { url: publicUrl(live.file) } : { name: live.name })
           : null,
@@ -740,6 +951,64 @@ function adminProfiles(db, opts = {}) {
   return out;
 }
 
+// The donor-names admin list (§19.17.6 "Live names"), FULL addresses — secureAdmin only.
+//   opts: { state: 'live' (default) | 'removed', q, rule: nameRuleContext(), limit }
+// live rows:    id, address, name, set_at, approved_by (admin id; null = the automatic check),
+//               hit (what the rule answers TODAY: null, or { code, list, entry } — a word added
+//               after the name went live is HINTED here, never applied by itself: taking a live
+//               name down is a human decision), banned (its form is on the ban list), same_as
+//               (other addresses whose approved name has the same matching form — only names
+//               approved before C4 can collide), blocked.
+// removed rows: id, address, name, set_at, removed_at, removed_by (admin id; null = the donor
+//               took it down, or a pre-C4 row), reason.
+// q: an address start, or a name fragment compared on the matching form (so `sh1t` finds Shit).
+// → { ok:true, state, total, rows } | { ok:false, code:'bad_state' }
+function adminNames(db, opts = {}) {
+  const state = opts.state === undefined || opts.state === null || opts.state === '' ? 'live' : opts.state;
+  if (state !== 'live' && state !== 'removed') return { ok: false, code: 'bad_state' };
+  const lim = Number.isSafeInteger(opts.limit) && opts.limit > 0 ? Math.min(opts.limit, QUEUE_MAX) : QUEUE_MAX;
+  const q = typeof opts.q === 'string' ? opts.q.trim().slice(0, 64) : '';
+  const qNorm = nameNorm(q);
+  const match = (r) => q === '' || r.grin_address.startsWith(q) || (qNorm !== '' && nameNorm(r.name).includes(qNorm));
+  const status = state === 'live' ? 'approved' : 'removed';
+  const order = state === 'live' ? 'submitted_at DESC, id DESC' : 'decided_at DESC, id DESC';
+  const all = db.prepare(`
+    SELECT id, grin_address, name, submitted_at, decided_at, decided_by, reason
+    FROM donor_requests WHERE kind = 'name' AND status = ? ORDER BY ${order}
+  `).all(status).filter(match);
+  const rows = all.slice(0, lim);
+  if (state === 'removed') {
+    return {
+      ok: true, state, total: all.length,
+      rows: rows.map((r) => ({ id: r.id, address: r.grin_address, name: r.name, set_at: r.submitted_at,
+                               removed_at: r.decided_at, removed_by: r.decided_by, reason: r.reason }))
+    };
+  }
+  const ctx = opts.rule || nameRuleContext('', '');
+  const byNorm = new Map();
+  for (const r of db.prepare("SELECT grin_address, name FROM donor_requests WHERE kind = 'name' AND status = 'approved'").all()) {
+    const n = nameNorm(r.name);
+    if (!byNorm.has(n)) byNorm.set(n, []);
+    byNorm.get(n).push(r.grin_address);
+  }
+  const banned = new Set(db.prepare('SELECT norm FROM banned_donor_names').all().map((r) => r.norm));
+  const blocked = new Set(db.prepare('SELECT grin_address FROM donor_blocks').all().map((r) => r.grin_address));
+  return {
+    ok: true, state, total: all.length,
+    rows: rows.map((r) => {
+      const n = nameNorm(r.name);
+      const v = NameRule.check(r.name, ctx);
+      return {
+        id: r.id, address: r.grin_address, name: r.name, set_at: r.submitted_at, approved_by: r.decided_by,
+        hit: v.ok ? null : { code: v.code, list: v.list || null, entry: v.entry || null },
+        banned: banned.has(n),
+        same_as: (byNorm.get(n) || []).filter((a) => a !== r.grin_address),
+        blocked: blocked.has(r.grin_address)
+      };
+    })
+  };
+}
+
 // The nav badge + dashboard tile: requests waiting for a decision.
 function pendingCount(db) {
   const r = db.prepare("SELECT COUNT(*) AS n FROM donor_requests WHERE status = 'pending'").get();
@@ -748,14 +1017,15 @@ function pendingCount(db) {
 
 module.exports = {
   KINDS, STATUSES,
-  NAME_MIN, NAME_MAX, NAME_RULE,
+  NAME_MIN, NAME_MAX, NAME_RULE, NAME_CHANGE_DAYS, NAME_TEXT,
   MAX_BANNER_BYTES, BANNER, BANNER_RULE,
-  normaliseName, validateName,
+  validateName, nameRuleContext, namePrecheck, nameChangeAvailableAt,
   sniffBanner, parseDimensions, validateBanner,
   cleanReason,
   submitName, submitBanner, withdraw, removeLive,
   approve, reject, block, unblock,
+  banName, unbanName, bannedNames, migratePendingNames,
   profileFor, publicProfiles,
-  adminQueue, requestImage, adminProfiles, pendingCount,
+  adminQueue, adminNames, requestImage, adminProfiles, pendingCount,
   publicUrl, bannerSlots
 };

@@ -81,8 +81,8 @@ function createSessions({ db, settings, now = () => Math.floor(Date.now() / 1000
       'SELECT token_hash FROM sessions WHERE address = ? AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at ASC, token_hash ASC'),
     get: raw.prepare(
       'SELECT s.token_hash, s.address, s.created_at, s.expires_at, s.last_seen, s.ip_coarse, s.proof_kind, s.proof_slot, ' +
-      's.chat_ok_after, s.revoked_at, p.banned_until, p.muted_until ' +
-      'FROM sessions s JOIN players p ON p.address = s.address WHERE s.token_hash = ?'),
+      's.chat_ok_after, s.revoked_at, p.banned_until, p.muted_until, p.kind, p.deleted_at, g.created_at AS guest_created_at ' +
+      'FROM sessions s JOIN players p ON p.address = s.address LEFT JOIN guests g ON g.id = s.address WHERE s.token_hash = ?'),
     touch: raw.prepare('UPDATE sessions SET last_seen = ? WHERE token_hash = ?'),
     revoke: raw.prepare('UPDATE sessions SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL'),
     revokeAll: raw.prepare('UPDATE sessions SET revoked_at = ? WHERE address = ? AND revoked_at IS NULL'),
@@ -98,8 +98,15 @@ function createSessions({ db, settings, now = () => Math.floor(Date.now() / 1000
       'ON CONFLICT(address) DO UPDATE SET last_seen = excluded.last_seen'),
   };
 
-  // D9, §19.5 step 5. → unix seconds, or null = never.
+  // D9, §19.5 step 5. → unix seconds, or null = never. A guest (D26, §19.17.3) waits on the
+  // ACCOUNT's age instead — proof.created_at is the guest's sign-up time. auth.chatStatus
+  // recomputes that gate live from guests.created_at, so this stored value is a record of the
+  // gate at login, not the gate itself (an operator who raises guest_chat_min_age mid-flood
+  // closes chat to guest sessions already open).
   function chatOkAfter(proof, t) {
+    if (proof.method === 'guest') {
+      return proof.created_at + Math.max(CHAT_MIN_AGE_FLOOR, settings.get('guest_chat_min_age'));
+    }
     if (proof.slot === 'anchor') return null;
     if (settings.get('chat_requires_password') && proof.method !== 'password') return null;
     const minAge = Math.max(CHAT_MIN_AGE_FLOOR, settings.get('chat_min_proof_age'));
@@ -124,7 +131,9 @@ function createSessions({ db, settings, now = () => Math.floor(Date.now() / 1000
     return { token, hash, expiresAt: t + SESSION_TTL_S };
   }
 
-  // The session for a cookie value, or null. Revoked, expired and banned all read as null.
+  // The session for a cookie value, or null. Revoked, expired and banned all read as null, and
+  // so does a deleted guest (§19.17.3: the delete revokes every session too — this is the
+  // second guard) and a guest session whose guests row is gone.
   // A duplicated cookie name parses as null upstream (http.js parseCookies), which lands here.
   function lookup(token) {
     if (typeof token !== 'string' || !TOKEN_RE.test(token)) return null;
@@ -133,6 +142,8 @@ function createSessions({ db, settings, now = () => Math.floor(Date.now() / 1000
     const t = now();
     if (!s || s.revoked_at !== null || !(s.expires_at > t)) return null;
     if (s.banned_until !== null && s.banned_until > t) return null;
+    if (s.deleted_at !== null) return null;
+    if (s.kind === 'guest' && s.guest_created_at === null) return null;
     if (t - s.last_seen >= TOUCH_EVERY_S) { stmts.touch.run(t, hash); s.last_seen = t; }
     return s;
   }

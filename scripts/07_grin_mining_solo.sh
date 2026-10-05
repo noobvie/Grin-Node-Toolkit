@@ -374,6 +374,13 @@ graceful_restart_grin() {
         return 0
     fi
 
+    # Planned-stop marker BEFORE the signal (this SIGTERM bypasses gnc_kill_*),
+    # keyed on the canonical session name so the recorder can map it to a net.
+    local _mark_sess
+    if _mark_sess=$(gnc_session_of_pid "$grin_pid"); then
+        gnc_mark_planned_stop "$_mark_sess" "solo stratum config restart"
+    fi
+
     info "Sending SIGTERM to grin process (PID $grin_pid)..."
     kill -TERM "$grin_pid" 2>/dev/null || true
 

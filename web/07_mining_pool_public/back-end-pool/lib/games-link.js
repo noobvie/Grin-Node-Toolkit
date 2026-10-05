@@ -9,9 +9,11 @@
 //
 //   POST /internal/games/verify-proof   games → pool   one ownership proof, on the REAL client IP
 //   GET  /internal/games/activity       games → pool   active miner-minutes in a ≤ 1 h window
-//   GET  /internal/games/config         games → pool   the `games` settings section
+//   GET  /internal/games/config         games → pool   the `games` settings section, plus the
+//                                                      name lists (§19.17.5: blocked_words, pool_name)
 //   ALL  /api/admin/games/*             admin → pool → games /internal/admin/*
-//   GET  /play/api/health               pool → games   every 60 s, 1 s timeout, never awaited
+//   GET  /play/api/health               pool → games   every 60 s, 1 s timeout, never awaited;
+//                                                      also carries the games' LAUNCH state (§19.17.2)
 //
 // ⚠ THE HARD CONSTRAINT (§19 preamble): nothing here may slow down, restart or endanger
 // mining. The stratum server shares this process and its ONE synchronous DB connection, so:
@@ -47,6 +49,10 @@ const GAMES_MODES = PoolSettings.GAMES_MODES;
 // The same shape check /api/account applies (index.js setupRoutes). The network prefix is
 // checked separately: a tgrin1 address on a mainnet pool is well-formed and still wrong.
 const GRIN_ADDR_RE = /^t?grin1[ac-hj-np-z02-9]{58}$/;
+// names.blocked_words entries as the validator stores them, and its entry cap (§19.17.5). The
+// games side (play/server/lib/pool-link.js) re-checks the same shape on receipt.
+const NAME_ENTRY_RE = /^[*=]?[a-z0-9]{1,32}$/;
+const NAME_ENTRIES_MAX = 500;
 
 const LINK_MIN_BYTES = 32;            // §19.3: shorter = "not configured"
 const LINK_MAX_BYTES = 4096;          // a link file this big is not ours; never read it
@@ -112,6 +118,19 @@ const PROXY_QUERY_RE = /^[A-Za-z0-9_.~%=&+-]*$/;
 function requiresStepUp(method, relPath) {
   if (method === 'GET') return false;
   return !FAST_WRITES.some(([m, re]) => m === method && re.test(relPath));
+}
+
+// The effective games mode (design §19.17.2, D30): the LOWER of this pool's `games.mode` and the
+// launch state the games service reports in its health answer, with off < preview < on. The games
+// service applies the same rule to its own routes (play/server/lib/mode.js effectiveMode) — a
+// COPY, never a require (§19.1 D5: neither side loads the other's code); test-games-link.js runs
+// both over the whole table. Launch is 'on' only for the exact string; anything else — an older
+// games build that sends no `launch`, a typo — reads as 'preview', the side that hides the nav.
+const MODE_RANK = { off: 0, preview: 1, on: 2 };
+function effectiveMode(poolMode, launch) {
+  const p = Object.prototype.hasOwnProperty.call(MODE_RANK, poolMode) ? poolMode : 'off';
+  const l = launch === 'on' ? 'on' : 'preview';
+  return MODE_RANK[p] <= MODE_RANK[l] ? p : l;
 }
 
 function isLoopbackIp(ip) {
@@ -213,7 +232,7 @@ function createGamesLink(opts = {}) {
   let activityStmt = null;
   let secretMemo = { at: 0, mtimeMs: -1, size: -1, value: null };
   let probeTimer = null;
-  let probe = { healthy: false, checked_at: null, reason: 'not_checked', schema: null, uptime_s: null };
+  let probe = { healthy: false, checked_at: null, reason: 'not_checked', schema: null, launch: null, uptime_s: null };
 
   // A token bucket on the injected clock: `capacity` calls, refilled evenly over `windowMs`.
   function makeBucket(capacity, windowMs) {
@@ -280,14 +299,17 @@ function createGamesLink(opts = {}) {
     };
   }
 
-  // What the public branding payload says (D12): the configured mode while the games service
-  // answers its health check, else 'off' — so a stopped or crashed games service hides the nav
-  // link without anyone touching a setting. Never throws; any failure reads as off.
+  // What the public branding payload says (D12, §19.17.2): the EFFECTIVE mode — min(this pool's
+  // mode, the games' launch state) — while the games service answers its health check, else
+  // 'off', so a stopped or crashed games service hides the nav without anyone touching a
+  // setting. The nav, and later the chat bubble (§19.17.7), follow this one answer. Never
+  // throws; any failure reads as off.
   function publicFlag() {
     try {
       if (!deps || !probe.healthy) return { mode: 'off', chat: false };
       const g = gamesSettings();
-      return { mode: g.mode, chat: g.mode !== 'off' && g.chat_enabled };
+      const mode = effectiveMode(g.mode, probe.launch);
+      return { mode, chat: mode !== 'off' && g.chat_enabled };
     } catch (e) {
       return { mode: 'off', chat: false };
     }
@@ -304,14 +326,19 @@ function createGamesLink(opts = {}) {
         settled = true;
         clearTimeout(hard);
         const was = probe.healthy;
+        const wasLaunch = probe.launch;
         probe = {
           healthy,
           checked_at: Math.floor(now() / 1000),
           reason,
           schema: healthy && Number.isInteger(j.schema) ? j.schema : null,
+          // null while unhealthy (the flag is off anyway); 'on' only for the exact string.
+          launch: healthy ? (j.launch === 'on' ? 'on' : 'preview') : null,
           uptime_s: healthy && Number.isInteger(j.uptime_s) ? j.uptime_s : null,
         };
-        if (was !== healthy && deps && typeof deps.onHealthChange === 'function') {
+        // A health flip AND a launch flip both change publicFlag(), so both flush the branding
+        // memo (§19.17.2) — the callback keeps its old name; it means "the flag may have moved".
+        if ((was !== healthy || (healthy && wasLaunch !== probe.launch)) && deps && typeof deps.onHealthChange === 'function') {
           try { deps.onHealthChange(healthy); } catch (e) { /* a cache flush must not break the probe */ }
         }
         resolve(probe);
@@ -432,7 +459,26 @@ function createGamesLink(opts = {}) {
     // 503, not a guessed 'off': the games service keeps its last known mode for ≤ 10 min when
     // it cannot learn the current one (§19.2), which a fake 'off' here would defeat.
     try { g = gamesSettings(); } catch (e) { return fail(res, 503, 'settings_unavailable'); }
-    return sendJson(res, 200, { ok: true, mode: g.mode, chat_enabled: g.chat_enabled, net: net_() });
+    return sendJson(res, 200, { ok: true, mode: g.mode, chat_enabled: g.chat_enabled, net: net_(), ...nameLists() });
+  }
+
+  // The pool's half of the name lists (design §19.17.5, D28): the operator's blocked words, as
+  // stored (matching form, optional * / = prefix — the validator wrote them), and the pool's
+  // name, which the games treat as a reserved word. Re-filtered on read: a hand-edited row must
+  // not reach the games as something the validator never accepted. Unreadable → both fields
+  // OMITTED, never an empty list: the games then keep their last good copy instead of dropping
+  // every operator word because of one bad read.
+  function nameLists() {
+    try {
+      const s = deps.poolSettings.getSection('names');
+      const text = typeof s.blocked_words === 'string' ? s.blocked_words : '';
+      const blocked = text.split('\n').map((w) => w.trim()).filter((w) => NAME_ENTRY_RE.test(w)).slice(0, NAME_ENTRIES_MAX);
+      const p = deps.poolSettings.getSection('pool_info');
+      const poolName = typeof p.pool_name === 'string' ? p.pool_name.trim().slice(0, 64) : '';
+      return { blocked_words: blocked, pool_name: poolName };
+    } catch (e) {
+      return {};
+    }
   }
 
   // Mounted with app.use() ahead of express.json(). Anything outside /internal passes through
@@ -537,6 +583,10 @@ function createGamesLink(opts = {}) {
       res.status(status).type('application/json').send(bodyText);
     };
     const offline = () => finish(503, JSON.stringify({ error: 'games_offline' }));
+    // Go live / Back to preview (§19.17.2): re-probe as soon as games has answered, so the nav
+    // follows within a second instead of at the next 60 s tick. Fire-and-forget — the probe is
+    // never awaited from a request handler (the 'launch' path is step-up, so this is admin-only).
+    const reprobe = method === 'POST' && relPath === 'launch';
 
     let up;
     const hard = setTimeout(() => { if (up) up.destroy(); offline(); }, PROXY_TIMEOUT_MS);
@@ -558,6 +608,7 @@ function createGamesLink(opts = {}) {
           const text = Buffer.concat(chunks).toString('utf8');
           try { JSON.parse(text); } catch (e) { return finish(502, JSON.stringify({ error: 'games_bad_response' })); }
           finish(r.statusCode, text);
+          if (reprobe && r.statusCode === 200) probeOnce();
         });
       });
       up.on('error', offline);
@@ -575,6 +626,9 @@ function createGamesLink(opts = {}) {
       mode: g.mode,
       chat_enabled: g.chat_enabled,
       settings_readable: settingsReadable,
+      // The games' launch state as the last healthy probe read it (null = not known), and the
+      // effective mode the public pages see (§19.17.2).
+      launch: probe.launch,
       public_mode: publicFlag().mode,
       net: net_(),
       games_port: gamesPort(),
@@ -628,6 +682,7 @@ function createGamesLink(opts = {}) {
 module.exports = {
   createGamesLink,
   requiresStepUp,
+  effectiveMode,
   ACTIVITY_SQL,
   FAST_WRITES,
   GAMES_MODES,

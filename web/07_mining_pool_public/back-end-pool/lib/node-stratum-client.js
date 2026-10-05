@@ -52,6 +52,15 @@ class NodeStratumClient {
     // sized well above legitimate in-flight for a ~2000-miner pool (a few thousand at most even
     // during a brief hiccup); tune via config.max_pending_submits.
     this.maxPending   = config.max_pending_submits || 20000;
+    // Optional observer: called with true on connect and false when an ESTABLISHED link closes
+    // (a failed reconnect attempt is not a new drop). Set by index.js to
+    // NodeAvailability.noteStratumLink. Display/recording only — it can never affect a submit.
+    this.onLinkChange = null;
+  }
+
+  _emitLink(up) {
+    if (typeof this.onLinkChange !== 'function') return;
+    try { this.onLinkChange(up); } catch (_) { /* an observer must never break the node link */ }
   }
 
   start() {
@@ -72,6 +81,7 @@ class NodeStratumClient {
       this.connected = true;
       console.log(`[${new Date().toISOString()}] NodeStratumClient connected to node stratum ${this.host}:${this.port}`);
       this.sendLogin();
+      this._emitLink(true);
     });
 
     this.socket.on('data', (data) => {
@@ -95,7 +105,9 @@ class NodeStratumClient {
     });
 
     this.socket.on('close', () => {
+      const wasConnected = this.connected;
       this.connected = false;
+      if (wasConnected && !this.stopping) this._emitLink(false);
       // Cancel all pending submits so callers don't hang
       for (const [id, { resolve, timer }] of this.pending) {
         clearTimeout(timer);

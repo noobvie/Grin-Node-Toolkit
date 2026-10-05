@@ -3,7 +3,24 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Payments | Grin Pool ツ</title>
+  <title>Payout queue | Grin Pool ツ</title>
+  <script>
+  // Old deep links (2026-10 split): the section rail slugged these headings while they lived on
+  // this page (admin-shell.js slugify of each h2's data-sec / text). Two now have pages of their
+  // own; the request audit is a section of the Security page, where the same data-sec gives the
+  // same slug. replace(), so Back does not bounce here again. It sits in <head>, ahead of every
+  // stylesheet and script, so the queue does not paint first — but replace() only STARTS the
+  // navigation: the body's scripts may still run (and fire their read-only GETs) until it lands.
+  (function () {
+    const MOVED = {
+      '#sec-reconciliation':     '/admin/treasury.html',
+      '#sec-abandoned-balances': '/admin/dormant.html',
+      '#sec-request-audit':      '/admin/users.html#sec-request-audit',
+    };
+    const to = MOVED[location.hash];
+    if (to) location.replace(to);
+  })();
+  </script>
   <link rel="stylesheet" href="/css/pool.css">
   <link rel="stylesheet" href="/admin/styles.css">
 </head>
@@ -59,227 +76,82 @@
           </table>
         </div>
       </div>
-      <p class="error-msg" id="pay-msg" style="display:none;margin-top:.6rem;"></p>
+      <p class="error-msg" id="pay-msg" data-payout-msg style="display:none;margin-top:.6rem;"></p>
+
     </section>
 
-    <!-- ── Wallet ↔ Ledger Reconciliation (custodial money statement) ──────── -->
+    <!-- ── Manual payouts (2026-10-05) ─────────────────────────────────────────
+         The two payouts an operator starts by hand. Both go through the same locked Tor flow as a
+         miner's own payout and appear in the queue above. Always OPEN (operator decision
+         2026-10-05): this used to be a collapsed <details>, which hid the one tool a support
+         ticket needs behind a click. -->
     <section>
-      <h2 data-sec="Reconciliation">
-        Wallet ↔ Ledger Reconciliation
-        <span id="recon-refresh" style="font-size:.75rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
-      </h2>
+      <h2 data-sec="Manual payouts">Manual payouts</h2>
       <p style="font-size:.82rem;color:var(--text-dim);margin:-.4rem 0 .8rem;">
-        Does the on-chain wallet hold at least what the pool owes? Money IN must always exceed OUT.
-        A nonzero <strong>integrity drift</strong> means a balance moved without a ledger row — a bug
-        or tampering. All amounts in GRIN (ツ). Times UTC.
+        Payouts you start by hand. Whatever the pool sends goes through the normal locked Tor flow —
+        sent once, recorded automatically, listed in the queue above — and nothing here runs while
+        payouts are frozen.
       </p>
 
-      <div id="recon-banner"></div>
+      <!-- Operator revenue: the pool_fee bucket → the operator's own wallet. -->
+      <h3 class="sub-title">Operator revenue → your wallet</h3>
+      <div class="card" style="padding:1rem;" id="rv-card">
+        <div class="kpi-grid" style="margin-bottom:.8rem;">
+          <div class="kpi-card"><div class="kpi-label" title="The pool_fee bucket: block-reward fee + flat withdrawal fees, minus prize diversions and earlier withdrawals">Pool fee balance</div><div class="kpi-value" id="rv-balance">—</div></div>
+          <div class="kpi-card"><div class="kpi-label" title="Real Grin network fees the pool wallet already paid on payouts, not yet deducted from the pool fee. They are deducted the moment you withdraw.">Network fees not yet booked</div><div class="kpi-value" id="rv-unbooked">—</div></div>
+          <div class="kpi-card"><div class="kpi-label">Available to withdraw</div><div class="kpi-value" id="rv-available">—</div></div>
+        </div>
+        <div id="rv-alert"></div>
+        <div id="rv-channels"></div>
+        <div style="font-size:.88rem;margin-bottom:.7rem;">
+          Revenue address: <span class="mono" id="rv-addr" style="word-break:break-all;">—</span>
+          <span id="rv-hold" style="margin-left:.4rem;"></span>
+        </div>
+        <div id="rv-pending" style="font-size:.85rem;margin-bottom:.6rem;display:none;"></div>
+        <div style="display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap;max-width:640px;">
+          <label style="flex:1 1 160px;">Amount ツ
+            <input type="number" id="rv-amount" class="input" step="0.000000001" min="0" placeholder="0.0">
+          </label>
+          <button class="btn btn-sm btn-outline" onclick="fillRevenueMax()" title="Available minus one withdrawal fee, kept back for this withdrawal's own network fee">Max</button>
+          <button class="btn btn-sm" id="rv-withdraw-btn" onclick="withdrawRevenue()" disabled>⚡ Withdraw to revenue address</button>
+        </div>
+        <div id="rv-result" style="font-size:.85rem;margin-top:.5rem;"></div>
 
-      <!-- Coverage -->
-      <h3 class="sub-title">Coverage</h3>
-      <div class="kpi-grid" id="recon-cov">
-        <div class="kpi-card"><div class="kpi-label">Wallet Spendable</div><div class="kpi-value" id="rc-w-spend">—</div></div>
-        <div class="kpi-card"><div class="kpi-label">Owed (withdrawable now)</div><div class="kpi-value" id="rc-owed-spend">—</div></div>
-        <div class="kpi-card"><div class="kpi-label">Liquid Gap (pay-now)</div><div class="kpi-value" id="rc-gap-liquid">—</div></div>
-        <div class="kpi-card"><div class="kpi-label">Wallet Total</div><div class="kpi-value" id="rc-w-total">—</div></div>
-        <div class="kpi-card"><div class="kpi-label">Owed (all)</div><div class="kpi-value" id="rc-owed-total">—</div></div>
-        <div class="kpi-card"><div class="kpi-label">Full Gap (solvency)</div><div class="kpi-value" id="rc-gap-full">—</div></div>
-      </div>
+        <div style="border-top:1px solid var(--border);margin:.9rem 0 .2rem;padding-top:.8rem;">
+          <div style="font-size:.8rem;color:var(--text-dim);margin-bottom:.5rem;">
+            Change the revenue address. Needs a fresh sign-in check, raises a <strong>critical alert</strong>, and
+            blocks withdrawals to the new address for <strong>24 hours</strong> — so a stolen admin session
+            cannot repoint and empty it in one go.
+          </div>
+          <div style="display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap;max-width:640px;">
+            <label style="flex:1 1 320px;">New revenue address
+              <input type="text" id="rv-new-addr" class="input" placeholder="grin1…" autocomplete="off">
+            </label>
+            <button class="btn btn-sm btn-outline" id="rv-save-btn" onclick="saveRevenueAddress()">Save address</button>
+          </div>
+          <div id="rv-save-result" style="font-size:.85rem;margin-top:.4rem;"></div>
+        </div>
 
-      <!-- Wallet maturity + pending -->
-      <h3 class="sub-title">Balance maturity</h3>
-      <div class="kpi-grid" id="recon-mat">
-        <div class="kpi-card"><div class="kpi-label">Maturing coinbase (wallet)</div><div class="kpi-value" id="rc-w-immature">—</div></div>
-        <div class="kpi-card"><div class="kpi-label">Immature blocks (not yet owed)</div><div class="kpi-value" id="rc-imm-blocks">—</div></div>
-        <div class="kpi-card"><div class="kpi-label">In-flight payouts (wallet locked)</div><div class="kpi-value" id="rc-w-locked">—</div></div>
-        <div class="kpi-card"><div class="kpi-label">Pending payouts (ledger)</div><div class="kpi-value" id="rc-pending">—</div></div>
-        <div class="kpi-card"><div class="kpi-label">Locked Drift</div><div class="kpi-value" id="rc-drift-locked">—</div></div>
-        <div class="kpi-card"><div class="kpi-label">Integrity Drift</div><div class="kpi-value" id="rc-drift-integrity">—</div></div>
-      </div>
-
-      <!-- Flow statement -->
-      <h3 class="sub-title">Flow statement (external money)</h3>
-      <div class="card" style="padding:0;">
+        <p style="font-size:.8rem;color:var(--text-dim);margin:.8rem 0 .5rem;">
+          Your wallet must be <strong>listening over Tor</strong> (<code>grin-wallet listen</code>) when the pool
+          sends, exactly like a miner's. Each withdrawal is recorded with its kernel and signed payment proof,
+          and is shown on the public Payments page as <em>Pool operator</em> (never your address).
+          For your records: <a href="/api/admin/export/operator-revenue.csv">⤓ Operator revenue CSV</a>
+          (per UTC day: fee income, prize diversions, network fees, net revenue, withdrawn).
+        </p>
         <div class="table-wrap">
           <table>
-            <thead>
-              <tr><th>Direction</th><th>Item</th><th style="text-align:right;">24h ツ</th><th style="text-align:right;">7d ツ</th><th style="text-align:right;">Lifetime ツ</th></tr>
-            </thead>
-            <tbody id="recon-flow-tbody">
-              <tr class="loading-row"><td colspan="5"><span class="spinner"></span>Loading…</td></tr>
-            </tbody>
+            <thead><tr><th>ID</th><th>Requested</th><th>Amount ツ</th><th>Status</th><th>Confirmed</th><th>To</th><th>Kernel</th></tr></thead>
+            <tbody id="rv-tbody"><tr class="loading-row"><td colspan="7"><span class="spinner"></span>Loading…</td></tr></tbody>
           </table>
         </div>
       </div>
 
-      <!-- Buckets: donation + fee → contest budget -->
-      <h3 class="sub-title">Fee &amp; prize buckets</h3>
-      <div class="card" style="padding:0;">
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr><th>Bucket</th><th>Current balance ツ</th><th>Details</th></tr>
-            </thead>
-            <tbody id="recon-bucket-tbody">
-              <tr class="loading-row"><td colspan="3"><span class="spinner"></span>Loading…</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-      <p class="error-msg" id="recon-msg" style="display:none;margin-top:.6rem;"></p>
-
-      <!-- Wallet-send audit: the wallet's OWN sends vs the pool ledger -->
-      <h3 class="sub-title">
-        Wallet-send audit
-        <span id="wa-summary" style="font-size:.78rem;color:var(--text-dim);font-weight:400;margin-left:.5rem;"></span>
-      </h3>
-      <p style="font-size:.82rem;color:var(--text-dim);margin:-.2rem 0 .6rem;">
-        Every confirmed send from the pool wallet, matched against the payout ledger. Anything
-        <strong>unmatched</strong> is an out-of-band <code>grin-wallet send</code> (operator sweep or theft) —
-        it does not appear in the queue above because it never went through the pool.
-      </p>
-      <div id="wa-banner"></div>
-      <div class="card" id="wa-card" style="padding:0;display:none;">
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr><th>Wallet tx</th><th style="text-align:right;">Amount ツ</th><th>When (UTC)</th><th>Slate</th></tr>
-            </thead>
-            <tbody id="wa-tbody"></tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- Wallet-identity guard + switch wizard -->
-      <h3 class="sub-title">
-        Wallet identity
-        <span id="wi-summary" style="font-size:.78rem;color:var(--text-dim);font-weight:400;margin-left:.5rem;"></span>
-      </h3>
-      <p style="font-size:.82rem;color:var(--text-dim);margin:-.2rem 0 .6rem;">
-        The pool pins its wallet's address (slatepack index 0, derived from the seed). If a different
-        wallet ever answers the owner API, payouts auto-freeze. <strong>Before switching wallets,
-        run the wizard</strong> so the guard adopts the new wallet instead of tripping.
-      </p>
-      <div id="wi-banner"></div>
-      <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.4rem;">
-        <button class="btn btn-sm" onclick="openSwitchWizard()">🔁 Switch wallet (guided)</button>
-      </div>
-
-      <!-- Guided switch flow -->
-      <div class="card" id="sw-card" style="display:none;padding:1rem;margin-top:.6rem;border:1px solid var(--accent);">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.6rem;">
-          <strong id="sw-title">Switch wallet</strong>
-          <button class="btn btn-sm btn-outline" onclick="closeSwitchWizard()">✕ Close</button>
-        </div>
-        <ol id="sw-steps" style="margin:0;padding-left:1.2rem;font-size:.9rem;line-height:1.7;">
-          <li id="sw-s1"><strong>Freeze payouts</strong> — stop the scheduler before touching the wallet.
-            <span id="sw-s1-state" class="badge" style="margin-left:.4rem;"></span>
-            <div><button class="btn btn-sm" id="sw-freeze-btn" onclick="wizFreeze()" style="margin-top:.3rem;">Freeze now</button></div></li>
-          <li id="sw-s2" style="margin-top:.5rem;"><strong>Let in-flight payouts settle</strong> —
-            <span id="sw-inflight">checking…</span>. Don't swap the wallet while sends are mid-flight.</li>
-          <li id="sw-s3" style="margin-top:.5rem;"><strong>Switch the wallet on the server</strong> — restore the seed / repoint the
-            listener, then wait for a full rescan so the balance is accurate. (Manual step on the VPS.)</li>
-          <li id="sw-s4" style="margin-top:.5rem;"><strong>Verify the new wallet</strong>
-            <button class="btn btn-sm btn-outline" onclick="wizVerify()" style="margin-left:.4rem;">Re-check</button>
-            <div id="sw-verify" style="margin-top:.3rem;font-size:.85rem;color:var(--text-dim);">not checked yet</div></li>
-          <li id="sw-s5" style="margin-top:.5rem;"><strong>Adopt new wallet + resume</strong> — pins the new wallet as the pool identity, then resumes payouts.
-            <div style="margin-top:.3rem;display:flex;gap:.5rem;flex-wrap:wrap;">
-              <button class="btn btn-sm" id="sw-adopt-btn" onclick="wizAdopt()" disabled>Adopt new wallet</button>
-              <button class="btn btn-sm btn-outline" id="sw-resume-btn" onclick="wizResume()" disabled>Resume payouts</button>
-            </div></li>
-        </ol>
-        <p id="sw-msg" style="margin:.6rem 0 0;font-size:.85rem;"></p>
-      </div>
-    </section>
-
-    <!-- ── Payout request audit ──────────────────────────────────────────────── -->
-    <section>
-      <h2 data-sec="Request audit">
-        Payout request audit
-        <span id="pa-summary" style="font-size:.82rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
-      </h2>
-      <p style="font-size:.82rem;color:var(--text-dim);margin:-.4rem 0 .8rem;">
-        Every ownership-gated money request — <strong>accepted and refused</strong> — so a
-        brute-force or spam run against the payout button is visible here rather than buried in
-        the web-server log. Origin is stored as a <strong>network prefix</strong>
-        (<code>/24</code> for IPv4, <code>/48</code> for IPv6), never the full address; that is
-        still enough for repeat attempts from one origin to group together. Country is resolved
-        when the request arrives. Times UTC.
-      </p>
-
-      <div style="display:flex;gap:.5rem;align-items:center;margin:0 0 .8rem;flex-wrap:wrap;">
-        <label style="font-size:.82rem;color:var(--text-dim);">Window
-          <select id="pa-days" class="input" style="width:auto;margin-left:.35rem;" onchange="loadPayoutAudit(true)">
-            <option value="1">24 hours</option>
-            <option value="7">7 days</option>
-            <option value="30" selected>30 days</option>
-            <option value="90">90 days</option>
-            <option value="180">180 days</option>
-            <option value="365">1 year</option>
-          </select>
-        </label>
-        <label style="font-size:.82rem;color:var(--text-dim);">Show
-          <select id="pa-result" class="input" style="width:auto;margin-left:.35rem;" onchange="loadPayoutAudit(true)">
-            <option value="all" selected>All</option>
-            <option value="deny">Refused only</option>
-            <option value="ok">Accepted only</option>
-          </select>
-        </label>
-        <button class="btn btn-sm btn-outline" onclick="loadPayoutAudit()">↻ Refresh</button>
-        <span id="pa-note" style="font-size:.8rem;color:var(--text-dim);"></span>
-      </div>
-
-      <div id="pa-banner"></div>
-
-      <div class="card" style="padding:0;overflow-x:auto;">
-        <table>
-          <thead><tr>
-            <th>Time (UTC)</th><th>Action</th><th>Result</th><th>Address</th>
-            <th>Origin prefix</th><th>Country</th><th>Detail</th>
-          </tr></thead>
-          <tbody id="pa-tbody"><tr><td colspan="7">Loading…</td></tr></tbody>
-        </table>
-      </div>
-      <p style="font-size:.78rem;color:var(--text-dim);margin:.5rem 0 0;">
-        Requests throttled by the rate limiter are rejected before this check runs and leave no
-        row here — a quiet table is not by itself proof that nothing was attempted. (Retention
-        is shown above the table and set by <strong>Keep audit trail (days)</strong> in
-        <a href="/admin/settings-database.html">Settings → Database</a>.)
-      </p>
-    </section>
-
-    <!-- ── Abandoned-balance disposition + manual payout ─────────────────────── -->
-    <section>
-      <h2>
-        Abandoned balances
-        <span id="dorm-summary" style="font-size:.82rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
-      </h2>
-      <p style="font-size:.82rem;color:var(--text-dim);margin:-.4rem 0 .8rem;">
-        Balances of addresses idle past the dormancy window are swept into the <strong>community
-        prize pool</strong> (never operator revenue), where they are given away through the pool's
-        published draws. Configure the window in
-        <a href="/admin/settings-payout.html">Settings → Payout</a>. Disposition is FINAL and honours
-        the payout freeze. All amounts GRIN (ツ), times UTC.
-      </p>
-
-      <div class="kpi-grid" id="dorm-kpis">
-        <div class="kpi-card"><div class="kpi-label">Policy</div><div class="kpi-value" id="dk-state">—</div></div>
-        <div class="kpi-card"><div class="kpi-label">Dormant balance</div><div class="kpi-value" id="dk-dormant">—</div></div>
-        <div class="kpi-card"><div class="kpi-label">Would sweep now</div><div class="kpi-value" id="dk-sweep">—</div></div>
-        <div class="kpi-card"><div class="kpi-label">Destination</div><div class="kpi-value" id="dk-recip">—</div></div>
-        <div class="kpi-card"><div class="kpi-label">Swept to prizes all-time</div><div class="kpi-value" id="dk-disposed">—</div></div>
-      </div>
-
-      <div style="display:flex;gap:.5rem;align-items:center;margin:.6rem 0 1rem;flex-wrap:wrap;">
-        <button class="btn btn-sm" id="dorm-run-btn" onclick="runDisposition()">♻ Run disposition now</button>
-        <span id="dorm-run-note" style="font-size:.8rem;color:var(--text-dim);"></span>
-      </div>
-      <p class="error-msg" id="dorm-msg" style="display:none;margin:.2rem 0 .8rem;"></p>
-
-      <!-- Sub-threshold ("email support to withdraw") payout for a below-minimum miner -->
-      <h3 class="sub-title">Pay a below-minimum miner</h3>
-      <p style="font-size:.82rem;color:var(--text-dim);margin:-.2rem 0 .7rem;">
+      <!-- Sub-threshold ("email support to withdraw") payout for a below-minimum miner. It lives
+           with the queue because it creates a row in it; its /api/admin/dormancy/* endpoints are
+           a backend naming accident. -->
+      <h3 class="sub-title" style="margin-top:1.4rem;">Miner below minimum — support request</h3>
+      <p style="font-size:.82rem;color:var(--text-dim);margin:.2rem 0 .7rem;">
         For a miner below the minimum who emails to withdraw. First <strong>verify they own the address</strong>
         (type the mining IP or rig password they gave you → match/no-match, nothing is revealed). Then either:
         <br>• <strong>Send Tor payout now</strong> — the pool sends it over Tor through the normal locked flow
@@ -336,32 +208,6 @@
           </div>
         </div>
       </div>
-
-      <!-- Dormant list (unmasked, operator) -->
-      <h3 class="sub-title">Dormant addresses <span id="dorm-list-note" style="font-size:.78rem;color:var(--text-dim);font-weight:400;"></span></h3>
-      <div class="card" style="padding:0;">
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr><th>Address</th><th style="text-align:right;">Balance ツ</th><th style="text-align:right;">Idle (days)</th><th>Disposal</th></tr>
-            </thead>
-            <tbody id="dorm-list-tbody"><tr class="loading-row"><td colspan="4"><span class="spinner"></span>Loading…</td></tr></tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- Disposition history -->
-      <h3 class="sub-title">Prize-pool sweep history</h3>
-      <div class="card" style="padding:0;">
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr><th>Date (UTC)</th><th style="text-align:right;">Swept ツ</th><th style="text-align:right;">Sources</th><th>Destination</th><th>Trigger</th></tr>
-            </thead>
-            <tbody id="dorm-hist-tbody"><tr class="loading-row"><td colspan="5"><span class="spinner"></span>Loading…</td></tr></tbody>
-          </table>
-        </div>
-      </div>
     </section>
   </div>
 </main>
@@ -370,24 +216,18 @@
 <script src="/js/api.js"></script>
 <script src="/admin/admin-shell.js"></script>
 <script src="/js/stepup.js"></script>
+<script src="/admin/payouts-common.js"></script>
 <script>
+// (The old-deep-link forwarder is in <head>.)
 let _withdrawals = [];
 let _filter = 'all';
 
 // Auth gate (httpOnly-cookie aware): redirects to /login.html if not an admin, else wires
 // up the topbar username + Logout. Pool name + testnet banner are handled by admin-shell.js.
 // stepup.js provides adminFetch() for the step-up-gated cancel / Held re-check / forced-refund actions.
+// payouts-common.js provides escHtml/fmtGrin/fmtTs/shortAddr, flash() (→ #pay-msg, the
+// data-payout-msg element), the freeze kill-switch and PAYOUT_ACTIVE_STATUSES.
 API.guardAdminPage();
-
-function escHtml(s) {
-  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-function fmtGrin(v) { return (Number(v) || 0).toFixed(4); }
-function fmtTs(t)   { return t ? new Date(t * 1000).toLocaleString() : '—'; }
-function shortAddr(a) {
-  a = String(a || '');
-  return a.length > 18 ? a.slice(0, 10) + '…' + a.slice(-6) : a;
-}
 
 // Every status the scheduler can write. The slatepack and Goblin rails were missing here, so
 // their rows fell through to ['badge-dim', <raw status>] — showing "slatepack_pending" in the
@@ -423,9 +263,7 @@ const CHAIN = {
   absent:       ['badge-error', 'not in wallet',    'The pool wallet has no record of this slate - check the wallet that sent it and the explorer before acting'],
   unverifiable: ['badge-warn',  'unverifiable',     'No slate id was captured for this payout, so the wallet cannot be asked whether it mined'],
 };
-// Drives the "active" filter chip. Must list every status whose coins are still committed —
-// otherwise filtering to active hides exactly the payouts an operator is looking for.
-const ACTIVE = ['tor_checking', 'tor_sending', 'tor_held', 'retry_scheduled', 'slatepack_pending', 'finalizing'];
+// The "active" filter chip reads PAYOUT_ACTIVE_STATUSES (payouts-common.js) — never a local copy.
 // Why a Tor payout failed (fail_code, public-safe) — the operator reads fail_detail beside it.
 const FAIL_CODE = {
   wallet_offline:         'miner wallet offline (counted)',
@@ -436,9 +274,19 @@ const FAIL_CODE = {
   unknown:                'Held, then proven not sent',
 };
 
+// An operator revenue withdrawal leaves the 'pool_fee' bucket for the operator's own wallet
+// (dest_address). Shown as such — 'pool_fee' alone reads as a payout to nobody.
+const isRevenue = (w) => w.grin_address === 'pool_fee';
+function addrCell(w) {
+  if (isRevenue(w)) {
+    return `<span class="badge badge-ok">Operator revenue</span> → <span class="mono" title="${escHtml(w.dest_address || '')}">${escHtml(shortAddr(w.dest_address || '—'))}</span>`;
+  }
+  return `<span class="mono" title="${escHtml(w.grin_address)}">${escHtml(shortAddr(w.grin_address))}</span>`;
+}
+
 function matchesFilter(w) {
   if (_filter === 'all') return true;
-  if (_filter === 'active') return ACTIVE.includes(w.status);
+  if (_filter === 'active') return PAYOUT_ACTIVE_STATUSES.includes(w.status);
   return w.status === _filter;
 }
 
@@ -459,7 +307,8 @@ const payTable = AdminTable.create({
   urlQuery: true,
   empty: 'No withdrawals in this view.',
   note: 'Payout records are kept permanently — this view loads the 100 most recent.',
-  text: w => [w.id, w.grin_address, w.status, (STATUS[w.status] || [])[1], w.method, railOf(w),
+  text: w => [w.id, w.grin_address, w.dest_address, isRevenue(w) ? 'operator revenue' : '', w.status,
+              (STATUS[w.status] || [])[1], w.method, railOf(w),
               w.cancel_reason, w.fail_code, w.fail_detail, (CHAIN[w.chain_state] || [])[1]].join(' '),
   row: w => {
     const [cls, status] = STATUS[w.status] || ['badge-dim', w.status];
@@ -503,7 +352,7 @@ const payTable = AdminTable.create({
     }
     return `<tr>
       <td class="mono">${w.id}</td>
-      <td><span class="mono" title="${escHtml(w.grin_address)}">${escHtml(shortAddr(w.grin_address))}</span></td>
+      <td>${addrCell(w)}</td>
       <td class="mono">${fmtGrin(w.amount)}</td>
       <td><span class="badge ${cls}"${reason}>${escHtml(label)}</span>${chainBadge}</td>
       <td>${why}</td>
@@ -535,14 +384,6 @@ function setFilter(f, btn) {
   document.querySelectorAll('#filter-chips .tab-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
   render(true);
-}
-
-function flash(msg, isErr) {
-  const el = document.getElementById('pay-msg');
-  el.textContent = msg;
-  el.className = isErr ? 'error-msg' : 'success-msg';
-  el.style.display = '';
-  setTimeout(() => { el.style.display = 'none'; }, 5000);
 }
 
 // Saves the proof as the JSON `grin-wallet export_proof` would write, so `grin-wallet
@@ -633,501 +474,178 @@ async function cancelWithdrawal(id, amount) {
   } catch (err) { flash(err.message, true); }
 }
 
-// ── Payout kill-switch ────────────────────────────────────────────────────────
-let _frozen = false;
-function renderFreeze(ctrl) {
-  _frozen = !!(ctrl && ctrl.frozen);
-  const banner = document.getElementById('freeze-banner');
-  const btn = document.getElementById('freeze-toggle');
-  if (_frozen) {
-    const when = ctrl.frozen_at ? new Date(ctrl.frozen_at * 1000).toLocaleString() : '—';
-    banner.innerHTML = `<div class="health-card error" style="margin-bottom:1rem;">
-      <div class="health-name">⛔ PAYOUTS FROZEN <span class="badge badge-error">no payouts are being sent</span></div>
-      <div class="health-detail" style="margin-top:.4rem;">
-        Reason: ${escHtml(ctrl.reason || '—')}<br>By: ${escHtml(ctrl.frozen_by || '—')} · ${escHtml(when)} UTC-local</div></div>`;
-    btn.textContent = '▶ Resume payouts';
-    btn.className = 'btn btn-sm';
-  } else {
-    banner.innerHTML = '';
-    btn.textContent = '⛔ Freeze payouts';
-    btn.className = 'btn btn-sm btn-outline';
-  }
-  btn.style.display = '';
-}
+// The payout kill-switch (renderFreeze / loadPayoutControl / togglePayouts) is in payouts-common.js.
+function refresh() { loadQueueSummary(); loadWithdrawals(); loadPayoutControl(); loadRevenue(); }
 
-async function loadPayoutControl() {
+// ── Operator revenue (pool_fee bucket → the operator's saved address) ─────────
+// GET /api/admin/revenue is SQL only (no wallet call), so it rides the 30 s refresh. The
+// withdraw form never takes an address: the server sends to the SAVED one and checks that the
+// address this page shows is still the saved one (it echoes it back) — see index.js.
+let _rev = null;
+function holdText(s) {
+  const h = Math.floor(s / 3600), m = Math.ceil((s % 3600) / 60);
+  return h ? `${h} h ${m} min` : `${m} min`;
+}
+async function loadRevenue() {
   try {
-    const ctrl = await API.get('/api/admin/payouts/control');
-    renderFreeze(ctrl);
-  } catch (e) {}
-}
-
-async function togglePayouts() {
-  if (_frozen) {
-    if (!confirm('Resume automated payouts? Only do this once you have confirmed the wallet and ledger are safe.')) return;
-    try {
-      const res = await adminFetch('/api/admin/payouts/resume', { method: 'POST' });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
-      renderFreeze(body);
-      flash('Payouts resumed.', false);
-    } catch (err) { flash(err.message, true); }
-  } else {
-    const reason = prompt('Freeze ALL automated payouts now?\n\nOptional reason:');
-    if (reason === null) return;
-    try {
-      const res = await adminFetch('/api/admin/payouts/freeze', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason })
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
-      renderFreeze(body);
-      flash('Payouts frozen — no payouts will be sent until resumed.', false);
-    } catch (err) { flash(err.message, true); }
-  }
-}
-
-function refresh() { loadQueueSummary(); loadWithdrawals(); loadPayoutControl(); }
-
-// ── Reconciliation ──────────────────────────────────────────────────────────
-// Signed money-value formatter with an explicit + on positives (gaps/drift read clearer).
-function fmtSigned(v) { const n = Number(v) || 0; return (n >= 0 ? '+' : '') + n.toFixed(4); }
-
-// Colour a gap/drift KPI: green when healthy (≥0 for gaps, ~0 for drift), red otherwise.
-function setGap(id, value, ok) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.textContent = fmtSigned(value) + ' ツ';
-  el.style.color = ok === false ? 'var(--danger)' : (ok === true ? 'var(--success)' : 'var(--text)');
-}
-
-async function loadReconciliation() {
-  const msg = document.getElementById('recon-msg');
-  try {
-    const d = await API.get('/api/admin/reconciliation');
-    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-    const w = d.wallet || {};
-    const c = d.checks || {};
-
-    // Coverage
-    set('rc-w-spend',    w.reachable ? fmtGrin(w.spendable) + ' ツ' : 'unreachable');
-    set('rc-owed-spend', fmtGrin(d.ledger.spendable_owed) + ' ツ');
-    setGap('rc-gap-liquid', c.coverage_liquid_gap, c.coverage_liquid_ok);
-    set('rc-w-total',    w.reachable ? fmtGrin(w.total) + ' ツ' : 'unreachable');
-    set('rc-owed-total', fmtGrin(d.ledger.total_owed) + ' ツ');
-    setGap('rc-gap-full', c.coverage_full_gap, c.coverage_full_ok);
-
-    // Maturity
-    set('rc-w-immature',  w.reachable ? fmtGrin(w.immature) + ' ツ' : '—');
-    set('rc-imm-blocks',  `${d.immature_blocks.count} (${fmtGrin(d.immature_blocks.reward_sum)} ツ)`);
-    set('rc-w-locked',    w.reachable ? fmtGrin(w.locked) + ' ツ' : '—');
-    set('rc-pending',     `${d.pending_withdrawals.count} (${fmtGrin(d.pending_withdrawals.amount)} ツ)`);
-    setGap('rc-drift-locked',    c.locked_drift, c.locked_ok);
-    setGap('rc-drift-integrity', c.integrity_drift, c.integrity_ok);
-
-    // Flow statement — 24h / 7d / lifetime columns
-    const F = d.flows || {};
-    const flowRow = (dir, label, field, strong) => {
-      const val = (win) => fmtGrin((((F[win] || {})[dir] || {})[field]) || 0);
-      const lbl = strong ? `<strong>${label}</strong>` : label;
-      return `<tr${strong ? ' style="background:color-mix(in srgb, var(--accent) 8%, transparent);"' : ''}>
-        <td>${dir === 'in' ? 'IN' : 'OUT'}</td><td>${lbl}</td>
-        <td class="mono" style="text-align:right;">${val('d1')}</td>
-        <td class="mono" style="text-align:right;">${val('d7')}</td>
-        <td class="mono" style="text-align:right;">${val('lifetime')}</td></tr>`;
-    };
-    const netRow = () => {
-      const net = (win) => fmtSigned(((F[win] || {}).net) || 0);
-      const bad = ((F.lifetime || {}).net || 0) < 0;
-      return `<tr style="border-top:2px solid var(--border);font-weight:600;${bad ? 'color:var(--danger);' : ''}">
-        <td colspan="2">NET (in − out)</td>
-        <td class="mono" style="text-align:right;">${net('d1')}</td>
-        <td class="mono" style="text-align:right;">${net('d7')}</td>
-        <td class="mono" style="text-align:right;">${net('lifetime')}</td></tr>`;
-    };
-    document.getElementById('recon-flow-tbody').innerHTML =
-      flowRow('in',  'Block rewards → miners', 'block_rewards') +
-      flowRow('in',  'Pool fee collected',     'pool_fee') +
-      flowRow('in',  'Prize-pool top-ups',     'prize_topup') +
-      flowRow('in',  'Admin injections',       'admin_inject') +
-      flowRow('in',  'Total IN',               'total', true) +
-      flowRow('out', 'Payouts confirmed',      'payouts') +
-      flowRow('out', 'Orphan clawbacks',       'orphan_clawback') +
-      flowRow('out', '(of which network fees)', 'payout_network_fees') +
-      flowRow('out', 'Total OUT',              'total', true) +
-      netRow();
-
-    // Buckets
-    const b = d.ledger.buckets || {};
-    const fee = b.pool_fee || {}, prize = b.prize_pool || {};
-    document.getElementById('recon-bucket-tbody').innerHTML = `
-      <tr>
-        <td><strong>Pool fee</strong><br><span style="color:var(--text-dim);font-size:.8rem;">operator revenue</span></td>
-        <td class="mono">${fmtGrin(fee.balance)} ツ</td>
-        <td style="font-size:.85rem;">Collected ${fmtGrin(fee.collected)} · diverted to prizes ${fmtGrin(fee.diverted_to_prizes)} · realized ${fmtGrin(fee.operator_realized)}</td>
-      </tr>
-      <tr>
-        <td><strong>Prize pool</strong><br><span style="color:var(--text-dim);font-size:.8rem;">contest budget available</span></td>
-        <td class="mono">${fmtGrin(prize.balance)} ツ</td>
-        <td style="font-size:.85rem;">Funded ${fmtGrin(prize.funded)} (fee ${fmtGrin(prize.from_fee)} · donations ${fmtGrin(prize.from_donations)} · top-ups ${fmtGrin(prize.from_topups)}) · awarded ${fmtGrin(prize.awarded)}</td>
-      </tr>`;
-
-    // Overall banner
-    const banner = document.getElementById('recon-banner');
-    const problems = [];
-    if (c.coverage_liquid_ok === false) problems.push('⚠ Wallet spendable does NOT cover currently-withdrawable balances (cannot pay out now).');
-    if (c.coverage_full_ok === false) problems.push('⚠ Wallet total does NOT cover everything owed (under-funded).');
-    if (c.locked_ok === false) problems.push('⚠ Locked-balance ledger does not match in-flight withdrawals.');
-    if (c.integrity_ok === false) problems.push(`⚠ INTEGRITY DRIFT ${fmtSigned(c.integrity_drift)} ツ — a balance moved without a ledger row (bug or tampering).`);
-    if (((F.lifetime || {}).net || 0) < 0) problems.push('⚠ Lifetime OUT exceeds IN — impossible under correct accounting.');
-    if (!w.reachable) problems.push('Wallet was unreachable — coverage checks skipped.');
-    if (problems.length) {
-      banner.innerHTML = `<div class="health-card error" style="margin-bottom:.8rem;">
-        <div class="health-detail">${problems.map(escHtml).join('<br>')}</div></div>`;
-    } else {
-      banner.innerHTML = `<div class="health-card ok" style="margin-bottom:.8rem;">
-        <div class="health-detail">✓ Wallet covers all balances · ledger reconciles with the log · IN &gt; OUT.</div></div>`;
-    }
-
-    document.getElementById('recon-refresh').textContent =
-      '(refreshed ' + new Date().toLocaleTimeString() + ' — every 3 min)';
-    if (msg) msg.style.display = 'none';
+    _rev = await API.get('/api/admin/revenue');
+    renderRevenue(_rev);
   } catch (err) {
-    if (msg) { msg.textContent = 'Reconciliation error: ' + err.message; msg.style.display = ''; }
+    document.getElementById('rv-tbody').innerHTML = `<tr><td colspan="7">${escHtml(err.message)}</td></tr>`;
   }
 }
+function renderRevenue(d) {
+  document.getElementById('rv-balance').textContent = fmtGrin(d.balance) + ' ツ';
+  document.getElementById('rv-unbooked').textContent = fmtGrin(d.unbooked_network_fees) + ' ツ';
+  document.getElementById('rv-available').textContent = fmtGrin(d.available) + ' ツ';
 
-// ── Wallet-send audit ─────────────────────────────────────────────────────────
-// The card only appears when there ARE unmatched sends, so the tools bar + pager are
-// shown/hidden with it via setVisible() — otherwise they'd float above a hidden table.
-const waTable = AdminTable.create({
-  tbody: 'wa-tbody',
-  search: 'Filter by tx id or slate…',
-  empty: 'No unmatched sends.',
-  note: 'Read live from the wallet over the last {days} days — not stored by the pool.',
-  text: s => [s.tx_id, s.slate_id, s.amount].join(' '),
-  row: s => `<tr>
-    <td class="mono" title="${escHtml(String(s.tx_id))}">#${escHtml(String(s.tx_id))}</td>
-    <td class="mono" style="text-align:right;color:var(--danger);">${(s.amount || 0).toFixed(4)}</td>
-    <td>${escHtml(new Date(s.when * 1000).toISOString().replace('T', ' ').slice(0, 19))}</td>
-    <td class="mono">${escHtml(s.slate_id ? (s.slate_id.slice(0, 8) + '…') : '—')}</td>
-  </tr>`
-});
-waTable.setVisible(false);
-
-async function loadWalletAudit() {
-  const banner = document.getElementById('wa-banner');
-  const card = document.getElementById('wa-card');
-  const summary = document.getElementById('wa-summary');
-  try {
-    const a = await API.get('/api/admin/payouts/wallet-audit');
-    if (!a.reachable) {
-      summary.textContent = '(wallet unreachable)';
-      banner.innerHTML = ''; card.style.display = 'none';
-      waTable.setVisible(false);
-      return;
-    }
-    summary.textContent = `${a.matched} matched · ${a.scanned} scanned (last ${a.window_days}d)`;
-    waTable.setNoteDays(a.window_days);
-    const un = a.unrecorded || [];
-    if (un.length) {
-      banner.innerHTML = `<div class="health-card error" style="margin-bottom:.6rem;">
-        <div class="health-name">⚠ ${un.length} UNRECORDED wallet send(s) — ${(a.total_unrecorded || 0).toFixed(4)} ツ
-          <span class="badge badge-error">not in the pool ledger</span></div>
-        <div class="health-detail" style="margin-top:.3rem;">These left the wallet without a pool payout. If this was you (e.g. a cold-storage sweep), resume payouts above once confirmed; otherwise treat as a compromise.</div></div>`;
-      waTable.setRows(un.slice().sort((x, y) => y.amount - x.amount));
-      card.style.display = '';
-      waTable.setVisible(true);
-    } else {
-      banner.innerHTML = `<div class="health-card ok" style="margin-bottom:.6rem;">
-        <div class="health-detail">✓ Every wallet send matches a pool payout — no out-of-band sends.</div></div>`;
-      card.style.display = 'none';
-      waTable.setVisible(false);
-    }
-  } catch (err) {
-    summary.textContent = '';
-    banner.innerHTML = `<div class="health-card error" style="margin-bottom:.6rem;"><div class="health-detail">Audit error: ${escHtml(err.message)}</div></div>`;
-    card.style.display = 'none';
-    waTable.setVisible(false);
-  }
-}
-
-// ── Payout request audit ──────────────────────────────────────────────────────
-// Times are rendered as explicit UTC (not toLocaleString) — this table is read alongside
-// server logs during an incident, and a browser-local timestamp would not line up with them.
-function utcTs(t) {
-  return t ? new Date(t * 1000).toISOString().replace('T', ' ').slice(0, 19) : '—';
-}
-const PA_ACTION = {
-  withdraw_tor: 'Tor payout', withdraw_slatepack: 'Slatepack', withdraw_nostr: 'Nostr payout',
-  slatepack_finalize: 'Slatepack finalize',
-  nostr_destination_register: 'Nostr dest. register', nostr_destination_remove: 'Nostr dest. remove',
-};
-const PA_REASON = {
-  no_match: 'proof did not match', too_many_attempts: 'throttled (lockout)',
-  proof_required: 'no proof supplied', account_not_found: 'unknown address',
-  no_recorded_proof: 'no proof on file', tor_unreachable: 'wallet unreachable',
-  npub_changed: 'Nostr key changed', lookup_failed: 'lookup failed',
-};
-
-// Retention here is the live audit_log_keep_days — the endpoint reports it per request
-// (a.retention_days), so the note is refreshed from the response as well as at load.
-const paTable = AdminTable.create({
-  tbody: 'pa-tbody',
-  search: 'Filter by address, origin, action or reason…',
-  empty: 'No payout requests in this window.',
-  note: 'Audit rows are kept {days} days, then pruned ' +
-        '(<a href="/admin/settings-database.html">Settings → Database</a>).',
-  retentionKey: 'audit_log_keep_days',
-  retentionDefault: 180,
-  text: e => [e.grin_address, e.ip_prefix, e.country, e.country_code, e.action,
-              PA_ACTION[e.action], e.outcome, e.outcome === 'ok' ? 'accepted' : 'refused',
-              e.reason, PA_REASON[e.reason], utcTs(e.at)].join(' '),
-  row: e => {
-    const okRow = e.outcome === 'ok';
-    const detail = e.reason ? (PA_REASON[e.reason] || e.reason)
-                 : (e.amount != null ? fmtGrin(e.amount) + ' ツ' : '—');
-    return `<tr>
-      <td class="mono">${escHtml(utcTs(e.at))}</td>
-      <td>${escHtml(PA_ACTION[e.action] || e.action)}</td>
-      <td><span class="badge ${okRow ? 'badge-ok' : 'badge-error'}">${okRow ? 'accepted' : 'refused'}</span></td>
-      <td class="mono" title="${escHtml(e.grin_address || '')}">${escHtml(shortAddr(e.grin_address))}</td>
-      <td class="mono">${escHtml(e.ip_prefix || '—')}</td>
-      <td>${escHtml(e.country || (e.country_code || '—'))}</td>
-      <td style="color:var(--text-dim);">${escHtml(detail)}</td>
-    </tr>`;
-  }
-});
-
-// resetPage: the window/result selects changed, so the old page number means nothing.
-// The 2-minute auto-refresh passes nothing and keeps the operator where they were.
-async function loadPayoutAudit(resetPage) {
-  const summary = document.getElementById('pa-summary');
-  const banner = document.getElementById('pa-banner');
-  const note = document.getElementById('pa-note');
-  const days = document.getElementById('pa-days').value;
-  const result = document.getElementById('pa-result').value;
-  try {
-    const a = await API.get(`/api/admin/payments/audit?days=${days}&result=${result}&limit=200`);
-    summary.textContent = `${a.totals.ok} accepted · ${a.totals.deny} refused · ${a.totals.origins} origin(s) in ${a.window_days}d`;
-
-    // Be explicit when retention already deleted part of the requested window, so an empty
-    // stretch is never misread as "nobody tried".
-    note.textContent = a.truncated_by_retention
-      ? `showing ${a.window_days}d — retention keeps only ${a.retention_days}d`
-      : (a.geo_available ? '' : 'country unavailable (geoip-lite not installed)');
-
-    const top = a.top_denied_origins || [];
-    banner.innerHTML = top.length ? `<div class="health-card ${top[0].addresses > 1 ? 'error' : 'warn'}" style="margin-bottom:.6rem;">
-      <div class="health-name">${top[0].addresses > 1 ? '⚠' : 'ℹ'} Repeat refusals from ${top.length} origin(s)</div>
-      <div class="health-detail" style="margin-top:.3rem;">
-        ${top.map(t => `<span class="mono">${escHtml(t.ip_prefix)}</span> — ${t.denials} refused across
-           ${t.addresses} address${t.addresses === 1 ? '' : 'es'} (last ${escHtml(utcTs(t.last_at))})`).join('<br>')}
-        <br><br>One origin refused against <strong>several different addresses</strong> is an
-        address-sweep attempt, not a miner mistyping their own password. Block the prefix in
-        <a href="/admin/settings-access.html">Settings → Access</a> if it persists.
-      </div></div>` : '';
-
-    if (a.retention_days) paTable.setNoteDays(a.retention_days);
-    paTable.setRows(a.events || [], { reset: resetPage === true });
-  } catch (err) {
-    summary.textContent = '';
-    banner.innerHTML = '';
-    paTable.setError(err.message);
-  }
-}
-
-// ── Wallet-identity guard ─────────────────────────────────────────────────────
-function renderIdentity(id) {
-  const banner = document.getElementById('wi-banner');
-  const summary = document.getElementById('wi-summary');
-  if (!id || !id.reachable) {
-    summary.textContent = '(wallet unreachable)';
-    banner.innerHTML = `<div class="health-card" style="margin-bottom:.6rem;"><div class="health-detail">Wallet unreachable — identity not verified this cycle.</div></div>`;
-    return;
-  }
-  const short = (a) => a ? (a.slice(0, 12) + '…' + a.slice(-6)) : '—';
-  if (id.firstRun || id.match) {
-    summary.textContent = 'pinned ✓';
-    banner.innerHTML = `<div class="health-card ok" style="margin-bottom:.6rem;">
-      <div class="health-detail">✓ Live wallet matches the adopted identity <span class="mono">${escHtml(short(id.live))}</span>.</div></div>`;
+  document.getElementById('rv-addr').textContent = d.address || 'not set';
+  const hold = document.getElementById('rv-hold');
+  if (!d.address) {
+    hold.innerHTML = '<span class="badge badge-warn">set one below to withdraw</span>';
+  } else if (d.hold_remaining_s > 0) {
+    hold.innerHTML = `<span class="badge badge-warn" title="Unlocks ${escHtml(fmtTs(d.usable_at))}">24 h hold — ${escHtml(holdText(d.hold_remaining_s))} left</span>`;
   } else {
-    summary.textContent = 'MISMATCH';
-    banner.innerHTML = `<div class="health-card error" style="margin-bottom:.6rem;">
-      <div class="health-name">⛔ WALLET IDENTITY CHANGED <span class="badge badge-error">payouts auto-frozen</span></div>
-      <div class="health-detail" style="margin-top:.3rem;">
-        Adopted: <span class="mono">${escHtml(short(id.expected))}</span><br>
-        Live now: <span class="mono" style="color:var(--danger);">${escHtml(short(id.live))}</span><br>
-        If you switched wallets on purpose, run the switch wizard to adopt the new wallet. Otherwise treat as a compromise.</div></div>`;
+    hold.innerHTML = '<span class="badge badge-ok">ready</span>';
   }
+
+  // The address-change alarm cannot be closed until the 24 h hold ends (server-enforced:
+  // AlertMonitor.closeLockedUntil) — so whoever changed the address cannot also silence it.
+  const alertBox = document.getElementById('rv-alert');
+  const lockedUntil = Number(d.address_alert_locked_until) || 0;
+  alertBox.innerHTML = d.address_alert
+    ? `<div class="health-card warn" style="margin-bottom:.8rem;">
+         <div class="health-detail">⚠ ${escHtml(d.address_alert.message)}</div>
+         ${lockedUntil
+           ? `<div class="health-detail" style="margin-top:.4rem;">This alert stays up until the hold ends (${escHtml(fmtTs(lockedUntil))}). If you did not make this change, set the address back now.</div>`
+           : `<button class="btn btn-sm btn-outline" style="margin-top:.5rem;" onclick="closeAddressAlert(${Number(d.address_alert.id)})">It was me — close this alert</button>`}
+       </div>`
+    : '';
+
+  // The hold only protects revenue if someone hears about a change within 24 h. Off-box channels
+  // come from pool.json (not editable from this panel), so a stolen session cannot switch them off.
+  const ch = d.alert_channels || {};
+  const on = Object.keys(ch).filter((k) => ch[k]);
+  document.getElementById('rv-channels').innerHTML = on.length
+    ? `<div style="font-size:.8rem;color:var(--text-dim);margin-bottom:.6rem;">Address changes are pushed to: ${escHtml(on.join(', '))}.</div>`
+    : `<div class="health-card warn" style="margin-bottom:.8rem;"><div class="health-detail">⚠ No off-box alert channel (Telegram, email, Discord, Slack) is configured, so an address change is announced only inside this panel. Set one up in pool.json — the 24 h hold protects your revenue only if you hear about a change in time.</div></div>`;
+
+  const pend = document.getElementById('rv-pending');
+  if (d.pending) {
+    const label = (STATUS[d.pending.status] || [])[1] || d.pending.status;
+    pend.style.display = '';
+    pend.textContent = `Withdrawal #${d.pending.id} (${fmtGrin(d.pending.amount)} ツ) is in progress — ${label}. The next one can start when it settles.`;
+  } else {
+    pend.style.display = 'none';
+  }
+
+  document.getElementById('rv-withdraw-btn').disabled =
+    !d.address || d.hold_remaining_s > 0 || !!d.pending || !!d.frozen || !(d.available > 0);
+
+  const rows = Array.isArray(d.history) ? d.history : [];
+  document.getElementById('rv-tbody').innerHTML = rows.length
+    ? rows.map((w) => {
+        const [cls, status] = STATUS[w.status] || ['badge-dim', w.status];
+        const k = String(w.kernel_excess || '');
+        return `<tr>
+          <td class="mono">${w.id}</td>
+          <td>${fmtTs(w.created_at)}</td>
+          <td class="mono">${fmtGrin(w.amount)}</td>
+          <td><span class="badge ${cls}">${escHtml(status)}</span></td>
+          <td>${fmtTs(w.confirmed_at)}</td>
+          <td><span class="mono" title="${escHtml(w.dest_address || '')}">${escHtml(shortAddr(w.dest_address || '—'))}</span></td>
+          <td>${k ? `<span class="mono" title="${escHtml(k)}">${escHtml(k.slice(0, 8) + '…' + k.slice(-6))}</span>` : '<span style="color:var(--text-dim)">—</span>'}</td>
+        </tr>`;
+      }).join('')
+    : '<tr><td colspan="7" style="color:var(--text-dim)">No revenue withdrawals yet.</td></tr>';
 }
-
-async function loadWalletIdentity() {
-  try { renderIdentity(await API.get('/api/admin/wallet/identity')); }
-  catch (e) { /* leave last state */ }
+// Max keeps one withdrawal fee back. The revenue withdrawal pays its OWN network fee (~0.023), and
+// that fee is booked to the pool fee at the NEXT withdrawal — sending every last nanogrin would
+// leave the bucket briefly negative by it. The flat fee (≥ 0.04) always covers one plain payout.
+function fillRevenueMax() {
+  if (!_rev) return;
+  const reserve = Math.max(Number(_rev.withdrawal_fee) || 0, 0.04);
+  const max = Math.floor((Number(_rev.available) - reserve) * 1e9) / 1e9;
+  document.getElementById('rv-amount').value = max > 0 ? max.toFixed(9).replace(/.?0+$/, '') : '';
+  const out = document.getElementById('rv-result');
+  out.textContent = max > 0
+    ? `Max keeps ${fmtGrin(reserve)} ツ back for this withdrawal's own network fee.`
+    : 'Not enough revenue to cover a withdrawal and its network fee yet.';
+  out.style.color = 'var(--text-dim)';
 }
-
-// ── Switch-wallet wizard ──────────────────────────────────────────────────────
-function swMsg(t, err) { const el = document.getElementById('sw-msg'); el.textContent = t || ''; el.style.color = err ? 'var(--danger)' : 'var(--success)'; }
-
-function openSwitchWizard() { document.getElementById('sw-card').style.display = ''; wizRefreshState(); }
-function closeSwitchWizard() { document.getElementById('sw-card').style.display = 'none'; }
-
-// Reflect freeze state + in-flight payout count into the wizard steps (uses already-loaded data).
-function wizRefreshState() {
-  const s1 = document.getElementById('sw-s1-state');
-  s1.textContent = _frozen ? 'frozen ✓' : 'not frozen';
-  s1.className = 'badge ' + (_frozen ? 'badge-success' : 'badge-warning');
-  document.getElementById('sw-freeze-btn').disabled = _frozen;
-  const inflightStatuses = ['tor_sending', 'tor_checking', 'tor_held', 'retry_scheduled', 'slatepack_pending', 'finalizing'];
-  const n = (_withdrawals || []).filter(w => inflightStatuses.includes(w.status)).length;
-  const el = document.getElementById('sw-inflight');
-  el.innerHTML = n === 0
-    ? '<span style="color:var(--success);">none in flight ✓</span>'
-    : `<span style="color:var(--danger);">${n} still in flight</span> — wait for these to finish before switching`;
-}
-
-async function wizFreeze() {
+async function withdrawRevenue() {
+  const out = document.getElementById('rv-result');
+  const btn = document.getElementById('rv-withdraw-btn');
+  const amount = parseFloat(document.getElementById('rv-amount').value);
+  if (!_rev || !_rev.address) { out.textContent = 'set a revenue address first'; out.style.color = 'var(--warn)'; return; }
+  if (!(amount > 0)) { out.textContent = 'enter a positive amount'; out.style.color = 'var(--warn)'; return; }
+  const fees = Number(_rev.unbooked_network_fees) || 0;
+  const feeLine = fees > 0
+    ? `\n\nFirst, ${fmtGrin(fees)} ツ of payout network fees the pool wallet already paid is deducted from the pool fee.`
+    : '';
+  if (!confirm(`Send ${amount} ツ of operator revenue over Tor to\n${_rev.address}?${feeLine}\n\nYour wallet must be listening over Tor.`)) return;
+  btn.disabled = true;
+  out.textContent = 'sending…'; out.style.color = 'var(--text-dim)';
   try {
-    const res = await adminFetch('/api/admin/payouts/freeze', {
+    const res = await adminFetch('/api/admin/revenue/withdraw', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reason: 'wallet switch (wizard)' })
+      body: JSON.stringify({ amount, address: _rev.address })
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
-    renderFreeze(body); wizRefreshState();
-    swMsg('Payouts frozen — safe to switch the wallet on the server now.', false);
-  } catch (err) { swMsg(err.message, true); }
-}
-
-let _wizVerified = false;
-async function wizVerify() {
-  swMsg('Checking new wallet…', false);
-  try {
-    const [id, recon] = await Promise.all([
-      API.get('/api/admin/wallet/identity'),
-      API.get('/api/admin/reconciliation')
-    ]);
-    renderIdentity(id);
-    const c = (recon && recon.checks) || {};
-    const w = (recon && recon.wallet) || {};
-    const lines = [];
-    if (!id.reachable) lines.push('⚠ Wallet unreachable — cannot adopt yet.');
-    else if (id.firstRun) lines.push('New wallet detected — no prior identity was pinned.');
-    else if (id.match) lines.push('Live wallet matches the CURRENTLY-adopted identity (no change detected).');
-    else lines.push('New wallet differs from the adopted one — adopting will re-pin to it.');
-    if (w.reachable) lines.push(`Coverage: wallet total ${Number(w.total).toFixed(4)} ツ vs owed ${Number(recon.ledger.total_owed).toFixed(4)} ツ → ${c.coverage_full_ok === false ? '⚠ UNDER-FUNDED' : 'covered ✓'}`);
-    document.getElementById('sw-verify').innerHTML = lines.map(escHtml).join('<br>');
-    _wizVerified = !!id.reachable;
-    document.getElementById('sw-adopt-btn').disabled = !_wizVerified;
-    swMsg(_wizVerified ? 'Verified — you can adopt the new wallet.' : 'Wallet not reachable yet; re-check after it finishes syncing.', !_wizVerified);
-  } catch (err) { swMsg(err.message, true); }
-}
-
-async function wizAdopt() {
-  if (!confirm('Adopt the currently-connected wallet as the pool identity?\n\nDo this only after confirming the new wallet is the correct one and has synced.')) return;
-  try {
-    const res = await adminFetch('/api/admin/wallet/adopt-identity', { method: 'POST' });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
-    await loadWalletIdentity();
-    document.getElementById('sw-resume-btn').disabled = false;
-    swMsg('New wallet adopted. Resume payouts when ready.', false);
-  } catch (err) { swMsg(err.message, true); }
-}
-
-async function wizResume() {
-  try {
-    const res = await adminFetch('/api/admin/payouts/resume', { method: 'POST' });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
-    renderFreeze(body); wizRefreshState();
-    swMsg('Payouts resumed. Wallet switch complete.', false);
-    flash('Wallet switched and payouts resumed.', false);
-  } catch (err) { swMsg(err.message, true); }
-}
-
-// ── Abandoned-balance disposition + manual payout ──────────────────────────────
-const BLOCK_LABEL = {
-  disabled: 'policy disabled', payouts_frozen: 'payouts frozen',
-  incentives_disabled: 'enable prize draws first (Incentives tab)',
-  awaiting_effective_anchor: 'window starts on first run', no_eligible_sources: 'nothing eligible',
-};
-// Two AdminTables: the dormant list is a live snapshot (up to 500 addresses), the sweep
-// history is a permanent money record — the notes say which is which.
-const dormListTable = AdminTable.create({
-  tbody: 'dorm-list-tbody',
-  search: 'Filter by address…',
-  empty: 'No dormant balances.',
-  note: 'Live snapshot of currently dormant accounts, not a log — rows leave it when an ' +
-        'address mines again, is paid out, or is swept. Top 500 shown.',
-  text: r => r.address || '',
-  row: r => {
-    let disposal = '—';
-    if (r.dispose_at) disposal = r.eligible ? '<span style="color:var(--danger);font-weight:600;">due</span>' : ('in ' + (r.days_until_disposal || 0) + ' d');
-    return `<tr><td class="mono" style="word-break:break-all;">${escHtml(r.address)}</td>`
-      + `<td class="mono" style="text-align:right;">${(r.balance || 0).toFixed(4)}</td>`
-      + `<td style="text-align:right;">${r.idle_days || 0}</td><td>${disposal}</td></tr>`;
-  }
-});
-
-const dormHistTable = AdminTable.create({
-  tbody: 'dorm-hist-tbody',
-  search: 'Filter by date or trigger…',
-  empty: 'No sweeps yet.',
-  note: 'Sweep batches are kept permanently — disposition is final, so the record never expires.',
-  text: b => [new Date((b.created_at || 0) * 1000).toLocaleString('en-US', { timeZone: 'UTC' }),
-              b.total_swept, b.source_count, b.automatic ? 'auto' : 'admin'].join(' '),
-  row: b => `<tr><td>${escHtml(new Date((b.created_at || 0) * 1000).toLocaleString('en-US', { timeZone: 'UTC' }))}</td>`
-    + `<td class="mono" style="text-align:right;">${(b.total_swept || 0).toFixed(4)}</td>`
-    + `<td style="text-align:right;">${b.source_count || 0}</td><td>prize pool</td>`
-    + `<td>${b.automatic ? 'auto' : 'admin'}</td></tr>`
-});
-
-async function loadDormancy() {
-  try {
-    const d = await API.get('/api/admin/dormancy');
-    const st = d.status || {}, pv = d.preview || {}, dorm = d.dormant || { totals: {}, list: [] }, hist = d.history || { totals: {}, batches: [] };
-    const totals = dorm.totals || {}, htotals = hist.totals || {};
-
-    document.getElementById('dorm-summary').textContent = st.enabled
-      ? (st.dormancy_months + '-month window · ' + st.active_window_days + '-day active set')
-      : 'policy OFF (enable in Settings → Payout)';
-    document.getElementById('dk-state').textContent = st.enabled ? (pv.frozen ? 'FROZEN' : 'ON') : 'OFF';
-    document.getElementById('dk-dormant').textContent = fmtGrin(totals.amount || 0) + ' ツ';
-    document.getElementById('dk-sweep').textContent = (pv.would_sweep ? pv.would_sweep.count : 0) + ' addr · ' + fmtGrin(pv.would_sweep ? pv.would_sweep.amount : 0) + ' ツ';
-    document.getElementById('dk-recip').textContent = 'Prize pool';
-    document.getElementById('dk-disposed').textContent = fmtGrin(htotals.total_disposed || 0) + ' ツ';
-
-    const runBtn = document.getElementById('dorm-run-btn');
-    const runNote = document.getElementById('dorm-run-note');
-    runBtn.disabled = !!pv.blocked;
-    runNote.textContent = pv.blocked ? ('blocked: ' + (BLOCK_LABEL[pv.blocked] || pv.blocked)) : 'ready';
-
-    const list = Array.isArray(dorm.list) ? dorm.list : [];
-    document.getElementById('dorm-list-note').textContent = list.length ? ('(' + totals.count + ' total)') : '';
-    dormListTable.setRows(list);
-    dormHistTable.setRows(Array.isArray(hist.batches) ? hist.batches : []);
+    out.textContent = `✓ queued (#${body.withdrawal_id}, ${fmtGrin(body.amount)} ツ) — sending over Tor` +
+      (body.network_fees_booked > 0 ? `; ${fmtGrin(body.network_fees_booked)} ツ of network fees booked` : '');
+    out.style.color = 'var(--ok)';
+    document.getElementById('rv-amount').value = '';
+    refresh();
   } catch (err) {
-    document.getElementById('dorm-summary').textContent = 'unavailable';
-    dormListTable.setError(err.message);
-    dormHistTable.setError(err.message);
+    out.textContent = err.message; out.style.color = 'var(--danger)';
+    if (_rev) renderRevenue(_rev);   // re-derive the button state the click disabled
   }
 }
-
-async function runDisposition() {
-  if (!confirm('Run an abandoned-balance disposition NOW?\n\nThis permanently sweeps eligible dormant balances into the community prize pool. It is FINAL.')) return;
+async function saveRevenueAddress() {
+  const out = document.getElementById('rv-save-result');
+  const btn = document.getElementById('rv-save-btn');
+  const address = document.getElementById('rv-new-addr').value.trim();
+  if (!address) { out.textContent = 'enter an address'; out.style.color = 'var(--warn)'; return; }
+  if (!confirm(`Set the operator revenue address to\n${address}?\n\nWithdrawals to it stay blocked for 24 hours, and a critical alert is raised.`)) return;
+  btn.disabled = true;
+  out.textContent = 'saving…'; out.style.color = 'var(--text-dim)';
   try {
-    const res = await adminFetch('/api/admin/dormancy/run', { method: 'POST' });
+    const res = await adminFetch('/api/admin/revenue/address', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address })
+    });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
-    const r = body.result || {};
-    flash(r.disposed ? `Disposed ${(r.swept || 0).toFixed(4)} ツ from ${r.sources} address(es) → prize pool.` : `No disposition: ${r.skipped || 'nothing eligible'}.`, false);
-    loadDormancy(); refresh();
+    out.textContent = `✓ saved — withdrawals to it unlock ${fmtTs(body.usable_at)}`;
+    out.style.color = 'var(--ok)';
+    document.getElementById('rv-new-addr').value = '';
+    loadRevenue();
+  } catch (err) { out.textContent = err.message; out.style.color = 'var(--danger)'; }
+  finally { btn.disabled = false; }
+}
+// Closes the address-change alarm once the operator has confirmed the change was theirs. Uses the
+// shared manual-resolve route (step-up, audited, note REQUIRED) — the same one health.html uses.
+async function closeAddressAlert(id) {
+  const note = prompt('Confirm this revenue address change was yours. The note goes in the audit log:', 'revenue address change was mine');
+  if (note === null) return;
+  try {
+    const res = await adminFetch('/api/admin/alerts/' + id + '/resolve', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note })
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    flash('Address-change alert closed.', false);
+    loadRevenue();
   } catch (err) { flash(err.message, true); }
 }
 
+// ── Manual payout (below-minimum support request) ─────────────────────────────
+// The card in Manual payouts, under the revenue card. Its endpoints sit under /api/admin/dormancy/* for
+// historical reasons only — it pays a miner who asked, it does not touch the dormancy sweep
+// (that is dormant.html). Every payout it makes appears in the queue above.
 async function verifyOwner() {
   const address = document.getElementById('mp-addr').value.trim();
   const proof = document.getElementById('mp-proof').value.trim();
@@ -1191,7 +709,7 @@ async function sendTorPayout() {
     out.textContent = `✓ queued (#${body.withdrawal_id}, ${(body.amount || amount).toFixed(4)} ツ) — sending over Tor`;
     out.style.color = 'var(--ok)';
     document.getElementById('mp-amount').value = '';
-    loadDormancy(); refresh();
+    refresh();
   } catch (err) { out.textContent = err.message; out.style.color = 'var(--danger)'; }
   finally { btn.disabled = false; }
 }
@@ -1216,21 +734,16 @@ async function recordManualPayout() {
     out.textContent = `✓ recorded (#${body.withdrawal_id}, balance now ${(body.balance_after || 0).toFixed(4)} ツ)`;
     out.style.color = 'var(--ok)';
     ['mp-amount', 'mp-fee', 'mp-kernel', 'mp-slate', 'mp-note'].forEach(id => { document.getElementById(id).value = ''; });
-    loadDormancy(); refresh();
+    refresh();
   } catch (err) { out.textContent = err.message; out.style.color = 'var(--danger)'; }
   finally { btn.disabled = false; }
 }
 
-document.addEventListener('DOMContentLoaded', () => { refresh(); loadReconciliation(); loadWalletAudit(); loadWalletIdentity(); loadDormancy(); loadPayoutAudit(); });
-// Withdrawal queue + freeze state are cheap — 30s. Reconciliation, the wallet-send audit, and the
-// wallet-identity probe each force a wallet call (slow) — keep them on the relaxed 3-min cadence.
+document.addEventListener('DOMContentLoaded', () => { refresh(); });
+// Withdrawal queue + freeze state are cheap — 30s. (Reconciliation, the wallet-send audit and the
+// wallet-identity probe moved to treasury.html with their 3-min wallet-call cadence; the
+// abandoned-balance poll moved to dormant.html, the payout request audit's to users.html.)
 setInterval(refresh, 30000);
-setInterval(loadReconciliation, 180000);
-setInterval(loadWalletAudit, 180000);
-setInterval(loadWalletIdentity, 180000);
-setInterval(loadDormancy, 120000);
-// Pure DB read (no wallet call) but a wide scan — 2 min is enough to notice a live sweep.
-setInterval(loadPayoutAudit, 120000);
 </script>
 </body>
 </html>

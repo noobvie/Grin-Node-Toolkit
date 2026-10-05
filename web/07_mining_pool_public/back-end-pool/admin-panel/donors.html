@@ -20,8 +20,9 @@
     .worker-list .w-tag { color: var(--accent); font-weight: 600; }
     .worker-list .w-off { color: var(--text-dim); }
     .rank-medal { font-size: 1rem; }
-    /* Flag words: one entry per line, monospace so a stray space or a look-alike glyph shows. */
-    #donor_name_blocklist { font-family: var(--font-mono); font-size: .82rem; min-height: 200px; }
+    /* Donor names (C4): the name is set in the mono face, so a doubled space or an O-for-0 swap shows. */
+    .name-cell { font-family: var(--font-mono); font-weight: 600; overflow-wrap: anywhere; }
+    #ban-form input[type="text"] { font-size: .85rem; padding: .3rem .5rem; min-width: 12rem; }
     /* settings.css's .form-row is a 2-column grid; the ranking card has three fields. */
     .form-row.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
     @media (max-width: 900px) { .form-row.cols-3 { grid-template-columns: 1fr; } }
@@ -53,15 +54,15 @@
   <div class="container">
     <section>
       <h2>
-        Review queue
+        Banner review queue
         <span id="queue-summary" style="font-size:.82rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
       </h2>
       <p class="helper-text" style="margin:0 0 .8rem;">
-        Donor names and banners are set by donors on their account page (both ownership proofs,
-        and only after a first donation). <strong>Nothing here is public until you approve it.</strong>
-        Flags are hints, never decisions: a reserved word or the pool's name, a word from your flag
-        list, or a name equal to another donor's approved one (impersonation). Approving a name or
-        banner replaces the donor's current one. All dates are UTC.
+        Donor banners are set by donors on their account page (both ownership proofs, and only
+        after a first donation). <strong>No banner is public until you approve it</strong> — a word
+        list can check a name, never an image. Approving a banner replaces the donor's current one.
+        Donor <em>names</em> are not reviewed here any more: they are checked automatically and go
+        live at once (see <a href="#names-section">Donor names</a> below). All dates are UTC.
       </p>
 
       <div class="toolbar">
@@ -84,13 +85,12 @@
               <tr>
                 <th>Submitted</th>
                 <th>Donor</th>
-                <th>Request</th>
-                <th>Flags</th>
+                <th>Banner</th>
                 <th>Decision</th>
               </tr>
             </thead>
             <tbody id="queue-tbody">
-              <tr class="loading-row"><td colspan="5"><span class="spinner"></span>Loading…</td></tr>
+              <tr class="loading-row"><td colspan="4"><span class="spinner"></span>Loading…</td></tr>
             </tbody>
           </table>
         </div>
@@ -98,6 +98,61 @@
       <!-- Initial hidden state is INLINE; the .error-msg/.success-msg classes must not carry
            display:none or flash()'s reveal (style.display = '') is a no-op. -->
       <p class="error-msg" id="queue-msg" style="display:none;margin-top:.6rem;"></p>
+    </section>
+
+    <!-- Donor names — design §19.17.6 (Part C4): auto-checked, live at once, post-moderated. -->
+    <section id="names-section">
+      <h2>
+        Donor names
+        <span id="names-summary" style="font-size:.82rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
+      </h2>
+      <p class="helper-text" style="margin:0 0 .8rem;">
+        A donor name is <strong>checked automatically and goes live at once</strong>: 2–32 letters,
+        digits, spaces and <code>- _ . &amp; '</code>; no reserved word (admin, official, operator,
+        support, staff, pool, grinium, prize, jackpot, winner, or your pool's name); nothing on the
+        blocked-word list — the built-in list plus your own words on
+        <a href="settings-names.html">Settings → Names</a>; not a banned name; not a name another donor
+        already uses, in any spelling (<code>Acme &amp; Co.</code> = <code>ACME-co</code>). A donor can
+        change it once every 7 days. <em>Remove</em> takes a name off the wall (the reason is shown to
+        the donor). <em>Ban name</em> removes it from everyone who holds it and stops every spelling of
+        it from being set again. <em>Block</em> stops an address from setting a name or a banner. A
+        <strong>hint</strong> means the rule would refuse a live name today — for example because of a
+        word you added after it went live; it stays live until you remove it.
+      </p>
+      <div class="toolbar">
+        <label for="names-view">Show</label>
+        <select id="names-view" class="settings-skip" onchange="loadNames(true)">
+          <option value="live">Live names</option>
+          <option value="removed">Removed names</option>
+          <option value="banned">Banned names</option>
+        </select>
+        <button type="button" class="btn btn-secondary" onclick="loadNames()">Refresh</button>
+      </div>
+      <form class="toolbar" id="ban-form" novalidate>
+        <label for="ban-name">Ban a name</label>
+        <input type="text" id="ban-name" class="settings-skip" maxlength="64" placeholder="e.g. Free Grin" autocomplete="off">
+        <input type="text" id="ban-reason" class="settings-skip" maxlength="200" placeholder="Reason (optional — shown to anyone who holds it now)" autocomplete="off">
+        <button type="submit" class="btn btn-danger">Ban</button>
+      </form>
+      <div class="card" style="padding:0;">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th id="names-h1">Set</th>
+                <th id="names-h2">Donor</th>
+                <th id="names-h3">Name</th>
+                <th id="names-h4">Hints</th>
+                <th id="names-h5">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="names-tbody">
+              <tr class="loading-row"><td colspan="5"><span class="spinner"></span>Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p class="error-msg" id="names-msg" style="display:none;margin-top:.6rem;"></p>
     </section>
 
     <section>
@@ -109,8 +164,9 @@
         Every address that has donated to the prize pool, has a rig mining with a live
         <code>donateN</code> tag, or has a donor profile on file. <em>Remove</em> takes a live name or
         banner off the wall (the reason you give is shown to the donor). <em>Block</em> stops an address
-        from submitting and withdraws anything it has waiting; a live name or banner stays until you
-        remove it. Rank and score are what the public wall ranks by (GRIN in the window × loyalty).
+        from setting a name or submitting a banner and withdraws a banner it has waiting; a live name
+        or banner stays until you remove it. Rank and score are what the public wall ranks by (GRIN in
+        the window × loyalty).
       </p>
 
       <!-- The address/name filter lives in the AdminTable tools bar; only the state filter is here. -->
@@ -181,17 +237,10 @@
 
           <div class="form-section">
             <h4 class="sub-title">Donor profiles</h4>
-            <div class="form-group">
-              <label for="donor_name_blocklist">Flag words — highlighted in the review queue</label>
-              <textarea id="donor_name_blocklist" name="donor_name_blocklist" rows="10" spellcheck="false"></textarea>
-              <div class="helper-text">
-                One entry per line, matched <em>inside</em> a requested name after removing spaces and
-                <code>- _ . &amp; '</code> and mapping the leet digits 0 1 3 4 5 7 (so <code>a55-h0le</code>
-                matches <code>asshole</code>). A hit only puts a flag on the queued name — you still decide,
-                so false positives (<code>classic</code> contains <code>ass</code>) cost nothing. Ten fixed
-                impersonation words (admin, official, operator, support, staff, pool, grinium, prize,
-                jackpot, winner) plus your pool name are always flagged.
-              </div>
+            <div class="helper-text" style="margin-bottom:.8rem;">
+              The words that refuse a donor name are on <a href="settings-names.html">Settings → Names</a>
+              — one list for donor names and game nicknames. (The old "flag words" list here was retired;
+              the words you had added to it were moved there once.)
             </div>
             <div class="form-row">
               <div class="form-group">
@@ -326,6 +375,7 @@ async function postAction(url, body, okMsg, msgId) {
     if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
     flashInto(msgId, okMsg + (data.warning ? ` Warning: ${data.warning}` : ''), !!data.warning);
     loadQueue();
+    loadNames();
     loadDonors();
     return true;
   } catch (err) {
@@ -376,24 +426,6 @@ let _queueStatus = 'pending';
 // A reason typed into a queue row must survive a re-render (a search keystroke or page change
 // repaints the rows), so the inputs write through to this map and the row reads it back.
 const _reasons = new Map();
-
-function flagBadges(r) {
-  if (r.kind !== 'name') return '<span class="donor-none">—</span>';
-  if (!r.flags || !r.flags.length) return '<span class="badge badge-ok">no flags</span>';
-  return r.flags.map(f => {
-    if (f.type === 'reserved') {
-      return `<span class="badge badge-error" title="A fixed impersonation word or the pool's own name">reserved: &quot;${escHtml(f.word)}&quot;</span>`;
-    }
-    if (f.type === 'word') {
-      return `<span class="badge badge-warn" title="Matches your flag-word list">flag word: &quot;${escHtml(f.word)}&quot;</span>`;
-    }
-    if (f.type === 'same_as_donor') {
-      const who = (f.addresses || []).map(shortAddr).join(', ');
-      return `<span class="badge badge-warn" title="Another address already has this approved name: ${escHtml((f.addresses || []).join(' '))}">same as an approved donor (${escHtml(who)})</span>`;
-    }
-    return '';
-  }).join(' ');
-}
 
 function requestCell(r) {
   if (r.kind === 'name') {
@@ -448,14 +480,12 @@ function decisionCell(r) {
 const queueTable = AdminTable.create({
   tbody: 'queue-tbody',
   search: 'Filter by address or name…',
-  empty: 'Nothing to review. A request appears here when a donor submits a name or banner.',
-  text: r => (r.address || '') + ' ' + (r.name || '') + ' ' + r.kind + ' ' +
-             (r.flags || []).map(f => f.word || f.type).join(' '),
+  empty: 'Nothing to review. A request appears here when a donor submits a banner.',
+  text: r => (r.address || '') + ' ' + (r.mime || '') + ' ' + (r.reason || ''),
   row: r => `<tr>
       <td class="mono" style="white-space:nowrap;">${escHtml(fmtDateTime(r.submitted_at))}</td>
       <td>${donorCell(r)}</td>
       <td>${requestCell(r)}</td>
-      <td><div class="donor-state">${flagBadges(r)}</div></td>
       <td>${decisionCell(r)}</td>
     </tr>`,
   onRender: tbody => {
@@ -484,7 +514,9 @@ async function loadQueue(reset) {
   const sel = document.getElementById('queue-status');
   _queueStatus = sel.value;
   try {
-    const data = await API.get('/api/admin/donors/requests?status=' + encodeURIComponent(_queueStatus));
+    // Banners only (C4): a name is never pending since names went automatic. The history of the
+    // pre-C4 name decisions is in the audit log; the live and removed names are listed below.
+    const data = await API.get('/api/admin/donors/requests?kind=banner&status=' + encodeURIComponent(_queueStatus));
     // API.get (Auth.fetch) hands back the parsed ERROR body on a non-2xx — a 429 is JSON too.
     if (!data || data.success !== true || !Array.isArray(data.requests)) {
       queueTable.setError((data && data.error) || 'Could not load the review queue');
@@ -511,6 +543,126 @@ async function rejectRequest(id) {
                               'Rejected' + (reason ? ' — the donor will see your reason.' : '.'), 'queue-msg');
   if (ok) _reasons.delete(String(id));
 }
+
+// ── Donor names (design §19.17.6, Part C4) ──────────────────────────────────────────
+// One table, three views (live / removed / banned). The five headers keep their count, so the
+// AdminTable loading/empty rows span right; their TEXT follows the view (textContent only).
+let _namesView = 'live';
+const NAMES_HEADERS = {
+  live:    ['Set (UTC)', 'Donor', 'Name', 'Hints', 'Actions'],
+  removed: ['Removed (UTC)', 'Donor', 'Name', 'By', 'Reason'],
+  banned:  ['Banned (UTC)', 'Name as typed', 'Matching form', 'Reason', 'Actions'],
+};
+// Which list a hint came from, in the operator's words (the server sends the list key + entry).
+const HIT_WORDS = {
+  reserved: 'a reserved word', pool_name: 'your pool name', seed: 'the built-in word list',
+  operator: 'your word list (Settings → Names)', prefix: 'a reserved prefix'
+};
+
+function nameHints(n) {
+  const b = [];
+  if (n.hit) {
+    const what = n.hit.code === 'name_address' ? 'looks like a GRIN address'
+      : `${HIT_WORDS[n.hit.list] || 'the rule'}${n.hit.entry ? ` ("${n.hit.entry}")` : ''}`;
+    b.push(`<span class="badge badge-warn" title="Still live — remove it if it should go">Now refused by ${escHtml(what)}</span>`);
+  }
+  if (n.banned) b.push('<span class="badge badge-error" title="Its matching form is on the ban list">banned form</span>');
+  if (n.same_as && n.same_as.length) {
+    b.push(`<span class="badge badge-warn" title="${escHtml('Same name (any spelling) as: ' + n.same_as.join(' '))}">same as ${escHtml(n.same_as.map(shortAddr).join(', '))}</span>`);
+  }
+  if (n.blocked) b.push('<span class="badge badge-error">donor blocked</span>');
+  b.push(n.approved_by == null
+    ? '<span class="badge badge-dim" title="Passed the automatic check">auto</span>'
+    : `<span class="badge badge-dim" title="Approved by hand before names were checked automatically">admin #${escHtml(String(n.approved_by))}</span>`);
+  return `<div class="donor-state">${b.join(' ')}</div>`;
+}
+
+const namesTable = AdminTable.create({
+  tbody: 'names-tbody',
+  search: 'Filter by address, name or reason…',
+  empty: 'Nothing here.',
+  text: n => [n.address, n.name, n.norm, n.reason].filter(Boolean).join(' '),
+  row: n => {
+    if (_namesView === 'banned') {
+      const norm = escHtml(n.norm);
+      return `<tr>
+        <td class="mono" style="white-space:nowrap;">${escHtml(fmtDateTime(n.banned_at))}</td>
+        <td><span class="name-cell">${escHtml(n.name)}</span></td>
+        <td class="mono">${norm}</td>
+        <td>${n.reason ? escHtml(n.reason) : '<span class="donor-none">—</span>'}</td>
+        <td><div class="row-actions"><button class="btn-icon" data-norm="${norm}" onclick="unbanName(this.dataset.norm)" data-tip="Unban — the name can be set again (nothing is restored)" aria-label="Unban ${norm}">✅</button></div></td>
+      </tr>`;
+    }
+    if (_namesView === 'removed') {
+      return `<tr>
+        <td class="mono" style="white-space:nowrap;">${escHtml(fmtDateTime(n.removed_at))}</td>
+        <td>${addrButton(n.address)}</td>
+        <td><span class="name-cell">${escHtml(n.name)}</span></td>
+        <td>${n.removed_by == null ? 'the donor' : `admin #${escHtml(String(n.removed_by))}`}</td>
+        <td>${n.reason ? escHtml(n.reason) : '<span class="donor-none">—</span>'}</td>
+      </tr>`;
+    }
+    const addr = escHtml(n.address);
+    const nm = escHtml(n.name);
+    return `<tr>
+      <td class="mono" style="white-space:nowrap;">${escHtml(fmtDateTime(n.set_at))}</td>
+      <td>${addrButton(n.address)}</td>
+      <td><span class="name-cell">${nm}</span></td>
+      <td>${nameHints(n)}</td>
+      <td><div class="row-actions">
+        <button class="btn-icon btn-icon-danger" data-addr="${addr}" data-kind="name" onclick="removeLive(this.dataset.addr, this.dataset.kind, 'names-msg')" data-tip="Remove this name (the donor sees your reason)" aria-label="Remove the name">✂️</button>
+        <button class="btn-icon btn-icon-danger" data-name="${nm}" onclick="banName(this.dataset.name)" data-tip="Ban this name — every spelling, every holder" aria-label="Ban the name">⛔</button>
+        ${n.blocked ? '' : `<button class="btn-icon btn-icon-danger" data-addr="${addr}" onclick="blockDonor(this.dataset.addr, 'names-msg')" data-tip="Block this donor from setting a name or banner" aria-label="Block this address">🚫</button>`}
+      </div></td>
+    </tr>`;
+  }
+});
+
+async function loadNames(reset) {
+  _namesView = document.getElementById('names-view').value;
+  NAMES_HEADERS[_namesView].forEach((t, i) => { document.getElementById('names-h' + (i + 1)).textContent = t; });
+  try {
+    const url = _namesView === 'banned' ? '/api/admin/donors/banned-names'
+      : '/api/admin/donors/names?state=' + encodeURIComponent(_namesView);
+    const data = await API.get(url);
+    const rows = data && (_namesView === 'banned' ? data.banned : data.names);
+    if (!data || data.success !== true || !Array.isArray(rows)) {
+      namesTable.setError((data && data.error) || 'Could not load donor names');
+      return;
+    }
+    document.getElementById('names-summary').textContent = _namesView === 'banned'
+      ? `${rows.length} banned`
+      : `${data.total} ${_namesView}` + (data.total > rows.length ? ` (newest ${rows.length} shown)` : '') +
+        (_namesView === 'live' ? ` · ${rows.filter(n => n.hit).length} with a hint` : '');
+    namesTable.setRows(rows, { reset: reset === true });
+  } catch (err) {
+    namesTable.setError(err.message);
+  }
+}
+
+async function banName(name) {
+  const reason = await askReason({
+    title: 'Ban a donor name',
+    body: `${name}\n\nEvery spelling of it (case, spaces, - _ . & ' and the leet digits 0 1 3 4 5 7 are ignored) can never be set again, and every donor who holds it now loses it.`,
+    label: 'Reason (optional) — shown to anyone who holds it now, on their public account page',
+    confirmText: 'Ban', danger: true
+  });
+  if (reason === null) return;
+  await postAction('/api/admin/donors/banned-names', { name, reason }, 'Name banned.', 'names-msg');
+}
+async function unbanName(norm) {
+  if (!confirm(`Unban "${norm}"?\n\nIt can be set again. Nothing is restored: a name removed by the ban stays removed.`)) return;
+  await postAction('/api/admin/donors/banned-names/' + encodeURIComponent(norm) + '/unban', {}, 'Ban lifted.', 'names-msg');
+}
+document.getElementById('ban-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const nameEl = document.getElementById('ban-name');
+  const reasonEl = document.getElementById('ban-reason');
+  const name = nameEl.value.trim();
+  if (!name) { flashInto('names-msg', 'Type the name to ban.', true); return; }
+  const ok = await postAction('/api/admin/donors/banned-names', { name, reason: reasonEl.value.trim() }, 'Name banned.', 'names-msg');
+  if (ok) { nameEl.value = ''; reasonEl.value = ''; }
+});
 
 // ── Donors list ─────────────────────────────────────────────────────────────────────
 
@@ -638,29 +790,31 @@ function filterDonors(reset) {
   donorsTable.setRows(rows, { reset: reset === true });   // server order = league order
 }
 
-async function removeLive(addr, kind) {
+async function removeLive(addr, kind, msgId) {
   const reason = await askReason({
     title: kind === 'banner' ? 'Remove the live banner' : 'Remove the live name',
-    body: `${addr}\n\nIt comes off the donor wall now. The donor can submit a new one, which goes through review again.`,
+    body: kind === 'banner'
+      ? `${addr}\n\nIt comes off the donor wall now. The donor can submit a new one, which goes through review again.`
+      : `${addr}\n\nIt comes off the donor wall now. The donor can set another name when their 7-day change limit allows; it is checked automatically. To stop this name coming back in any spelling, ban it instead.`,
     label: 'Reason (optional) — shown to the donor on their public account page',
     confirmText: 'Remove', danger: true
   });
   if (reason === null) return;
   await postAction('/api/admin/donors/' + encodeURIComponent(addr) + '/remove', { kind, reason },
-                   kind === 'banner' ? 'Banner removed.' : 'Name removed.', 'donor-msg');
+                   kind === 'banner' ? 'Banner removed.' : 'Name removed.', msgId || 'donor-msg');
 }
-async function blockDonor(addr) {
+async function blockDonor(addr, msgId) {
   const reason = await askReason({
     title: 'Block donor-profile submissions',
-    body: `${addr}\n\nThis address can no longer submit a name or banner, and anything it has waiting is withdrawn. A live name or banner stays until you remove it. Donations are unaffected.`,
+    body: `${addr}\n\nThis address can no longer set a name or submit a banner, and a banner it has waiting is withdrawn. A live name or banner stays until you remove it. Donations are unaffected.`,
     label: 'Note (optional) — kept for the admin side only, never shown to the donor',
     confirmText: 'Block', danger: true
   });
   if (reason === null) return;
-  await postAction('/api/admin/donors/' + encodeURIComponent(addr) + '/block', { reason }, 'Address blocked.', 'donor-msg');
+  await postAction('/api/admin/donors/' + encodeURIComponent(addr) + '/block', { reason }, 'Address blocked.', msgId || 'donor-msg');
 }
 async function unblockDonor(addr) {
-  if (!confirm(`Unblock ${addr}?\n\nIt can submit a donor name and banner again (each still needs your approval).`)) return;
+  if (!confirm(`Unblock ${addr}?\n\nIt can set a donor name (checked automatically) and submit a banner (still reviewed by you) again.`)) return;
   await postAction('/api/admin/donors/' + encodeURIComponent(addr) + '/unblock', {}, 'Address unblocked.', 'donor-msg');
 }
 
@@ -707,13 +861,13 @@ async function saveDonationSettings() {
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));   // the server's reason, §J14
     flashInto('settings-msg', 'Donation settings saved.', false);
-    // Flag words and the pool name feed the queue's flags; slots/expiry feed the list's badges.
+    // Slots/expiry feed the list's badges.
     loadQueue();
     loadDonors();
   } catch (err) { flashInto('settings-msg', 'Not saved: ' + err.message, true); }
 }
 
-document.addEventListener('DOMContentLoaded', () => { loadQueue(); loadDonors(); loadDonationSettings(); });
+document.addEventListener('DOMContentLoaded', () => { loadQueue(); loadNames(); loadDonors(); loadDonationSettings(); });
 // The donors list re-polls; the queue does NOT — a timer repaint would throw away a reason the
 // operator is typing. It reloads after every decision and on the Refresh button.
 setInterval(loadDonors, 60000);

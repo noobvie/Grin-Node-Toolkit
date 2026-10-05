@@ -180,6 +180,10 @@
             <span class="tone-text"><i>Effective pool fee</i><b id="ph-fee-pct">—</b></span>
             <span class="tone-ok"><i>Given away</i><b id="ph-giveaways">—</b></span>
             <span class="tone-warn"><i>Donations received</i><b id="ph-donations">—</b></span>
+            <!-- The operator's own take, as actually withdrawn from the pool fee (after the network
+                 fees the pool wallet paid on payouts). Published beside — never inside — what
+                 miners were paid (operator decision 2026-10-05). -->
+            <span class="tone-text" title="Revenue the pool operator has withdrawn from the pool fee, after the Grin network fees the pool paid on payouts. Not included in Total paid."><i>Operator revenue withdrawn</i><b id="ph-operator">—</b></span>
         </div>
 
         <div class="deck">
@@ -434,6 +438,7 @@
                                           : '0 %');
                 setGrinStat('ph-giveaways', totals.giveaways_all);
                 setGrinStat('ph-donations', totals.donations_all);
+                setGrinStat('ph-operator', totals.operator_withdrawn_all);
 
                 // ── P-01 · cumulative GRIN paid (running sum of per-bucket payouts) ──
                 let run = 0;
@@ -497,6 +502,11 @@
         const PAY_METHOD = { tor: 'Tor', slatepack: 'Slatepack', nostr: 'Goblin', manual: 'Manual' };
         function payMethodCell(w) {
             const method = escHtml(PAY_METHOD[w.method] || w.method || 'Tor');
+            // An operator revenue withdrawal (the API sends operator: true and the fixed label
+            // "Pool operator" in place of an address) — say so, so it never reads as a miner payout.
+            if (w.operator) {
+                return '<span class="status-badge" title="The pool operator withdrawing revenue from the pool fee — not a miner payout">Operator revenue · ' + method + '</span>';
+            }
             return w.has_kernel_proof
                 ? '<span class="status-badge status-active" title="Paid — broadcast and seen mined on the Grin chain">' + method + ' · mined</span>'
                 : '<span class="status-badge" title="Paid — finalized and broadcast by the pool; not yet seen mined (or this pool cannot read its wallet tx log)">' + method + ' · sent</span>';

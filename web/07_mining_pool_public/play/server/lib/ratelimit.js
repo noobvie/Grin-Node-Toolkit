@@ -17,9 +17,11 @@
 //         record goes; if every record is a live lockout, the new failure is not recorded
 //         (the pool's own per-IP and per-pair throttles, keyed on the real IP, still apply).
 //
-// Both are per-process and forgotten on restart. That is acceptable here because they sit
-// IN FRONT of the pool's throttles, which are the real brute-force stop (§19.2) — these
-// exist so a flood is refused before it costs the pool a call.
+// Both are per-process and forgotten on restart. For the MINER login that is acceptable
+// because they sit IN FRONT of the pool's throttles, which are the real brute-force stop
+// (§19.2) — these exist so a flood is refused before it costs the pool a call. For GUEST login
+// (guests.js) there is no pool behind them: these, the scrypt cap and nginx's login zone ARE
+// the stop, which is why guests.js reserves its per-name token before the scrypt await.
 
 function createTokenBuckets({ capacity, refillPerSec, maxKeys = 50000, clock = () => Date.now() }) {
   if (!(capacity >= 1) || !(refillPerSec > 0)) throw new Error('token buckets: bad capacity/refill');
@@ -53,7 +55,15 @@ function createTokenBuckets({ capacity, refillPerSec, maxKeys = 50000, clock = (
     return b.tokens >= 1 ? { ok: true, retryAfter: 0 } : { ok: false, retryAfter: Math.max(1, Math.ceil((1 - b.tokens) / refillPerSec)) };
   }
 
-  return { take, peek, size: () => map.size };
+  // Gives one token back (capped). For a caller that TAKES a token before an await, as a
+  // reservation, and returns it when the attempt turned out not to count — so parallel attempts
+  // see each other's reservations, which a peek-then-take-after-the-await cannot (R2-1).
+  function refund(key) {
+    const b = state(key);
+    b.tokens = Math.min(capacity, b.tokens + 1);
+  }
+
+  return { take, peek, refund, size: () => map.size };
 }
 
 function createFailureBackoff({

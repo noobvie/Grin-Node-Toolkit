@@ -224,6 +224,113 @@ CREATE INDEX idx_nick_address ON nicknames(address, submitted_at);
 CREATE INDEX idx_nick_norm ON nicknames(norm, state);
 `,
   },
+  {
+    // Part C3 (design §19.17.5, D27): names are checked automatically and live at once. A
+    // banned-name table (the matching form is the key, so every spelling of a banned name is
+    // refused), and four player columns: the nickname block, the last change (the cooldown),
+    // and the refused-attempt counter (so the word list cannot be probed). ADD COLUMN rewrites
+    // the stored CREATE text of `players` the same way §19.4's own ALTERs do, so the block
+    // stays comparable as text. `pending` stays in the CHECK and simply stops being written.
+    version: 4,
+    name: 'names v2: banned names + nickname columns (design §19.4, §19.17.5)',
+    sql: `
+CREATE TABLE banned_names (
+  norm      TEXT PRIMARY KEY,
+  name      TEXT NOT NULL,
+  banned_at INTEGER NOT NULL,
+  banned_by TEXT NOT NULL,
+  reason    TEXT
+);
+ALTER TABLE players ADD COLUMN nick_blocked INTEGER NOT NULL DEFAULT 0 CHECK (nick_blocked IN (0,1));
+ALTER TABLE players ADD COLUMN nick_changed_at INTEGER;
+ALTER TABLE players ADD COLUMN nick_refused_day TEXT;
+ALTER TABLE players ADD COLUMN nick_refused_n INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX idx_players_nick_blocked ON players(nick_blocked) WHERE nick_blocked = 1;
+`,
+    // Part 12's rows under the v2 rule, deterministically (§19.17.5): a live name that fails it
+    // → removed; a pending one → approved when it passes and no other live name reads the same,
+    // else rejected. Only the parts of the rule this DB can know apply here — the seed, the
+    // reserved words and the chat word list; the pool's name and its list arrive later over the
+    // link. Nothing had deployed v3 when this was written, so no real player is affected; the
+    // step exists so a box that did install Part 12 lands in a defined state.
+    run(raw, now) {
+      const rule = require('./name-rule');
+      const ctx = { words: rule.compileList(raw.prepare('SELECT word FROM chat_words').all().map((r) => r.word)) };
+      const decide = raw.prepare("UPDATE nicknames SET state = ?, decided_at = ?, decided_by = 'system', reason = ? WHERE id = ?");
+      for (const r of raw.prepare("SELECT id, name FROM nicknames WHERE state = 'approved' ORDER BY id").all()) {
+        if (!rule.check(r.name, ctx).ok) decide.run('removed', now, 'rule_v2', r.id);
+      }
+      const takenBy = raw.prepare("SELECT 1 AS x FROM nicknames WHERE norm = ? AND state = 'approved' AND address != ?");
+      const liveOf = raw.prepare("SELECT id FROM nicknames WHERE address = ? AND state = 'approved'");
+      const approve = raw.prepare("UPDATE nicknames SET state = 'approved', norm = ?, decided_at = ?, decided_by = 'system', reason = NULL WHERE id = ?");
+      const stamp = raw.prepare('UPDATE players SET nick_changed_at = ? WHERE address = ?');
+      for (const r of raw.prepare("SELECT id, address, name FROM nicknames WHERE state = 'pending' ORDER BY id").all()) {
+        const v = rule.check(r.name, ctx);
+        if (!v.ok) { decide.run('rejected', now, 'rule_v2', r.id); continue; }
+        if (takenBy.get(v.norm, r.address)) { decide.run('rejected', now, 'taken', r.id); continue; }
+        const prev = liveOf.get(r.address);
+        if (prev) decide.run('replaced', now, null, prev.id);
+        approve.run(v.norm, now, r.id);
+        stamp.run(now, r.address);
+      }
+    },
+  },
+  {
+    // Part C5 (design §19.17.3/§19.17.4, D24/D25): guest accounts. A guest is a `players` row
+    // like any other (id 'g:' + 16 base32 in the address column, so every games table works
+    // unchanged) plus a `guests` row holding the credentials. Deleting a guest deletes the
+    // `guests` row (the login name is free at once) and KEEPS the players row, marked
+    // deleted_at, so history still resolves. guest_signups is the per-IP sign-up count — a
+    // separate table so that deleting an account does not hand its IP a fresh slot, and so the
+    // /24 is never stored beside the account it created.
+    //
+    // sessions: proof_kind must accept 'guest', and SQLite cannot ALTER a CHECK, so the table
+    // is REBUILT. Not create-new → rename: RENAME stores the new name quoted ("sessions") in
+    // sqlite_master, and §19.4 is compared as text. So: copy out → drop → create (the
+    // canonical text) → copy back → drop the copy, all in this one transaction.
+    version: 5,
+    name: 'guest accounts + sessions rebuild (design §19.4, §19.17.3)',
+    sql: `
+CREATE TABLE guests (
+  id            TEXT PRIMARY KEY REFERENCES players(address),
+  login_name    TEXT NOT NULL,
+  login_norm    TEXT NOT NULL UNIQUE,
+  pass_hash     TEXT NOT NULL,
+  created_at    INTEGER NOT NULL,
+  last_login_at INTEGER NOT NULL
+);
+CREATE INDEX idx_guests_idle ON guests(last_login_at);
+CREATE TABLE guest_signups (
+  id         INTEGER PRIMARY KEY,
+  ip_coarse  TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_guest_signups_ip ON guest_signups(ip_coarse, created_at);
+ALTER TABLE players ADD COLUMN kind TEXT NOT NULL DEFAULT 'miner' CHECK (kind IN ('miner','guest'));
+ALTER TABLE players ADD COLUMN deleted_at INTEGER;
+ALTER TABLE players ADD COLUMN guest_day TEXT;
+CREATE TABLE sessions_v4_copy AS SELECT * FROM sessions;
+DROP TABLE sessions;
+CREATE TABLE sessions (
+  token_hash    TEXT PRIMARY KEY,
+  address       TEXT NOT NULL REFERENCES players(address),
+  created_at    INTEGER NOT NULL,
+  expires_at    INTEGER NOT NULL,
+  last_seen     INTEGER NOT NULL,
+  ip_coarse     TEXT,
+  ua_hint       TEXT,
+  proof_kind    TEXT NOT NULL CHECK (proof_kind IN ('ip','password','guest')),
+  proof_slot    TEXT NOT NULL CHECK (proof_slot IN ('set','anchor')),
+  chat_ok_after INTEGER,
+  revoked_at    INTEGER
+);
+CREATE INDEX idx_sessions_address ON sessions(address, revoked_at);
+CREATE INDEX idx_sessions_expiry  ON sessions(expires_at);
+INSERT INTO sessions (token_hash, address, created_at, expires_at, last_seen, ip_coarse, ua_hint, proof_kind, proof_slot, chat_ok_after, revoked_at)
+  SELECT token_hash, address, created_at, expires_at, last_seen, ip_coarse, ua_hint, proof_kind, proof_slot, chat_ok_after, revoked_at FROM sessions_v4_copy;
+DROP TABLE sessions_v4_copy;
+`,
+  },
 ];
 
 const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
@@ -297,10 +404,18 @@ function migrate(raw, transaction, now) {
     if (m.version <= from) continue;
     transaction(() => {
       raw.exec(m.sql);
+      // A data step (v4: re-checking Part 12's rows) runs in the SAME transaction, so the
+      // schema change and the data it implies land together or not at all.
+      if (typeof m.run === 'function') m.run(raw, now);
       raw.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', ?) " +
                   "ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(m.version));
       if (m.version === 1) {
         raw.prepare("INSERT INTO meta (key, value) VALUES ('created_at', ?)").run(String(now));
+        // A brand-new DB starts in preview (§19.17.2, D30): the pool's mode now defaults to
+        // 'on', and installing the games must not announce them before the operator's Go live.
+        // An upgraded DB has no row and reads as preview anyway (mode.js) — so this is not a
+        // migration, only the explicit form of the default.
+        raw.prepare("INSERT INTO meta (key, value) VALUES ('launch', 'preview') ON CONFLICT(key) DO NOTHING").run();
       }
     });
   }

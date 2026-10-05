@@ -9,6 +9,7 @@
 //   · theme (custom CSS variables, accent colour, custom CSS, web font)
 //   · analytics (GA4 / Plausible / Umami / Matomo) + raw custom <head> HTML
 //   · [data-brand] content hooks (hero heading/subheading, CTA, footer, social links)
+//   · the /play/ floating chat bubble's loader (loadChatBubble, design §19.17.7)
 //
 // All operations are defensive: a failed fetch or a missing field leaves the page's
 // hardcoded defaults untouched. Nothing here throws to the page.
@@ -29,16 +30,16 @@
     return last.replace(/\.html$/, '');
   }
 
-  // Pages where a credential is TYPED. On these, the operator-authored raw-HTML/CSS/analytics
-  // sinks are skipped — see the guards in applyTheme() and apply() (audit §J1-1).
+  // Pages where a credential is TYPED. On these, the operator-authored CSS sinks and the
+  // third-party analytics loaders are skipped — see the guards in applyTheme() and apply()
+  // (audit §J1-1).
   //
-  // Why: custom_head_html is not inert. applyAnalytics() re-creates <script> nodes out of it
-  // via cloneScript() specifically so they execute, so anyone who can write that setting gets
-  // arbitrary JS on this page — and this page has the admin password and 2FA code fields.
-  // Those settings live in the `analytics`/`branding` sections, which are written by
-  // POST /api/admin/settings/:section. That route is now step-up gated for exactly these keys,
-  // but a step-up gate is a lock on the door, not a reason to keep the explosives in the hall:
-  // an operator-HTML sink on a credential-entry form is wrong regardless of who can reach it.
+  // History: this guard was written for custom_head_html / custom_body_html, which
+  // applyAnalytics() re-created as executing <script> nodes. Those two sinks were DELETED in
+  // design §19.17 D22 (Option B, Part C1): with a sign-in form on every page, no page is left
+  // to exempt, so the sinks went instead. What the guard still withholds here is CSS that can
+  // hide or overlay the 2FA prompt, a stylesheet from an operator-chosen origin, and the
+  // provider's script — none of which has any value on a page only the operator visits.
   //
   // Both checks matter. The attribute lets a page opt out explicitly; the page-key list means a
   // new credential page cannot silently opt back IN by forgetting the attribute. Add to BOTH
@@ -735,6 +736,7 @@
     enhanceBrand(cfg);
     applyIncentivesNav(cfg);
     applyGamesNav(cfg);
+    applyNavGroups();
   }
 
   function injectHeaderStyles() {
@@ -803,8 +805,10 @@
     applyLogoVariant();
   }
 
-  // Hide the prize-pool chrome (header "Prize Pool" group + footer Donate / Fortune Board,
-  // all marked data-incentives by public-shell.js) when the operator has incentives off.
+  // Hide the prize-pool chrome (the header's Fortune Board + Contribute links inside the
+  // Community group, and the footer Donate / Fortune Board — all marked data-incentives by
+  // public-shell.js) when the operator has incentives off. Links only, never the group:
+  // applyNavGroups decides the group from what is left in it (§19.17.8).
   // Shown by default and hidden only on an explicit `enabled: false`: incentives ship ON,
   // and a failed/partial config fetch should not strip working links off the page.
   // style.display, not the `hidden` attribute — .nav-group / .footer-donate set their own
@@ -816,11 +820,13 @@
     });
   }
 
-  // Show the games link (header "Play" + its footer copy, marked data-games by public-shell.js)
-  // ONLY on an explicit games.mode === 'on' — the OPPOSITE default of applyIncentivesNav, on
-  // purpose (design §19 D12): the pool is live, 'preview' must keep /play/ unannounced while
-  // the operator tests it, and the server already reports 'off' while the games service is
-  // down. So a missing field, a failed fetch, 'preview' or 'off' all leave the link hidden.
+  // Show the games link (header "Play" inside the Community group + its footer copy, marked
+  // data-games by public-shell.js) ONLY on an explicit games.mode === 'on' — the OPPOSITE
+  // default of applyIncentivesNav, on purpose (design §19 D12): 'preview' must keep /play/
+  // unannounced while the operator tests it. The server sends the EFFECTIVE mode — the lower
+  // of the pool's switch and the games' launch state (§19.17.2) — and 'off' while the games
+  // service is down. So a missing field, a failed fetch, 'preview' or 'off' all leave the link
+  // hidden.
   function applyGamesNav(cfg) {
     var on = !!(cfg.games && cfg.games.mode === 'on');
     document.querySelectorAll('[data-games]').forEach(function (el) {
@@ -828,52 +834,56 @@
     });
   }
 
-  // ── 4. Analytics + custom head HTML ────────────────────────────────────────
+  // A header group whose children carry gates (public-shell.js marks it data-nav-gated) is
+  // shown while at least one of its links is shown, and HIDDEN — never an empty dropdown —
+  // when none is (design §19.17.8, D31). Runs after the two gates above, from the links'
+  // own inline display, so neither flag can hide the other's links by hiding the group.
+  function applyNavGroups() {
+    document.querySelectorAll('.nav-group[data-nav-gated]').forEach(function (g) {
+      var links = g.querySelectorAll('.nav-dropdown a');
+      var any = false;
+      for (var i = 0; i < links.length; i++) {
+        if (links[i].style.display !== 'none') { any = true; break; }
+      }
+      g.style.display = any ? '' : 'none';
+    });
+  }
+
+  // ── 4. Analytics — provider-ID loaders only (design §19.17 D22) ────────────
+  // There is no operator-authored HTML or script any more. custom_head_html /
+  // custom_body_html (and the cloneScript() that re-created their <script> nodes so they
+  // ran) were deleted in Part C1: one origin is one trust zone, a sign-in form is on every
+  // page, and `<img onerror>` means no filter could make raw HTML safe. A pool that still
+  // has a value stored for either key never receives it — pool-settings.js drops it.
+  //
+  // Each loader below builds its <script> from values that pass a STRICT pattern, checked
+  // again here even though the server validates them: a value stored before the server
+  // check was tightened must not reach a script URL or the GA4 init text. These four
+  // loaders are on the allowlist in scripts/test-operator-code-sinks.js; a new script
+  // creator anywhere in public_html fails that test until it is reviewed and listed.
+  var GA_ID_RE = /^G-[A-Z0-9]{1,32}$/;
+  var PLAUSIBLE_DOMAIN_RE = /^[A-Za-z0-9.-]{1,253}(,[A-Za-z0-9.-]{1,253}){0,9}$/;
+  var UMAMI_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
+  var MATOMO_SITE_RE = /^[0-9]{1,9}$/;
+
+  // An https URL with no credentials, or '' — the only form a provider script may come from.
+  // http: would be mixed content on an https pool anyway; javascript:/data: would run code.
+  function httpsScriptUrl(u) {
+    if (!u || typeof u !== 'string') return '';
+    try {
+      var p = new URL(u);
+      if (p.protocol !== 'https:' || p.username || p.password || !p.hostname) return '';
+      return p.href;
+    } catch (e) { return ''; }
+  }
+
   function applyAnalytics(cfg) {
     var a = cfg.analytics || {};
-
-    // Raw operator-supplied <head> HTML (verification tags, custom pixels, etc.).
-    if (a.custom_head_html) {
-      var tmp = document.createElement('div');
-      tmp.innerHTML = a.custom_head_html;
-      // Move parsed nodes into <head>. Inline <script> created via innerHTML does NOT
-      // execute, so recreate script elements so they run.
-      Array.prototype.slice.call(tmp.childNodes).forEach(function (node) {
-        if (node.tagName === 'SCRIPT') {
-          head().appendChild(cloneScript(node));
-        } else {
-          head().appendChild(node);
-        }
-      });
-    }
-
-    // Raw operator-supplied HTML appended before </body> (chat widgets, etc.).
-    if (a.custom_body_html && document.body) {
-      var b = document.createElement('div');
-      b.innerHTML = a.custom_body_html;
-      Array.prototype.slice.call(b.childNodes).forEach(function (node) {
-        if (node.tagName === 'SCRIPT') {
-          document.body.appendChild(cloneScript(node));
-        } else {
-          document.body.appendChild(node);
-        }
-      });
-    }
-
     if (a.cookie_consent_enabled && !consentGiven()) {
       showConsentBanner(a, function () { loadProvider(a); });
       return;
     }
     loadProvider(a);
-  }
-
-  function cloneScript(node) {
-    var s = document.createElement('script');
-    if (node.src) s.src = node.src;
-    if (node.type) s.type = node.type;
-    if (node.async) s.async = true;
-    if (node.textContent) s.textContent = node.textContent;
-    return s;
   }
 
   function loadProvider(a) {
@@ -920,7 +930,10 @@
   }
 
   function loadGa4(id) {
-    if (!id) return;
+    // The id is spliced into the init script's TEXT, so the pattern is what keeps it data:
+    // the old `id.replace(/'/g, '')` left a trailing backslash free to escape the closing
+    // quote. Letters, digits and one hyphen cannot break out of a string literal.
+    if (typeof id !== 'string' || !GA_ID_RE.test(id)) return;
     var s = document.createElement('script');
     s.async = true;
     s.src = 'https://www.googletagmanager.com/gtag/js?id=' + encodeURIComponent(id);
@@ -931,33 +944,36 @@
     // neither as the page you are on nor as the page you came from.
     init.textContent =
       'window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}' +
-      "gtag('js',new Date());gtag('config','" + id.replace(/'/g, '') +
+      "gtag('js',new Date());gtag('config','" + id +
       "',{page_location:" + JSON.stringify(scrubbedLocation()) +
       ",page_referrer:" + JSON.stringify(scrubbedReferrer()) + "});";
     head().appendChild(init);
   }
 
   function loadPlausible(a) {
-    if (!a.plausible_domain || !a.plausible_src) return;
+    var src = httpsScriptUrl(a.plausible_src);
+    if (!src || typeof a.plausible_domain !== 'string' || !PLAUSIBLE_DOMAIN_RE.test(a.plausible_domain)) return;
     var s = document.createElement('script');
     s.defer = true;
     s.setAttribute('data-domain', a.plausible_domain);
-    s.src = a.plausible_src;
+    s.src = src;
     head().appendChild(s);
   }
 
   function loadUmami(a) {
-    if (!a.umami_website_id || !a.umami_src) return;
+    var src = httpsScriptUrl(a.umami_src);
+    if (!src || typeof a.umami_website_id !== 'string' || !UMAMI_ID_RE.test(a.umami_website_id)) return;
     var s = document.createElement('script');
     s.defer = true;
     s.setAttribute('data-website-id', a.umami_website_id);
-    s.src = a.umami_src;
+    s.src = src;
     head().appendChild(s);
   }
 
   function loadMatomo(a) {
-    if (!a.matomo_url || !a.matomo_site_id) return;
-    var base = a.matomo_url.replace(/\/+$/, '') + '/';
+    var url = httpsScriptUrl(a.matomo_url);
+    if (!url || !MATOMO_SITE_RE.test(String(a.matomo_site_id || ''))) return;
+    var base = url.replace(/[?#].*$/, '').replace(/\/+$/, '') + '/';
     window._paq = window._paq || [];
     window._paq.push(['trackPageView']);
     window._paq.push(['enableLinkTracking']);
@@ -1045,16 +1061,60 @@
     try { enhanceHeader(cfg); } catch (e) {}
     try { applyIncentives(cfg.incentives || {}); } catch (e) {}
     try { renderBanners(cfg.announcements || []); } catch (e) {}
+    try { loadChatBubble(cfg); } catch (e) {}
 
-    // Analytics carries custom_head_html / custom_body_html, which applyAnalytics deliberately
-    // re-creates as executing <script> nodes, plus the third-party provider script origins.
-    // Never on a page where a credential is typed (§J1-1) — that is what turned a settings
-    // write into a route to the admin password and a live TOTP code. Analytics on the admin
-    // login page has no product value anyway: miners never log in, so the only visitor whose
-    // page-view would be shipped to Google/Plausible/Matomo is the operator themselves.
+    // Analytics is the third-party provider script (the operator-authored custom HTML that
+    // used to ride along was deleted in design §19.17 D22). Still never on a page where a
+    // credential is typed (§J1-1): a third-party script on the admin login form can read it.
+    // Analytics on that page has no product value anyway: miners never log in there, so the
+    // only visitor whose page-view would be shipped to Google/Plausible/Matomo is the
+    // operator themselves.
     if (!isCredentialPage()) {
       try { applyAnalytics(cfg); } catch (e) {}
     }
+  }
+
+  // ── The floating chat bubble (design §19.17.7, D23; Part C7) ─────────────────
+  // The bubble itself is GAMES code (/play/js/chat-bubble.js, deployed and stamped with the
+  // /play/ shell); the pool carries only this loader. It inserts the script when:
+  //   - the payload's games block says chat is on — cfg.games is the EFFECTIVE mode and is
+  //     {mode:'off', chat:false} whenever the games service is down, so no games deploy means
+  //     no bubble (games-link.js publicFlag);
+  //   - the mode is 'on', or 'preview' AND this browser has opened /play/ in preview (the shell
+  //     leaves localStorage grin_play_preview; a throw reads as "not set");
+  //   - the page is not a credential page — isCredentialPage() covers data-untrusted-html=
+  //     "exempt" (login.html, /play/ itself, which has its own chat panel) and the page-key list.
+  // Two fixed same-origin paths, never a URL from the payload: /play/version.js first (it sets
+  // window.GRIN_PLAY_VERSION, the deploy's asset stamp), then the bubble with that stamp, so a
+  // redeploy busts any cached copy exactly as the /play/ page's own ?v= does. It is on the
+  // script-creator allowlist in scripts/test-operator-code-sinks.js.
+  var CHAT_BUBBLE_SRC = '/play/js/chat-bubble.js';
+  var PLAY_VERSION_SRC = '/play/version.js';
+  var PLAY_VERSION_RE = /^[0-9a-f]{12}$/;
+  function chatBubbleWanted(cfg) {
+    var g = cfg && cfg.games;
+    if (!g || g.chat !== true) return false;
+    if (g.mode === 'on') return true;
+    if (g.mode !== 'preview') return false;
+    try { return localStorage.getItem('grin_play_preview') === '1'; } catch (e) { return false; }
+  }
+  function loadChatBubble(cfg) {
+    if (isCredentialPage() || !chatBubbleWanted(cfg)) return;
+    if (!document.body || document.getElementById('grin-chat-bubble-js')) return;
+    var v = document.createElement('script');
+    v.src = PLAY_VERSION_SRC;
+    var go = function () {
+      if (document.getElementById('grin-chat-bubble-js')) return;
+      var ver = window.GRIN_PLAY_VERSION;
+      var s = document.createElement('script');
+      s.id = 'grin-chat-bubble-js';
+      s.src = CHAT_BUBBLE_SRC + (typeof ver === 'string' && PLAY_VERSION_RE.test(ver) ? '?v=' + ver : '');
+      document.body.appendChild(s);
+    };
+    // A missing version.js still loads the bubble (unstamped; /play/ is served no-cache).
+    v.addEventListener('load', go);
+    v.addEventListener('error', go);
+    document.body.appendChild(v);
   }
 
   // ── Incentives: prize pool + recent fortune-board winners ───────────────────
@@ -1150,12 +1210,28 @@
     // safeHref() the way renderBanners() does — never by widening this back to raw HTML.
     inner += '<div style="max-width:600px;color:var(--text-dim,#a0aec0);line-height:1.6;">' +
       escapeText(maint.message || '') + '</div>';
+    // A stratum pause (design §21.8) carries its auto-resume time; say it in UTC, from the UTC
+    // fields — never the visitor's locale (all public-pool times are UTC).
+    var back = maint.until ? utcLabel(maint.until) : '';
+    if (back) {
+      inner += '<div style="margin-top:1rem;font-weight:600;">Expected back at about ' + escapeText(back) + '</div>';
+    }
     overlay.innerHTML = inner;
     document.body.appendChild(overlay);
   }
 
   function escapeText(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // '2026-10-05T14:00:00Z' → '05 Oct 14:00 UTC'; '' for anything unparseable.
+  function utcLabel(iso) {
+    var t = Date.parse(iso);
+    if (!isFinite(t)) return '';
+    var d = new Date(t);
+    var p2 = function (n) { return (n < 10 ? '0' : '') + n; };
+    var mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getUTCMonth()];
+    return p2(d.getUTCDate()) + ' ' + mon + ' ' + p2(d.getUTCHours()) + ':' + p2(d.getUTCMinutes()) + ' UTC';
   }
 
   // ── Announcement banners ───────────────────────────────────────────────────

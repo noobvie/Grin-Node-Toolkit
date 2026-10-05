@@ -392,7 +392,12 @@ function migrateWithdrawals() {
       // Manual slatepack rail: the armored S1 handed to the miner, and the "pool-wallet cancel
       // still owed" flag (see CREATE TABLE). Legacy rows: NULL / 0 — nothing to re-show or cancel.
       slatepack_s1: 'TEXT DEFAULT NULL',
-      slate_cancel_pending: 'INTEGER NOT NULL DEFAULT 0'
+      slate_cancel_pending: 'INTEGER NOT NULL DEFAULT 0',
+      // Operator revenue withdrawals (see CREATE TABLE). Legacy rows: NULL / 0 — no row was an
+      // operator withdrawal, and NO network fee was ever booked to the ledger before this column,
+      // so 0 is the correct value: the first revenue withdrawal books the whole history at once.
+      dest_address: 'TEXT DEFAULT NULL',
+      fee_booked: 'REAL NOT NULL DEFAULT 0.0'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -800,7 +805,17 @@ function createSchema() {
       -- 1 = this row was refunded but grin-wallet's cancel_tx for its slate has not succeeded
       -- yet, so the pool wallet may still hold the slate's inputs locked. Set in the SAME
       -- transaction as the expiry refund; cleared once the cancel lands (retryExpiredSlateCancels).
-      slate_cancel_pending INTEGER NOT NULL DEFAULT 0
+      slate_cancel_pending INTEGER NOT NULL DEFAULT 0,
+      -- Operator revenue withdrawals only (grin_address = 'pool_fee', which is a ledger bucket,
+      -- not a wallet): the grin1 address the coins are SENT to — the operator's saved revenue
+      -- address at request time. NULL on every miner row, where grin_address is the destination.
+      dest_address TEXT DEFAULT NULL,
+      -- How much of this row's REAL network fee (fee) has been debited from the pool_fee bucket
+      -- as a 'network_fee' ledger row. The pool wallet pays every payout's chain fee, but the
+      -- ledger books those costs in one batch each time the operator withdraws revenue
+      -- (WithdrawalScheduler._bookNetworkFees). fee − fee_booked on confirmed rows = fees the
+      -- ledger has not booked yet; reconciliation adds exactly that back to its coverage gaps.
+      fee_booked REAL NOT NULL DEFAULT 0.0
     )`,
 
     `CREATE INDEX IF NOT EXISTS idx_withdrawal_address ON withdrawals(grin_address, status)`,
@@ -968,14 +983,38 @@ function createSchema() {
 
     // Single-row (id=1) payout kill-switch. When frozen=1 the withdrawal scheduler skips all
     // outbound send paths. Set automatically by AlertMonitor on a critical money trip
-    // (coverage shortfall / integrity drift / wallet drain) and manually from the admin
-    // Payments page. A missing row means "not frozen" (scheduler treats absence as unfrozen).
+    // (coverage shortfall / integrity drift / wallet drain) and manually from any admin
+    // Payouts page. A missing row means "not frozen" (scheduler treats absence as unfrozen).
     `CREATE TABLE IF NOT EXISTS payout_control (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       frozen INTEGER NOT NULL DEFAULT 0,
       reason TEXT DEFAULT NULL,
       frozen_by TEXT DEFAULT NULL,
       frozen_at INTEGER DEFAULT NULL,
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
+    // Single-row (id=1) stratum pause state (design §21.1), owned by lib/stratum-pause.js. NOT a
+    // pool_config key on purpose: the section Save, the section restore and resetAll all write
+    // pool_config wholesale, and none of them may ever flip intake. A missing row = accepting.
+    // All times are unix seconds (UTC by construction). `until` is NOT NULL whenever paused=1 —
+    // every pause auto-resumes. `reason` is admin-only and never published.
+    // ⚠ scripts/lib/07_lib_pool_backup.sh (pbk_pause_stratum) repeats this DDL VERBATIM so a
+    // restored pool.db boots paused — change one, change both.
+    `CREATE TABLE IF NOT EXISTS stratum_control (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      paused INTEGER NOT NULL DEFAULT 0,
+      source TEXT DEFAULT NULL,
+      reason TEXT DEFAULT NULL,
+      paused_by TEXT DEFAULT NULL,
+      since INTEGER DEFAULT NULL,
+      settled_at INTEGER DEFAULT NULL,
+      until INTEGER DEFAULT NULL,
+      planned_start INTEGER DEFAULT NULL,
+      planned_end INTEGER DEFAULT NULL,
+      planned_reason TEXT DEFAULT NULL,
+      planned_by TEXT DEFAULT NULL,
+      last_result TEXT DEFAULT NULL,
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
 
@@ -990,6 +1029,19 @@ function createSchema() {
       slatepack_address TEXT NOT NULL,
       adopted_at INTEGER NOT NULL DEFAULT (unixepoch()),
       adopted_by TEXT DEFAULT NULL
+    )`,
+
+    // Operator revenue address (single row, id=1): where "Withdraw operator revenue" sends the
+    // pool_fee bucket. Its own table, not a pool_config key, because changing it is a money
+    // event, not a setting: step-up, audit row, critical alert, and a 24 h hold (set_at) before
+    // a withdrawal may go to the NEW address — a stolen admin session must not be able to repoint
+    // and drain in one sitting. prev_address is kept only to name both ends in the alert/audit.
+    `CREATE TABLE IF NOT EXISTS operator_revenue (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      address TEXT NOT NULL,
+      set_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      set_by INTEGER DEFAULT NULL,
+      prev_address TEXT DEFAULT NULL
     )`,
 
     `CREATE TABLE IF NOT EXISTS pool_config (
@@ -1076,6 +1128,19 @@ function createSchema() {
       blocked_at INTEGER NOT NULL DEFAULT (unixepoch()),
       blocked_by INTEGER REFERENCES users(id),
       reason TEXT
+    )`,
+
+    // Banned donor NAMES (design §19.17.6, Part C4): keyed on the name rule's matching form
+    // (lib/name-rule.js matchForm — lower-case, separators out, leet folded), so one ban covers
+    // every spelling. `name` is the spelling the admin typed, for the list. The pool's own table
+    // rather than one banned-names table with a scope column: game nicknames are banned in the
+    // games' database (D5), so the pool has exactly one name namespace.
+    `CREATE TABLE IF NOT EXISTS banned_donor_names (
+      norm      TEXT PRIMARY KEY,
+      name      TEXT NOT NULL,
+      banned_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      banned_by INTEGER REFERENCES users(id),
+      reason    TEXT
     )`,
 
     // One row per lottery draw. seed_height/seed_hash make the draw publicly verifiable:
@@ -1294,7 +1359,40 @@ function createSchema() {
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
 
-    `CREATE INDEX IF NOT EXISTS idx_posts_published ON posts(status, published_at DESC)`
+    `CREATE INDEX IF NOT EXISTS idx_posts_published ON posts(status, published_at DESC)`,
+
+    // ─── Node availability (design §20; lib/node-availability.js) ──────────────
+    // Two observers of the same node, kept side by side and NEVER merged into one row:
+    // source 'pool' = the pool's own 30 s probe, source 'recorder' = lines ingested from the
+    // node box's event recorder (/opt/grin/node-events/<net>/ledger.jsonl). Only state 'down'
+    // counts against an uptime %. `detail` is built from tags and our own words, never from an
+    // error message, ≤ 300 chars, IPs masked. recorder_event_id is the recorder's line id: the
+    // UNIQUE key is what makes a re-read or a post-truncation replay a no-op (several pool rows
+    // share NULL, which SQLite's UNIQUE allows). Pruned after 2 years by lib/retention.js.
+    `CREATE TABLE IF NOT EXISTS node_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      network TEXT NOT NULL,
+      source TEXT NOT NULL CHECK (source IN ('pool', 'recorder')),
+      started_at INTEGER NOT NULL,
+      ended_at INTEGER DEFAULT NULL,
+      duration_s INTEGER DEFAULT NULL,
+      state TEXT NOT NULL,
+      class TEXT DEFAULT NULL,
+      origin TEXT DEFAULT NULL CHECK (origin IS NULL OR origin IN ('transport', 'node_reply', 'auth')),
+      detail TEXT DEFAULT NULL,
+      recorder_event_id TEXT DEFAULT NULL UNIQUE
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_node_events_net_start ON node_events(network, started_at)`,
+
+    // Small per-network key/value state for the same module: the ledger read cursor
+    // (rec_inode, rec_offset, rec_last_ts) and the pool probe's first-probe / heartbeat stamps.
+    // Its own table rather than pool_config, so the admin settings loader never meets these keys.
+    `CREATE TABLE IF NOT EXISTS node_availability_meta (
+      network TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT,
+      PRIMARY KEY (network, key)
+    )`
   ];
 
   const transaction = db.transaction(() => {

@@ -9,6 +9,9 @@ const LedgerRollup = require('./ledger-rollup');
 // pending payout could still read.
 const PPLNS_WINDOW_BLOCKS = 60;
 
+// node_events (lib/node-availability.js) keep 2 years — design §20.2.
+const NODE_EVENTS_KEEP_DAYS = 730;
+
 class RetentionManager {
   constructor(config) {
     this.config = config;
@@ -72,6 +75,7 @@ class RetentionManager {
       alerts_deleted: 0,
       audit_log_deleted: 0,
       balance_log_deleted: 0,
+      node_events_deleted: 0,
       ledger_rollup_horizon: null,
       ledger_rollup_mismatch: null,
     };
@@ -148,6 +152,13 @@ class RetentionManager {
         const r5 = this.db.prepare('DELETE FROM nostr_seen_events WHERE seen_at < ?').run(nsCut);
         result.nostr_seen_deleted = r5.changes;
       } catch (_) { result.nostr_seen_deleted = 0; }
+
+      // 6. Node availability history (design §20.2) — 2 years, a fixed horizon: the admin page's
+      //    longest range is 1y, and an upstream bug report wants the year before that too. Only
+      //    CLOSED rows go; an outage still open is never pruned however old its start.
+      const neCut = now - NODE_EVENTS_KEEP_DAYS * 86400;
+      const r6 = this.db.prepare('DELETE FROM node_events WHERE ended_at IS NOT NULL AND ended_at < ?').run(neCut);
+      result.node_events_deleted = r6.changes;
     });
     tx();
 

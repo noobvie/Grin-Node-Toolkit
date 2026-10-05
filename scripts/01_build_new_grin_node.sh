@@ -2237,6 +2237,11 @@ generate_config() {
 #   log_file_path           → <node_dir>/grin-server.log
 #   api_secret_path         → <node_dir>/.api_secret
 #   foreign_api_secret_path → <node_dir>/.foreign_api_secret
+#   peer_max_inbound_count  → 999
+#   peer_max_outbound_count → 199
+#   peer_min_preferred_outbound_count → 199
+#   log_max_files           → 10
+#   file_log_level          → "Debug" (grin default "Info")
 # chain_type and ports are already correct from 'grin [--testnet] server config'
 # and do not need patching here.
 # If any key is missing from the generated config, it is appended with a warning.
@@ -2316,12 +2321,25 @@ patch_config() {
         warn "peer_min_preferred_outbound_count not found in config — appended."
     fi
 
-    # log_max_files — keep only 3 rotated log files to save disk space
+    # log_max_files — keep 10 rotated log files: Debug logging fills each file
+    # fast, and 3 held only ~10 days even at Info (086 design F-6)
     if grep -qE '^#?[[:space:]]*log_max_files' "$config"; then
-        sed -i -E 's/^#?[[:space:]]*log_max_files[[:space:]]*=.*/log_max_files = 3/' "$config"
+        sed -i -E 's/^#?[[:space:]]*log_max_files[[:space:]]*=.*/log_max_files = 10/' "$config"
     else
-        echo "log_max_files = 3" >> "$config"
+        echo "log_max_files = 10" >> "$config"
         warn "log_max_files not found in config — appended."
+    fi
+
+    # file_log_level — Debug instead of grin's default Info, so a failure leaves
+    # its detail in the log (e.g. the PMMR 'verify failed' lines of a corrupted
+    # start are DEBUG-only). stdout_log_level is left at grin's default (Warning)
+    # so the tmux pane stays readable. Debug fills log_max_size faster, so the
+    # rotated history covers fewer days than at Info.
+    if grep -qE '^#?[[:space:]]*file_log_level' "$config"; then
+        sed -i -E 's/^#?[[:space:]]*file_log_level[[:space:]]*=.*/file_log_level = "Debug"/' "$config"
+    else
+        echo 'file_log_level = "Debug"' >> "$config"
+        warn "file_log_level not found in config — appended."
     fi
 
     # enable_stratum_server — deliberately NOT patched here. Stratum is a mining
@@ -2342,10 +2360,11 @@ patch_config() {
     info "  peer_max_inbound_count            = 999"
     info "  peer_max_outbound_count           = 199"
     info "  peer_min_preferred_outbound_count = 199"
-    info "  log_max_files                     = 3"
-    info "  enable_stratum_server             = (untouched — Script 07 owns stratum)"
+    info "  log_max_files                     = 10"
+    info "  file_log_level                    = \"Debug\"  (grin default: Info)"
+    info "  enable_stratum_server            = (untouched — Script 07 owns stratum)"
     info "  host (p2p)                        = \"::\"  (v5.5 default — IPv4 + IPv6 dual-stack)"
-    log "[STEP 8] archive_mode=$archive_val db_root=$db_root api_secret=$GRIN_DIR/.api_secret peer_limits=999in/199out/199min log_max_files=3 stratum=untouched p2p_host=default(::)"
+    log "[STEP 8] archive_mode=$archive_val db_root=$db_root api_secret=$GRIN_DIR/.api_secret peer_limits=999in/199out/199min log_max_files=10 file_log_level=Debug stratum=untouched p2p_host=default(::)"
 }
 
 # =============================================================================

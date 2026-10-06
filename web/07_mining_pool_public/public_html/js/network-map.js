@@ -204,7 +204,7 @@
       for (const nd of NODES) { if (!nd || !nd._front) continue; const d=(nd._sx-mx)**2+(nd._sy-my)**2; if (d<bd){ bd=d; best=nd; } }
       hoverNode = best;
       if (best) { tip.style.display="block"; tip.style.left=best._sx+"px"; tip.style.top=best._sy+"px"; let roleTxt, roleCol, val;
-        if (best.role==="hub") { roleTxt="Settlement hub"; roleCol="var(--accent, #5dff73)"; val=(totalMinersNow()+" miners settled")+(HUB.own?" · "+HUB.own.miners+" connect here":""); }
+        if (best.role==="hub") { roleTxt="Settlement hub"; roleCol="#5dff73"; val=(totalMinersNow()+" miners settled")+(HUB.own?" · "+HUB.own.miners+" connect here":""); }
         else if (best.role==="gw") { const st=best.status; roleTxt = st==="connected"?"Gateway · connected":st==="handshake"?"Gateway · handshaked, idle":st==="checking"?"Gateway · checking":"Gateway · offline"; roleCol = st==="offline"?"#ff5a52":st==="checking"?"#8b98a5":"#ffb63d"; val = st==="connected"?(best._feed+" miners routed"):st==="handshake"?"link up · 0 miners":st==="checking"?"verifying link…":"unreachable"; }
         else { roleTxt="Miner region"; roleCol="#5ad1ff"; val=best.n+" miners"; }
         tip.innerHTML = '<span class="nm-tip-role" style="color:'+roleCol+'">'+roleTxt+'</span><span class="nm-tip-name">'+esc(best.name)+'</span><br><span style="color:'+roleCol+';font-variant-numeric:tabular-nums">'+val+'</span>';
@@ -340,7 +340,7 @@
   }
 
   // ── donuts (categorical colour per country, shared across both charts) ─────
-  const CAT = ["#5dff73","#5ad1ff","#ffb63d","#ff4fd8","#a78bfa","#ff7a5c","#ffe066","#6ee7b7","#f472b6","#38bdf8","#c084fc","#fb923c","#2dd4bf","#e879f9"];
+  const CAT = ["#5dff73","#5ad1ff","#ffb63d","#ff4fd8","#a78bfa","#ff7a5c","#ffe066","#6ee7b7","#f472b6","#38bdf8","#c084fc","#fb923c","#2dd4bf","#e879f9","#bef264","#fda4af"];  // ≥16 entries: N-04 shows 16 slices, and the hsl fallback lands slice 16 on the #1 green
   const OTHER_COL = "#6b7280"; let COLOR = {};
   function buildColorRegistry(minerRows, nodeRows) {
     const weight = {}; minerRows.forEach(([n,v]) => weight[n]=(weight[n]||0)+v*100); nodeRows.forEach(([n,v]) => weight[n]=(weight[n]||0)+v);
@@ -350,13 +350,13 @@
   const SVGNS = "http://www.w3.org/2000/svg";
   function topN(raw, n=10) { const s=raw.slice().sort((a,b)=>b[1]-a[1]); const top=s.slice(0,n); const rest=s.slice(n).reduce((a,r)=>a+r[1],0); if (rest>0) top.push(["Others",rest]); return top; }
   function arcPath(cx,cy,r,ri,a0,a1){ const p=(ang,rad)=>[cx+rad*Math.cos(ang),cy+rad*Math.sin(ang)]; const large=(a1-a0)>Math.PI?1:0; const [x0,y0]=p(a0,r),[x1,y1]=p(a1,r),[x2,y2]=p(a1,ri),[x3,y3]=p(a0,ri); return "M"+x0+" "+y0+" A"+r+" "+r+" 0 "+large+" 1 "+x1+" "+y1+" L"+x2+" "+y2+" A"+ri+" "+ri+" 0 "+large+" 0 "+x3+" "+y3+" Z"; }
-  function buildDonut(svgId, legendId, raw, centerLabel) {
+  function buildDonut(svgId, legendId, raw, centerLabel, limit=10) {
     const svg=document.getElementById(svgId), legend=document.getElementById(legendId);
     if (!svg || !legend) return;
     // `sum` is what the centre shows; `total` is the divisor and must never be 0. Keeping
     // them apart matters now that an empty feed reaches here: the old `total||1` was also
     // the displayed number, so a pool with no data showed "1 miners".
-    const rows=topN(raw,10), sum=rows.reduce((s,r)=>s+r[1],0), total=sum||1; let ang=-Math.PI/2; svg.innerHTML=""; legend.innerHTML=""; const slices=[];
+    const rows=topN(raw,limit), sum=rows.reduce((s,r)=>s+r[1],0), total=sum||1; let ang=-Math.PI/2; svg.innerHTML=""; legend.innerHTML=""; const slices=[];
     if (!rows.length) { const ring=document.createElementNS(SVGNS,"path"); ring.setAttribute("d",arcPath(100,100,88,54,-Math.PI/2,Math.PI*1.4999)); ring.setAttribute("fill","rgba(140,205,235,0.08)"); svg.appendChild(ring);
       const row=document.createElement("div"); row.className="nm-dl-row other"; row.innerHTML='<span class="sw" style="background:'+OTHER_COL+'"></span><span class="nm">no data yet</span><span class="pc">—</span>'; legend.appendChild(row); }
     rows.forEach(([name,val]) => { const a0=ang, a1=ang+(val/total)*Math.PI*2; ang=a1; const col=colorFor(name);
@@ -466,7 +466,10 @@
     const nodeRows = (peers.countries || []).map(c => [c.country, c.peers]);
     buildColorRegistry(minerRows, nodeRows);
     buildDonut('nm-donut-miners', 'nm-legend-miners', minerRows, 'miners');
-    buildDonut('nm-donut-nodes', 'nm-legend-nodes', nodeRows, 'nodes');
+    // 16, not 10: node counts form a long flat tail (#10–#16 within ~10 nodes of each other on
+    // a live box), so a 10-cut dropped countries like Vietnam (#13) into Others. Keep the
+    // N-04 header's "top 16" in network-map.html in step with this number.
+    buildDonut('nm-donut-nodes', 'nm-legend-nodes', nodeRows, 'nodes', 16);
     fillPlacard(topo, peers);
     utcClock();
 

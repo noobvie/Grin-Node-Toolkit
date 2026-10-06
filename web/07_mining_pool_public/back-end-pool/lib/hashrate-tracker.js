@@ -134,30 +134,79 @@ class HashrateTracker {
     }
   }
 
+  // Besides the ranking figure, each row carries the leaderboard's context columns (P-04 on
+  // miners-stats.html): share of the pool's work in the window, accepted share count, distinct
+  // rigs (a NULL worker_name counts as one rig, not zero — a rig that sent no name still mined),
+  // the last accepted share, and — for windows longer than an hour — the same miner's last-hour
+  // rate, so the page can show a trend. Rig COUNTS only; worker names never leave this method.
+  //
+  // No LIMIT in the SQL: SQLite has to build every group before it can ORDER BY the sum anyway,
+  // and the pool total for share_pct needs all of them. One row per active miner (≤ ~1000).
+  //
+  // TTL-cached like getTopAvgHashrate: the answer is the same for every caller, the page polls it
+  // every 60 s per open tab, and a 24 h window is the largest shares read any public route makes.
+  static TOP_MINERS_TTL_MS = 60000;
+  static TOP_MINERS_CACHE_MAX = 16;
+
   getTopMiners(limit = 10, windowMinutes = 1) {
+    const key = `${limit}|${windowMinutes}`;
+    const now = Date.now();
+    if (!this._topMinersCache) this._topMinersCache = new Map();
+    const hit = this._topMinersCache.get(key);
+    if (hit && now - hit.at < HashrateTracker.TOP_MINERS_TTL_MS) return hit.rows;
+
     try {
       const windowSeconds = windowMinutes * 60;
-      const nowS = Math.floor(Date.now() / 1000);
+      const nowS = Math.floor(now / 1000);
       const cutoffTime = nowS - windowSeconds;
       const factor = HashrateTracker.CYCLE_LENGTH / (windowSeconds * HashrateTracker.SOLUTION_RATE);
 
       // Upper bound load-bearing, as in recordHashrates: one-sided, this was a full SCAN.
-      const rows = this.db.prepare(`
-        SELECT grin_address, COALESCE(SUM(difficulty), 0) AS sumdiff
+      const groups = this.db.prepare(`
+        SELECT grin_address, COALESCE(SUM(difficulty), 0) AS sumdiff,
+               COUNT(*) AS share_count,
+               COUNT(DISTINCT COALESCE(worker_name, '')) AS rig_count,
+               MAX(created_at) AS last_share_at
         FROM shares WHERE created_at > ? AND created_at <= ?
         GROUP BY grin_address
         ORDER BY sumdiff DESC
-        LIMIT ?
-      `).all(cutoffTime, nowS, limit);
+      `).all(cutoffTime, nowS);
+      const poolSum = groups.reduce((s, r) => s + (r.sumdiff || 0), 0);
+      const top = groups.slice(0, limit);
 
-      return rows.map(r => ({
+      // Last-hour rate for the trend column. Same two-sided shape, one hour of rows.
+      let lastHour = null;
+      if (windowMinutes > 60 && top.length) {
+        const hourS = 3600;
+        const hourFactor = HashrateTracker.CYCLE_LENGTH / (hourS * HashrateTracker.SOLUTION_RATE);
+        lastHour = new Map();
+        for (const r of this.db.prepare(`
+          SELECT grin_address, COALESCE(SUM(difficulty), 0) AS sumdiff
+          FROM shares WHERE created_at > ? AND created_at <= ?
+          GROUP BY grin_address
+        `).all(nowS - hourS, nowS)) lastHour.set(r.grin_address, r.sumdiff * hourFactor);
+      }
+
+      const rows = top.map(r => ({
         grin_address: r.grin_address,
         avg_hashrate: r.sumdiff * factor,
-        max_hashrate: r.sumdiff * factor
+        max_hashrate: r.sumdiff * factor,
+        share_pct: poolSum > 0 ? (r.sumdiff / poolSum) * 100 : 0,
+        share_count: r.share_count,
+        rig_count: r.rig_count,
+        last_share_at: r.last_share_at,
+        hashrate_1h: lastHour ? (lastHour.get(r.grin_address) || 0) : null
       }));
+
+      if (this._topMinersCache.size >= HashrateTracker.TOP_MINERS_CACHE_MAX) {
+        this._topMinersCache.delete(this._topMinersCache.keys().next().value);
+      }
+      this._topMinersCache.set(key, { at: now, rows });
+      return rows;
     } catch (err) {
       console.error(`Error fetching top miners: ${err.message}`);
-      return [];
+      // Never cache a failure; serve the last good answer if there is one.
+      return hit ? hit.rows : [];
     }
   }
 
@@ -225,8 +274,17 @@ class HashrateTracker {
       // directly — no re-derivation, and no overlap: the rollup only ever covers whole days
       // strictly below todayStart (see rollupMinerDays), and the two raw ranges are disjoint
       // from it and from each other.
+      // Per address: window total + per-UTC-day totals (for the P-06 sparkline, active days and
+      // peak day). Every piece is read per (address, day), so the daily split is exact.
       const totals = new Map();
-      const add = (addr, v) => totals.set(addr, (totals.get(addr) || 0) + (v || 0));
+      const perDay = new Map();
+      const add = (addr, day, v) => {
+        if (!v) return;
+        totals.set(addr, (totals.get(addr) || 0) + v);
+        let m = perDay.get(addr);
+        if (!m) perDay.set(addr, (m = new Map()));
+        m.set(day, (m.get(day) || 0) + v);
+      };
 
       // ⚠ Both bounds on every raw read are load-bearing and must not be "simplified" away.
       // With a ONE-SIDED `recorded_at >= ?` SQLite still picks `SCAN hashrate_history USING
@@ -235,6 +293,9 @@ class HashrateTracker {
       // index. The upper bound flips it to `SEARCH … USING idx_hashrate_time
       // (recorded_at>? AND recorded_at<?)`, which is the whole point. Both plans verified with
       // EXPLAIN QUERY PLAN against the real schema, and both pinned in test-rate-limits.js.
+      // Each raw piece lies inside ONE UTC day (piece 1 below firstFullDay, piece 3 from
+      // todayStart), so the day is a constant per call — no GROUP BY on a computed column, and
+      // the plan stays the pinned SEARCH on idx_hashrate_time.
       const rawStmt = this.db.prepare(`
         SELECT grin_address, COALESCE(SUM(hashrate_gps * window_seconds), 0) AS s
         FROM hashrate_history
@@ -242,7 +303,8 @@ class HashrateTracker {
         GROUP BY grin_address`);
       const rawRange = (from, to) => {
         if (!(to > from)) return;
-        for (const r of rawStmt.all(from, to)) add(r.grin_address, r.s);
+        const day = Math.floor((from + 1) / DAY) * DAY;
+        for (const r of rawStmt.all(from, to)) add(r.grin_address, day, r.s);
       };
 
       // Piece 1 — the partial first day. `> cutoffTime` (not >=) mirrors the original query's
@@ -251,12 +313,12 @@ class HashrateTracker {
 
       // Piece 2 — whole completed days from the rollup.
       if (firstFullDay < todayStart) {
+        // One row per (day, address) already — no GROUP BY needed, still a covering seek.
         for (const r of this.db.prepare(`
-          SELECT grin_address, COALESCE(SUM(gps_seconds), 0) AS s
+          SELECT day, grin_address, gps_seconds AS s
           FROM miner_hashrate_daily
           WHERE day >= ? AND day < ?
-          GROUP BY grin_address
-        `).all(firstFullDay, todayStart)) add(r.grin_address, r.s);
+        `).all(firstFullDay, todayStart)) add(r.grin_address, r.day, r.s);
       }
 
       // Piece 3 — the current partial day. Skipped when piece 1 already covered it (a small
@@ -265,14 +327,48 @@ class HashrateTracker {
         rawRange(Math.max(todayStart - 1, cutoffTime), todayStart + DAY);
       }
 
+      // The UTC day buckets the window touches, oldest first, and how many seconds of each lie
+      // inside it. Usually days+1 buckets: a partial first day, the whole days, a partial today.
+      // A bucket's daily average divides by its COVERED seconds, so the two partial ends are not
+      // drawn artificially low; peak_day_gps only considers fully covered days, so a busy first
+      // hour after midnight can never read as the best day of the month.
+      const buckets = [];
+      for (let b = Math.floor(cutoffTime / DAY) * DAY; b <= todayStart; b += DAY) {
+        const covered = Math.min(b + DAY, nowS) - Math.max(b, cutoffTime);
+        if (covered > 0) buckets.push({ day: b, covered });
+      }
+      let poolTotal = 0;
+      for (const s of totals.values()) poolTotal += s;
+      const sig = (v) => Number(v.toPrecision(4));
+
       const rows = [...totals.entries()]
         .map(([grin_address, s]) => ({
           grin_address,
-          avg_hashrate_gps: parseFloat((s / windowSeconds).toFixed(6))
+          avg_hashrate_gps: parseFloat((s / windowSeconds).toFixed(6)),
+          _s: s
         }))
         .filter(r => r.avg_hashrate_gps > 0)
         .sort((a, b) => b.avg_hashrate_gps - a.avg_hashrate_gps)
-        .slice(0, limit);
+        .slice(0, limit)
+        .map(({ grin_address, avg_hashrate_gps, _s }) => {
+          const m = perDay.get(grin_address) || new Map();
+          let active = 0, peak = null;
+          const daily = buckets.map(({ day, covered }) => {
+            const v = m.get(day) || 0;
+            if (v > 0) active++;
+            const gps = v / covered;
+            if (covered === DAY && (peak === null || gps > peak)) peak = gps;
+            return sig(gps);
+          });
+          return {
+            grin_address,
+            avg_hashrate_gps,
+            share_pct: poolTotal > 0 ? parseFloat(((_s / poolTotal) * 100).toFixed(3)) : 0,
+            peak_day_gps: peak === null ? null : parseFloat(peak.toFixed(6)),
+            days_active: active,
+            daily_gps: daily     // oldest → today; length = the UTC days the window touches
+          };
+        });
 
       // `days` and `limit` are clamped at the route, so the key space is bounded — but never
       // trust a caller's clamp to bound server memory (getPoolHistory's rule).

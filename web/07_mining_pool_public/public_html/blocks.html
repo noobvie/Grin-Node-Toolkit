@@ -12,7 +12,7 @@
 
   <!-- ===== DESCRIPTION & KEYWORDS ===== -->
   <title>Found Blocks — Grin Mining Pool</title>
-  <meta name="description" content="Live list of blocks found by the pool with historical luck, block cadence, status and cumulative reward trends. Full transparency — every block is verifiable on the Grin chain explorer.">
+  <meta name="description" content="Live list of blocks found by the pool with historical luck, found vs expected blocks, the busiest UTC hours, status and cumulative reward trends. Full transparency — every block is verifiable on the Grin chain explorer.">
   <meta name="keywords" content="grin blocks found, mining pool luck, block cadence, orphan rate, pool rewards, Grin pool, block explorer">
 
   <!-- ===== OPEN GRAPH ===== -->
@@ -47,7 +47,7 @@
     .chip.active { background: var(--accent); color: var(--bg, #111); border-color: var(--accent); }
     .dim { color: var(--text-dim, var(--dark-dim)); }
 
-    /* Shared timeframe toggle driving the three historical trend charts (Week/Month/Year/All). */
+    /* Shared timeframe toggle driving the historical charts P-01…P-05 (Week/Month/Year/All). */
     .rangebar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 2px; }
     .rangebar .rng-btn {
       font: inherit; font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
@@ -64,7 +64,7 @@
     }
     .rangebar .rng-spacer { margin-left: auto; }
 
-    /* P-05 on a phone: the shared .data-table pads 18px a side, which alone ate ~180px of a
+    /* P-06 on a phone: the shared .data-table pads 18px a side, which alone ate ~180px of a
        390px screen across five columns. Tighten it, keep cells on one line, and let the
        .table-wrap scroll sideways as a last resort instead of the whole page. */
     .bk-table td, .bk-table th { white-space: nowrap; }
@@ -75,6 +75,47 @@
       .bk-table thead th:last-child,  .bk-table tbody td:last-child  { padding-right: 12px; }
       .bk-table .badge { font-size: 11px; padding: 2px 6px; }
     }
+    /* P-05 heatmap: a real <table> (screen readers get row/column headers for free). Cell
+       shade = blocks found, one hue (the theme accent) mixed into the page ground in four
+       steps; an empty cell is the faint panel line. Counts are not printed in the 168 cells
+       (ink contrast on a mid-step accent is theme-dependent) — the totals row/column carry
+       them as text, and the readout gives any cell on hover/tap. */
+    /* min-width:0 on the panel: it is a .deck grid item, whose default min-width:auto lets the
+       table's 620px floor widen the whole deck — the page scrolled sideways instead of this box. */
+    .bk-heat-panel { min-width: 0; }
+    /* position:relative is load-bearing: the per-cell .sr text is position:absolute, and without
+       a positioned ancestor here it escapes this scroll box and widens the whole page. */
+    .bk-heat-wrap { overflow-x: auto; max-width: 100%; position: relative; }
+    .bk-heat { border-collapse: separate; border-spacing: 2px; width: 100%; min-width: 620px;
+               font-family: var(--mono, monospace); font-size: 11px; font-variant-numeric: tabular-nums; }
+    .bk-heat th { color: var(--text-mute, #6b7480); font-weight: 400; padding: 0 2px; text-align: center; }
+    .bk-heat thead th { padding-bottom: 4px; }
+    .bk-heat tbody th, .bk-heat tfoot th { text-align: left; padding-right: 6px; white-space: nowrap; }
+    .bk-heat td.c { height: 22px; border-radius: 3px; background: var(--rx-line, rgba(255,255,255,.05)); }
+    .bk-heat td.c.l1 { background: color-mix(in srgb, var(--accent) 25%, var(--bg)); }
+    .bk-heat td.c.l2 { background: color-mix(in srgb, var(--accent) 48%, var(--bg)); }
+    .bk-heat td.c.l3 { background: color-mix(in srgb, var(--accent) 72%, var(--bg)); }
+    .bk-heat td.c.l4 { background: var(--accent); }
+    .bk-heat td.c:hover, .bk-heat td.c.sel { outline: 2px solid var(--text, #e6edf3); outline-offset: -1px; }
+    .bk-heat td.tot { color: var(--text-dim, #9aa4b2); text-align: center; padding: 0 2px; }
+    .bk-heat tfoot td.tot, .bk-heat tfoot th { padding-top: 4px; }
+    .bk-heat tfoot td.tot.top { color: var(--text, #e6edf3); font-weight: 700; }
+    .bk-heat .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .bk-heat-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin-top: 10px;
+                    font-family: var(--mono, monospace); font-size: 11px; color: var(--text-mute, #6b7480); }
+    .bk-heat-foot[hidden] { display: none; }
+    .bk-heat-key { display: inline-flex; align-items: center; gap: 3px; }
+    .bk-heat-key i { display: inline-block; width: 14px; height: 12px; border-radius: 2px; }
+    .bk-heat-key .k0 { background: var(--rx-line, rgba(255,255,255,.05)); }
+    .bk-heat-key .k1 { background: color-mix(in srgb, var(--accent) 25%, var(--bg)); }
+    .bk-heat-key .k2 { background: color-mix(in srgb, var(--accent) 48%, var(--bg)); }
+    .bk-heat-key .k3 { background: color-mix(in srgb, var(--accent) 72%, var(--bg)); }
+    .bk-heat-key .k4 { background: var(--accent); }
+    .bk-heat-readout { color: var(--text-dim, #9aa4b2); margin-left: auto; font-variant-numeric: tabular-nums; }
+    .bk-heat-summary { margin: 0 0 10px; font-size: 13px; color: var(--text-dim, #9aa4b2); }
+    .bk-heat-summary:empty { display: none; }
+    .bk-heat-summary b { color: var(--text, #e6edf3); }
+    .bk-heat-panel .chart-empty { position: static; min-height: 120px; }
     .rangebar .rng-note {
       color: var(--text-mute, #6b7480); font-family: var(--mono, monospace);
       font-size: 11px; letter-spacing: .1em;
@@ -144,9 +185,9 @@
             <div class="deck-row half">
                 <!-- ═══ P-02 · BLOCKS FOUND PER PERIOD ═══ -->
                 <div class="panel"><span class="screws"></span>
-                    <h2 class="panel-title"><span class="tag">P-02</span> Blocks found per period</h2>
+                    <h2 class="panel-title"><span class="tag">P-02</span> Blocks found vs expected</h2>
                     <div class="panel-body chart-wrap">
-                        <canvas id="bk-chart-blocks" aria-label="Blocks found per time period" role="img"></canvas>
+                        <canvas id="bk-chart-blocks" aria-label="Blocks found per time period, against the number expected from the pool's hashrate share" role="img"></canvas>
                         <div class="chart-empty" id="bk-empty-blocks">NO TRACE DATA YET</div>
                     </div>
                 </div>
@@ -171,9 +212,32 @@
                 </div>
             </div>
 
-            <!-- ═══ P-05 · BLOCK EXPLORER (filterable table) ═══ -->
+            <!-- ═══ P-05 · FOUND BLOCKS BY UTC HOUR (weekday × hour heatmap) ═══ -->
+            <div class="panel bk-heat-panel"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">P-05</span> Found blocks by UTC hour
+                    <span class="right">weekday &times; hour &middot; follows the timeframe</span></h2>
+                <div class="panel-body">
+                    <p class="bk-heat-summary" id="bk-heat-summary"></p>
+                    <div class="bk-heat-wrap" id="bk-heat-wrap"></div>
+                    <div class="chart-empty" id="bk-empty-heat">NO BLOCKS IN RANGE</div>
+                    <div class="bk-heat-foot" id="bk-heat-foot" hidden>
+                        <span class="bk-heat-key" aria-hidden="true">fewer
+                            <i class="k0"></i><i class="k1"></i><i class="k2"></i><i class="k3"></i><i class="k4"></i>
+                            more</span>
+                        <span class="bk-heat-readout" id="bk-heat-readout" aria-live="polite">Hover or tap a cell</span>
+                    </div>
+                    <p class="dim" style="margin:10px 0 0;font-size:12px;line-height:1.6;max-width:90ch;">
+                        Every hash is an independent draw, so no hour is luckier than another &mdash; an hour
+                        finds more blocks when more hashrate mines in it. <b>Expected</b> is what the pool's
+                        hashrate in that hour should have found: a busy hour that is also high on expected is
+                        just busy, not lucky.
+                    </p>
+                </div>
+            </div>
+
+            <!-- ═══ P-06 · BLOCK EXPLORER (filterable table) ═══ -->
             <div class="panel"><span class="screws"></span>
-                <h2 class="panel-title"><span class="tag">P-05</span> Block explorer <span class="right">every block, newest first</span></h2>
+                <h2 class="panel-title"><span class="tag">P-06</span> Block explorer <span class="right">every block, newest first</span></h2>
                 <div class="panel-body">
                     <div class="filter-chips" id="filter-chips" style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px;">
                         <button class="btn sm chip active" data-filter="">All</button>
@@ -222,7 +286,8 @@
         // Public blocks deck. All data comes from public endpoints:
         //   /api/pool/stats                        summary KPIs (total/confirmed/immature/24h/7d)
         //   /api/pool/blocks?limit&offset&status   paginated explorer rows (plain array; last page = short page)
-        //   /api/pool/blocks/history?range         durable series → P-01 luck / P-02 cadence / P-03 status / P-04 reward
+        //   /api/pool/blocks/history?range         durable series → P-01 luck / P-02 found vs expected /
+        //                                          P-03 status / P-04 reward / P-05 UTC-hour heatmap
         // Block deep-links are built by window.Explorer (js/branding.js) — the single source of
         // truth for explorer base + path scheme, which differs per explorer. This page only
         // primes the network cache Explorer reads (see the pool-info fetch below). All external
@@ -342,7 +407,7 @@
             document.getElementById('page-label').textContent = 'Page ' + (_page + 1);
         }
 
-        // ── Historical trend charts (P-01…P-04), driven by the shared range toggle ──────────────
+        // ── Historical charts (P-01…P-05), driven by the shared range toggle ───────────────────
         let bkRange = 'month';
         const RANGE_NOTE = {
             week:  'last 7 days · daily',
@@ -361,6 +426,97 @@
         // a day (the 24h range buckets hourly, and the all-time range can bucket by month).
         function bucketLabels(points, bucket) {
             return PoolCharts.timeLabels(points.map(p => p.t), bucket);
+        }
+
+        function fmtExpected(v) {
+            return v == null ? '—' : Number(v).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+        }
+
+        // ── P-05 · found blocks by UTC weekday × hour ──────────────────────────────────────────
+        // `hours` = { found: [7][24], expected: [7][24] | null, expected_hours } from the history
+        // endpoint, indexed [weekday 0=Sun][UTC hour]. Rows run Monday-first. Every value put into
+        // markup goes through Number() — nothing from the API is inserted as text.
+        const HEAT_DAYS = [[1, 'Mon'], [2, 'Tue'], [3, 'Wed'], [4, 'Thu'], [5, 'Fri'], [6, 'Sat'], [0, 'Sun']];
+        let _heat = null; // last rendered grid, for the readout
+
+        function hh(h) { return (h < 10 ? '0' : '') + h + ':00'; }
+        function heatLevel(n, max) { return n > 0 && max > 0 ? Math.max(1, Math.ceil((n / max) * 4)) : 0; }
+        function sumCol(grid, h) { return grid.reduce((a, row) => a + (Number(row[h]) || 0), 0); }
+
+        function heatReadout(wd, h) {
+            const out = document.getElementById('bk-heat-readout');
+            if (!out || !_heat) return;
+            const allDays = wd === 'all';
+            const found = allDays ? sumCol(_heat.found, h) : (Number(_heat.found[wd][h]) || 0);
+            const exp = _heat.expected
+                ? (allDays ? sumCol(_heat.expected, h) : (Number(_heat.expected[wd][h]) || 0)) : null;
+            const day = allDays ? 'All days' : (HEAT_DAYS.find(d => d[0] === wd) || [0, ''])[1];
+            out.textContent = day + ' · ' + hh(h) + '–' + hh((h + 1) % 24) + ' UTC — ' +
+                found + ' found' + (exp != null ? ' · ' + fmtExpected(exp) + ' expected' : '');
+        }
+
+        function renderHeatmap(hours) {
+            const wrap = document.getElementById('bk-heat-wrap');
+            const foot = document.getElementById('bk-heat-foot');
+            const summary = document.getElementById('bk-heat-summary');
+            const readout = document.getElementById('bk-heat-readout');
+            if (!wrap) return;
+            const found = (hours && Array.isArray(hours.found) && hours.found.length === 7) ? hours.found : null;
+            const total = found ? found.reduce((a, row) => a + row.reduce((b, n) => b + (Number(n) || 0), 0), 0) : 0;
+            if (!total) {
+                _heat = null;
+                wrap.innerHTML = '';
+                if (foot) foot.hidden = true;
+                if (summary) summary.textContent = '';
+                toggleEmpty('bk-empty-heat', true);
+                return;
+            }
+            const expected = (Array.isArray(hours.expected) && hours.expected.length === 7) ? hours.expected : null;
+            _heat = { found, expected };
+            toggleEmpty('bk-empty-heat', false);
+            if (foot) foot.hidden = false;
+            if (readout) readout.textContent = 'Hover or tap a cell';
+
+            let max = 0;
+            found.forEach(row => row.forEach(n => { max = Math.max(max, Number(n) || 0); }));
+            const colTot = [];
+            for (let h = 0; h < 24; h++) colTot.push(sumCol(found, h));
+            const topCol = Math.max.apply(null, colTot);
+
+            let html = '<table class="bk-heat" aria-label="Blocks found by UTC weekday and hour">' +
+                '<thead><tr><th scope="col"><span class="sr">Day</span></th>';
+            for (let h = 0; h < 24; h++) html += '<th scope="col">' + (h < 10 ? '0' : '') + h + '</th>';
+            html += '<th scope="col" title="Blocks found on that weekday">Σ</th></tr></thead><tbody>';
+            HEAT_DAYS.forEach(function (d) {
+                const wd = d[0], row = found[wd] || [];
+                let rowTot = 0;
+                html += '<tr><th scope="row">' + d[1] + '</th>';
+                for (let h = 0; h < 24; h++) {
+                    const n = Number(row[h]) || 0;
+                    rowTot += n;
+                    html += '<td class="c l' + heatLevel(n, max) + '" data-wd="' + wd + '" data-h="' + h + '">' +
+                            '<span class="sr">' + n + '</span></td>';
+                }
+                html += '<td class="tot">' + rowTot + '</td></tr>';
+            });
+            html += '</tbody><tfoot><tr><th scope="row" title="Every weekday added together">All</th>';
+            for (let h = 0; h < 24; h++) {
+                html += '<td class="tot' + (colTot[h] === topCol ? ' top' : '') + '" data-wd="all" data-h="' + h + '">' +
+                        colTot[h] + '</td>';
+            }
+            html += '<td class="tot">' + total + '</td></tr></tfoot></table>';
+            wrap.innerHTML = html;
+
+            // Summary: the busiest and quietest UTC hour over all weekdays, each with its expected
+            // count, so a reader can tell "more hashrate then" from "luckier then".
+            if (summary) {
+                let lo = 0, hi = 0;
+                colTot.forEach((n, h) => { if (n > colTot[hi]) hi = h; if (n < colTot[lo]) lo = h; });
+                const ex = h => expected ? ' (' + fmtExpected(sumCol(expected, h)) + ' expected)' : '';
+                summary.innerHTML = 'Most blocks: <b>' + hh(hi) + ' UTC</b> &middot; ' + colTot[hi] + ' found' + ex(hi) +
+                    ' &nbsp;|&nbsp; fewest: <b>' + hh(lo) + ' UTC</b> &middot; ' + colTot[lo] + ' found' + ex(lo) +
+                    (expected ? '' : ' <span class="dim">&middot; expected appears once the pool has an hour of hashrate history</span>');
+            }
         }
 
         async function loadBlockCharts() {
@@ -386,12 +542,15 @@
                     // printed the same "MMM D" for every block found on that day).
                     { label: 'Luck', color: '#58a6ff', valueFmt: v => (Number(v) || 0).toFixed(0) + '%' });
 
-                // P-02 · blocks found per period (plain columns).
+                // P-02 · blocks found per period (columns) against the blocks the pool's hashrate
+                // share says it should have found (dashed line, same unit, same axis). A null
+                // expected — a period with no network sample — is a gap in the line, never 0.
                 toggleEmpty('bk-empty-blocks', !hasPeriod);
                 PoolCharts.renderBarChart('bk-chart-blocks',
                     bucketLabels(points, bucket),
                     points.map(p => p.blocks),
-                    { label: 'Blocks found', valueFmt: PoolCharts.fmtInt });
+                    { label: 'Found', valueFmt: PoolCharts.fmtInt,
+                      line: { label: 'Expected', data: points.map(p => p.expected), valueFmt: fmtExpected } });
 
                 // P-03 · status breakdown doughnut (window totals; true orphaned count).
                 toggleEmpty('bk-empty-status', statusTotal === 0);
@@ -406,11 +565,15 @@
                 toggleEmpty('bk-empty-reward', !hasPeriod);
                 PoolCharts.renderTrendLine('bk-chart-reward', cum,
                     { label: 'Cumulative reward', bucketSeconds: bucket, valueFmt: fmtGrin, color: '#7cb342' });
+
+                // P-05 · UTC weekday × hour heatmap.
+                renderHeatmap(data && data.hours);
             } catch (e) {
                 toggleEmpty('bk-empty-luck', true);
                 toggleEmpty('bk-empty-blocks', true);
                 toggleEmpty('bk-empty-status', true);
                 toggleEmpty('bk-empty-reward', true);
+                renderHeatmap(null);
             }
         }
 
@@ -431,7 +594,23 @@
                 });
             });
 
-            // Timeframe toggle → reload the four trend charts (explorer table is unaffected).
+            // P-05 readout: hover (mouse) or tap (touch) a cell or an "All" total. Delegated on
+            // the wrapper, so it survives every re-render.
+            const heatWrap = document.getElementById('bk-heat-wrap');
+            if (heatWrap) {
+                const pick = function (e) {
+                    const td = e.target.closest('td[data-h]');
+                    if (!td) return;
+                    heatWrap.querySelectorAll('td.sel').forEach(el => el.classList.remove('sel'));
+                    if (td.classList.contains('c')) td.classList.add('sel');
+                    const wd = td.getAttribute('data-wd');
+                    heatReadout(wd === 'all' ? 'all' : Number(wd), Number(td.getAttribute('data-h')));
+                };
+                heatWrap.addEventListener('mouseover', pick);
+                heatWrap.addEventListener('click', pick);
+            }
+
+            // Timeframe toggle → reload the charts and the heatmap (explorer table is unaffected).
             const bar = document.getElementById('bk-rangebar');
             if (bar) {
                 bar.addEventListener('click', function (e) {

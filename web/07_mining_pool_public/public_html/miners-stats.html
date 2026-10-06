@@ -101,6 +101,38 @@
       color: var(--text-mute, #6b7480); font-family: var(--mono, monospace);
       font-size: 11px; letter-spacing: .1em;
     }
+
+    /* ── Leaderboards (P-04/P-05/P-06) ─────────────────────────────────────────────
+       Seven-to-eight columns each. Cells stay on one line and .table-wrap scrolls sideways as
+       a last resort; on a phone the .col-x context columns drop out, so the board keeps
+       Rank · Miner · its ranking figure · one visual column (same treatment as blocks.html). */
+    .lb-table td, .lb-table th { white-space: nowrap; }
+    .lb-table .sub { display: block; color: var(--text-mute, #6b7480); font-size: 11px; margin-top: 2px; }
+    .lb-table .mute { color: var(--text-mute, #6b7480); }
+    .lb-table .t-up   { color: var(--ok); }
+    .lb-table .t-down { color: var(--danger); }
+    .lb-table .t-flat { color: var(--text-mute, #6b7480); }
+    /* Share-of-pool bar: scaled to the board's largest share, so #1 is a full bar. */
+    .sharebar { display: inline-block; width: 52px; height: 6px; margin-right: 8px; vertical-align: middle;
+                border-radius: 3px; overflow: hidden; background: var(--rx-line, rgba(255,255,255,.07)); }
+    .sharebar i { display: block; height: 100%; width: 0; background: var(--accent); }
+    /* Last-share lamp: live < 10 min, idle < 1 h, otherwise dark. */
+    .lamp-dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%;
+                vertical-align: middle; background: var(--rx-line, rgba(255,255,255,.12)); }
+    .lamp-dot.on   { background: var(--ok);   box-shadow: 0 0 6px var(--ok); }
+    .lamp-dot.idle { background: var(--warn); }
+    /* 30-day sparkline: one bar per UTC day, bars scaled to the row's own best day. */
+    .spark { display: block; width: 96px; height: 20px; color: var(--accent); }
+    .spark rect { fill: currentColor; }
+    .spark rect.z { fill: var(--rx-line, rgba(255,255,255,.08)); }
+    @media (max-width: 640px) {
+      .lb-table .col-x { display: none; }
+      .lb-table { font-size: 13px; }
+      .lb-table thead th, .lb-table tbody td { padding: 9px 8px; }
+      .lb-table thead th:first-child, .lb-table tbody td:first-child { padding-left: 12px; }
+      .lb-table thead th:last-child,  .lb-table tbody td:last-child  { padding-right: 12px; }
+      .sharebar { width: 36px; }
+    }
   </style>
 </head>
 <body>
@@ -196,14 +228,22 @@
             <div class="panel"><span class="screws"></span>
                 <h2 class="panel-title"><span class="tag">P-04</span> Top miners by hashrate <span class="right">last 24 hours</span></h2>
                 <div class="panel-body">
-                    <table class="data-table">
+                    <div class="table-wrap">
+                    <table class="data-table lb-table">
                         <thead>
-                            <tr><th>Rank</th><th>Miner</th><th>Hashrate (24h)</th></tr>
+                            <tr><th>Rank</th><th>Miner</th>
+                                <th class="num">Hashrate (24h)</th>
+                                <th class="num col-x" title="Average over the last hour. ▲/▼ = more than 10% above/below the 24h figure.">Last 1h</th>
+                                <th title="This miner's share of all work the pool accepted in the last 24 hours.">Pool share</th>
+                                <th class="num col-x" title="Distinct rigs (worker names) that sent shares in the last 24 hours.">Rigs</th>
+                                <th class="num col-x" title="Accepted shares in the last 24 hours.">Shares</th>
+                                <th class="col-x" title="Last accepted share. Green = within 10 minutes, amber = within the hour.">Last share</th></tr>
                         </thead>
                         <tbody id="top-hashrate">
-                            <tr><td colspan="3">Loading…</td></tr>
+                            <tr><td colspan="8">Loading…</td></tr>
                         </tbody>
                     </table>
+                    </div>
                     <div class="pager" id="hr-pager" style="display:none;align-items:center;justify-content:center;gap:14px;margin-top:16px;">
                         <button class="btn sm" id="hr-prev" disabled>‹ Prev</button>
                         <span class="dim" id="hr-page-label" style="font-size:13px;">Page 1</span>
@@ -216,14 +256,22 @@
             <div class="panel"><span class="screws"></span>
                 <h2 class="panel-title"><span class="tag">P-05</span> Top lucky miners — blocks found <span class="right">last 30 days</span></h2>
                 <div class="panel-body">
-                    <table class="data-table">
+                    <div class="table-wrap">
+                    <table class="data-table lb-table">
                         <thead>
-                            <tr><th>Rank</th><th>Miner</th><th class="num">Blocks Found</th><th class="num">Reward (ツ)</th></tr>
+                            <tr><th>Rank</th><th>Miner</th>
+                                <th class="num">Blocks Found</th>
+                                <th class="num col-x" title="Share of all blocks the pool landed in the last 30 days.">% of pool</th>
+                                <th class="num">Reward (ツ)</th>
+                                <th class="num col-x" title="Transaction fees included in those rewards. — = fees were not captured for these blocks.">Fees (ツ)</th>
+                                <th class="num col-x" title="Blocks this miner found that the network orphaned. Never counted as a find.">Orphaned</th>
+                                <th class="col-x" title="Most recent landed block — opens on the chain explorer.">Last block</th></tr>
                         </thead>
                         <tbody id="top-finders">
-                            <tr><td colspan="4">Loading…</td></tr>
+                            <tr><td colspan="8">Loading…</td></tr>
                         </tbody>
                     </table>
+                    </div>
                     <div class="pager" id="fnd-pager" style="display:none;align-items:center;justify-content:center;gap:14px;margin-top:16px;">
                         <button class="btn sm" id="fnd-prev" disabled>‹ Prev</button>
                         <span class="dim" id="fnd-page-label" style="font-size:13px;">Page 1</span>
@@ -236,14 +284,21 @@
             <div class="panel"><span class="screws"></span>
                 <h2 class="panel-title"><span class="tag">P-06</span> Top miners by avg hashrate <span class="right">last 30 days</span></h2>
                 <div class="panel-body">
-                    <table class="data-table">
+                    <div class="table-wrap">
+                    <table class="data-table lb-table">
                         <thead>
-                            <tr><th>Rank</th><th>Miner</th><th class="num">Avg Hashrate (30d)</th></tr>
+                            <tr><th>Rank</th><th>Miner</th>
+                                <th class="num">Avg Hashrate (30d)</th>
+                                <th class="col-x" title="This miner's share of all work the pool recorded over the 30 days.">Pool share</th>
+                                <th class="num col-x" title="Best full UTC day's average hashrate in the window.">Peak day</th>
+                                <th class="num col-x" title="UTC days with any mining, out of the UTC days the 30-day window touches (a partial first day and today included).">Active days</th>
+                                <th title="Daily average hashrate, oldest on the left, today on the right. Bars are scaled to this miner's own best day.">Daily trend</th></tr>
                         </thead>
                         <tbody id="top-avg">
-                            <tr><td colspan="3">Loading…</td></tr>
+                            <tr><td colspan="7">Loading…</td></tr>
                         </tbody>
                     </table>
+                    </div>
                     <div class="pager" id="avg-pager" style="display:none;align-items:center;justify-content:center;gap:14px;margin-top:16px;">
                         <button class="btn sm" id="avg-prev" disabled>‹ Prev</button>
                         <span class="dim" id="avg-page-label" style="font-size:13px;">Page 1</span>
@@ -324,6 +379,7 @@
         const PAGE_SIZE = 20;
         let hrMiners = [], hrPage = 0;    // top miners by 24h hashrate
         let fndMiners = [], fndPage = 0;  // top lucky miners by blocks found (30d)
+        let fndTotalBlocks = 0;           // every landed pool block in that window (% of pool)
         let avgMiners = [], avgPage = 0;  // top miners by avg hashrate (30d)
 
         function updatePager(prefix, page, pages) {
@@ -337,22 +393,101 @@
             if (next) next.disabled = page >= pages - 1;
         }
 
+        // ── Leaderboard cell helpers ─────────────────────────────────────────
+        // Every helper returns escaped HTML; numbers go through Number() first so a malformed
+        // API value renders as "—", never as markup.
+        function fmtPct(p) {
+            p = Number(p);
+            if (!isFinite(p) || p <= 0) return '0%';
+            if (p < 0.01) return '<0.01%';
+            return (p >= 10 ? p.toFixed(1) : p.toFixed(2)) + '%';
+        }
+        function fmtUtc(ts) {
+            return new Date(ts * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+        }
+        function fmtAgo(ts) {
+            const s = Math.max(0, Math.floor(Date.now() / 1000) - ts);
+            if (s < 60) return 'just now';
+            if (s < 3600) return Math.floor(s / 60) + 'm ago';
+            if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+            return Math.floor(s / 86400) + 'd ago';
+        }
+        // Share-of-pool cell: a bar scaled to the board's largest share (width applied after
+        // render via CSSOM, not an inline style attribute) + the exact percentage.
+        function shareCell(p, maxP) {
+            const w = maxP > 0 ? Math.min(100, Math.max(0, Number(p) / maxP * 100)) : 0;
+            return '<span class="sharebar"><i data-w="' + w.toFixed(1) + '"></i></span>' + escHtml(fmtPct(p));
+        }
+        function applyBars(tbody) {
+            tbody.querySelectorAll('.sharebar i[data-w]').forEach(function (el) {
+                el.style.width = el.getAttribute('data-w') + '%';
+            });
+        }
+        // Last-hour vs window figure: ▲/▼ only past ±10%, so normal share variance reads flat.
+        function trendCell(h1, h24) {
+            if (h1 == null || !isFinite(Number(h1))) return '<span class="mute">—</span>';
+            h1 = Number(h1); h24 = Number(h24) || 0;
+            let cls = 't-flat', arrow = '▬';
+            if (h24 > 0 && h1 > h24 * 1.1) { cls = 't-up'; arrow = '▲'; }
+            else if (h1 < h24 * 0.9) { cls = 't-down'; arrow = '▼'; }
+            return escHtml(fmtGpsLabel(h1)) + ' <span class="' + cls + '">' + arrow + '</span>';
+        }
+        function lastShareCell(ts) {
+            ts = Number(ts);
+            if (!ts) return '<span class="mute">—</span>';
+            const age = Math.floor(Date.now() / 1000) - ts;
+            const cls = age < 600 ? 'on' : age < 3600 ? 'idle' : '';
+            return '<span class="lamp-dot ' + cls + '"></span><span title="' + escHtml(fmtUtc(ts)) + '">' +
+                escHtml(fmtAgo(ts)) + '</span>';
+        }
+        // One bar per UTC day, scaled to the row's own best day; a zero day is a faint stub so
+        // a gap reads as a gap rather than as missing data.
+        function sparkSvg(daily) {
+            const v = Array.isArray(daily) ? daily.map(x => Math.max(0, Number(x) || 0)) : [];
+            if (!v.length) return '<span class="mute">—</span>';
+            const W = 96, H = 20, n = v.length, slot = W / n, bw = Math.max(1, slot - (slot > 2.5 ? 1 : 0));
+            const max = Math.max.apply(null, v);
+            let bars = '';
+            for (let i = 0; i < n; i++) {
+                const h = max > 0 && v[i] > 0 ? Math.max(2, v[i] / max * H) : 1.5;
+                bars += '<rect' + (v[i] > 0 ? '' : ' class="z"') + ' x="' + (i * slot).toFixed(2) +
+                    '" y="' + (H - h).toFixed(2) + '" width="' + bw.toFixed(2) + '" height="' + h.toFixed(2) + '"/>';
+            }
+            return '<svg class="spark" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" aria-hidden="true">' + bars + '</svg>';
+        }
+        function blockLinkCell(height, ts) {
+            const h = Number(height);
+            if (!h) return '<span class="mute">—</span>';
+            const label = '#' + h.toLocaleString('en-US');
+            const link = window.Explorer ? Explorer.link('block', String(h), label) : escHtml(label);
+            const when = Number(ts) ? '<span class="sub" title="' + escHtml(fmtUtc(Number(ts))) + '">' + escHtml(fmtAgo(Number(ts))) + '</span>' : '';
+            return link + when;
+        }
+        const maxOf = (rows, key) => rows.reduce((m, r) => Math.max(m, Number(r[key]) || 0), 0);
+
         function renderHrPage() {
             const tbody = document.getElementById('top-hashrate');
             if (!tbody) return;
             const total = hrMiners.length;
-            if (!total) { tableMessage(tbody, 3, 'No active miners in the last 24 hours'); updatePager('hr', 0, 0); return; }
+            if (!total) { tableMessage(tbody, 8, 'No active miners in the last 24 hours'); updatePager('hr', 0, 0); return; }
             const pages = Math.ceil(total / PAGE_SIZE);
             if (hrPage >= pages) hrPage = pages - 1;
             if (hrPage < 0) hrPage = 0;
             const start = hrPage * PAGE_SIZE;
+            const maxShare = maxOf(hrMiners, 'share_pct');
             tbody.innerHTML = hrMiners.slice(start, start + PAGE_SIZE).map((m, i) => `
                 <tr>
                     <td>#${start + i + 1}</td>
                     <td>${addrCell(m.grin_address)}</td>
-                    <td>${escHtml(fmtGpsLabel(m.hashrate_gps || 0))}</td>
+                    <td class="num">${escHtml(fmtGpsLabel(m.hashrate_gps || 0))}</td>
+                    <td class="num col-x">${trendCell(m.hashrate_1h_gps, m.hashrate_gps)}</td>
+                    <td>${shareCell(m.share_pct, maxShare)}</td>
+                    <td class="num col-x">${Number(m.rigs || 0).toLocaleString('en-US')}</td>
+                    <td class="num col-x">${Number(m.shares || 0).toLocaleString('en-US')}</td>
+                    <td class="col-x">${lastShareCell(m.last_share_at)}</td>
                 </tr>
             `).join('');
+            applyBars(tbody);
             updatePager('hr', hrPage, pages);
         }
 
@@ -360,19 +495,28 @@
             const tbody = document.getElementById('top-finders');
             if (!tbody) return;
             const total = fndMiners.length;
-            if (!total) { tableMessage(tbody, 4, 'No blocks found in the last 30 days yet — be the first!'); updatePager('fnd', 0, 0); return; }
+            if (!total) { tableMessage(tbody, 8, 'No blocks found in the last 30 days yet — be the first!'); updatePager('fnd', 0, 0); return; }
             const pages = Math.ceil(total / PAGE_SIZE);
             if (fndPage >= pages) fndPage = pages - 1;
             if (fndPage < 0) fndPage = 0;
             const start = fndPage * PAGE_SIZE;
-            tbody.innerHTML = fndMiners.slice(start, start + PAGE_SIZE).map((m, i) => `
+            tbody.innerHTML = fndMiners.slice(start, start + PAGE_SIZE).map((m, i) => {
+                const found = Number(m.blocks_found || 0);
+                const orph = Number(m.orphaned || 0);
+                const pct = fndTotalBlocks > 0 ? found / fndTotalBlocks * 100 : 0;
+                const fees = m.total_fees == null ? '<span class="mute">—</span>' : Number(m.total_fees).toFixed(4);
+                return `
                 <tr>
                     <td>#${start + i + 1}</td>
                     <td>${addrCell(m.grin_address)}</td>
-                    <td class="num">${Number(m.blocks_found || 0).toLocaleString('en-US')}</td>
+                    <td class="num">${found.toLocaleString('en-US')}</td>
+                    <td class="num col-x">${escHtml(fmtPct(pct))}</td>
                     <td class="num">${Number(m.total_reward || 0).toFixed(2)}</td>
-                </tr>
-            `).join('');
+                    <td class="num col-x">${fees}</td>
+                    <td class="num col-x${orph ? '' : ' mute'}">${orph.toLocaleString('en-US')}</td>
+                    <td class="col-x">${blockLinkCell(m.last_height, m.last_found_at)}</td>
+                </tr>`;
+            }).join('');
             updatePager('fnd', fndPage, pages);
         }
 
@@ -380,18 +524,31 @@
             const tbody = document.getElementById('top-avg');
             if (!tbody) return;
             const total = avgMiners.length;
-            if (!total) { tableMessage(tbody, 3, 'No mining activity in the last 30 days yet'); updatePager('avg', 0, 0); return; }
+            if (!total) { tableMessage(tbody, 7, 'No mining activity in the last 30 days yet'); updatePager('avg', 0, 0); return; }
             const pages = Math.ceil(total / PAGE_SIZE);
             if (avgPage >= pages) avgPage = pages - 1;
             if (avgPage < 0) avgPage = 0;
             const start = avgPage * PAGE_SIZE;
-            tbody.innerHTML = avgMiners.slice(start, start + PAGE_SIZE).map((m, i) => `
+            const maxShare = maxOf(avgMiners, 'share_pct');
+            tbody.innerHTML = avgMiners.slice(start, start + PAGE_SIZE).map((m, i) => {
+                const daily = Array.isArray(m.daily_gps) ? m.daily_gps : [];
+                const peak = Number(m.peak_day_gps);
+                const today = daily.length ? Number(daily[daily.length - 1]) || 0 : 0;
+                const sparkTitle = daily.length
+                    ? 'Today so far: ' + fmtGpsLabel(today) + (peak > 0 ? ' · best full day: ' + fmtGpsLabel(peak) : '')
+                    : '';
+                return `
                 <tr>
                     <td>#${start + i + 1}</td>
                     <td>${addrCell(m.grin_address)}</td>
                     <td class="num">${escHtml(fmtGpsLabel(m.avg_hashrate_gps || 0))}</td>
-                </tr>
-            `).join('');
+                    <td class="col-x">${shareCell(m.share_pct, maxShare)}</td>
+                    <td class="num col-x">${peak > 0 ? escHtml(fmtGpsLabel(peak)) : '<span class="mute">—</span>'}</td>
+                    <td class="num col-x">${Number(m.days_active || 0)}<span class="mute"> / ${daily.length}</span></td>
+                    <td title="${escHtml(sparkTitle)}">${sparkSvg(daily)}</td>
+                </tr>`;
+            }).join('');
+            applyBars(tbody);
             updatePager('avg', avgPage, pages);
         }
 
@@ -540,7 +697,7 @@
                 renderHrPage();
             } catch (e) {
                 hrMiners = [];
-                if (hrTbody) tableMessage(hrTbody, 3, 'Hashrate data unavailable');
+                if (hrTbody) tableMessage(hrTbody, 8, 'Hashrate data unavailable');
                 updatePager('hr', 0, 0);
             }
 
@@ -552,10 +709,11 @@
                 // rather than "unavailable" (audit §J15-2).
                 if (data === null) throw new Error('unavailable');
                 fndMiners = Array.isArray(data.top_finders) ? data.top_finders : [];
+                fndTotalBlocks = Number(data.total_blocks) || 0;
                 renderFndPage();
             } catch (e) {
                 fndMiners = [];
-                if (fndTbody) tableMessage(fndTbody, 4, 'Block-finder data unavailable');
+                if (fndTbody) tableMessage(fndTbody, 8, 'Block-finder data unavailable');
                 updatePager('fnd', 0, 0);
             }
 
@@ -570,7 +728,7 @@
                 renderAvgPage();
             } catch (e) {
                 avgMiners = [];
-                if (avgTbody) tableMessage(avgTbody, 3, 'Hashrate history unavailable');
+                if (avgTbody) tableMessage(avgTbody, 7, 'Hashrate history unavailable');
                 updatePager('avg', 0, 0);
             }
         }

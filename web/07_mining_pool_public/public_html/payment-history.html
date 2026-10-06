@@ -173,17 +173,18 @@
         </div>
 
         <!-- ═══ Spec placard: lifetime transparency figures ═══ -->
-        <div class="placard figures" aria-label="Lifetime payment figures">
+        <!-- SIX tiles, laid out 6 / 3+3 / 2+2+2 by .cols-6 (reactor.css). Keep the count even:
+             the average payout rides under the payout count rather than taking a 7th tile. -->
+        <div class="placard figures cols-6" aria-label="Lifetime payment figures">
             <span class="tone-gold"><i>Total paid all-time</i><b id="ph-paid-all">—</b></span>
-            <span><i>Payouts all-time</i><b id="ph-count-all">—</b></span>
-            <span class="tone-info"><i>Avg payout</i><b id="ph-avg">—</b></span>
+            <span class="tone-info"><i>Payouts all-time</i><b id="ph-count-all">—</b><small class="fig-sub" id="ph-avg">avg —</small></span>
             <span class="tone-text"><i>Effective pool fee</i><b id="ph-fee-pct">—</b></span>
             <span class="tone-ok"><i>Given away</i><b id="ph-giveaways">—</b></span>
             <span class="tone-warn"><i>Donations received</i><b id="ph-donations">—</b></span>
             <!-- The operator's own take, as actually withdrawn from the pool fee (after the network
                  fees the pool wallet paid on payouts). Published beside — never inside — what
                  miners were paid (operator decision 2026-10-05). -->
-            <span class="tone-text" title="Revenue the pool operator has withdrawn from the pool fee, after the Grin network fees the pool paid on payouts. Not included in Total paid."><i>Operator revenue withdrawn</i><b id="ph-operator">—</b></span>
+            <span class="tone-text" title="Revenue the pool operator has withdrawn from the pool fee, after the Grin network fees the pool paid on payouts. Not included in Total paid."><i>Operator withdrawals</i><b id="ph-operator">—</b></span>
         </div>
 
         <div class="deck">
@@ -432,7 +433,11 @@
                 // ── Lifetime transparency tiles (range-independent) ──
                 setGrinStat('ph-paid-all', totals.paid_all);
                 setStat('ph-count-all', fmtInt(totals.payout_count || 0));
-                if (totals.payout_count) setGrinStat('ph-avg', totals.avg_payout); else setStat('ph-avg', '—');
+                const avgEl = document.getElementById('ph-avg');
+                if (avgEl) {
+                    avgEl.textContent = 'avg ' + (totals.payout_count ? PoolFmt.grinTile(totals.avg_payout) : '—');
+                    avgEl.title = totals.payout_count ? 'Average payout: ' + PoolFmt.grinExact(totals.avg_payout) : '';
+                }
                 setStat('ph-fee-pct',   (totals.to_miners_all || totals.fee_all)
                                           ? (Number(totals.fee_percent || 0).toFixed(2) + ' %')
                                           : '0 %');

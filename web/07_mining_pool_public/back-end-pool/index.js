@@ -1506,7 +1506,7 @@ function setupRoutes() {
     'GET /api/pool/connect/suggest': { desc: 'Which server to point a rig at, for YOU: estimated effective latency per region, from the country your IP resolves to. Effective = your distance to that server + its link to the pool (hub_rtt_ms) — a regional server does not shorten the trip to the pool, so a far one can lose to connecting directly. Returns { basis: "estimate", recommended (region tag, or null), estimates: [{ region, est_ms (integer milliseconds, round trip), via: direct | gateway }] }; direct is preferred unless a gateway is more than 15 ms faster. Regions that are offline, or whose link to the pool has not been measured yet, get no estimate. { basis: "unavailable" } alone when no country can be resolved. An estimate from geography, not a measurement. Your IP and country are used for this one answer and neither stored, logged nor returned; never cached (Cache-Control: private, no-store).', shape: 'raw' },
     'GET /api/pool/locations': { desc: 'Operator-declared stratum regions that are currently active — region key, label, and the stratum URL to point a rig at.', shape: 'array' },
     'GET /api/pool/blocks': { desc: 'Pool-found blocks, newest first. A short page (fewer rows than limit) means the last page. found_by is MASKED (grin1qxy…mn4p).', shape: 'array', params: 'limit (≤500, default 50) · offset · status=immature|matured|orphaned (matured = confirmed + paid; confirmed|paid alone also accepted)' },
-    'GET /api/pool/blocks/history': { desc: 'Durable block series: luck, per-period counts, status split, cumulative reward. Blocks are never pruned, so any range is meaningful.', shape: 'raw', params: 'range=week|month|year|all (default month)' },
+    'GET /api/pool/blocks/history': { desc: 'Durable block series: luck, per-period counts, status split, cumulative reward, and found blocks by UTC hour. Blocks are never pruned, so any range is meaningful. points[].expected is the number of blocks the pool should have found in that period from its share of network hashrate (pool GPS ÷ network GPS × 60 per hour, from the hourly rollup); null when the period has no network sample — draw it as a gap. Every period the rollup covers has a point, so a period with expected > 0 and blocks 0 is listed. hours = { found, expected, expected_hours }: 7×24 arrays indexed [weekday][hour], UTC, weekday 0 = Sunday; expected is null until the rollup has an hour with a network sample, and expected_hours counts the hours it was built from. hours is null when the block manager is unavailable.', shape: 'raw', params: 'range=week|month|year|all (default month)' },
     'GET /api/pool/effort': { desc: 'Pool network share, luck over the last 100 blocks, current round effort, and time since the last block. round_shares is the round\'s SUMMED share difficulty in chain units (the effort numerator — every accepted share weighs job target × 16384), NOT a count; round_share_count is the number of accepted shares. The round window is capped at 7 days (round_window_capped:true when the cap, not the last block, set round_window_from). The whole response is cached 30s; network difficulty ~60s.', shape: 'raw' },
     'GET /api/pool/hashrate/history': { desc: 'Pool hashrate time-series, summed across addresses per bucket.', shape: 'raw', params: 'hours (1–720, default 24)' },
     'GET /api/pool/poolstats': { desc: 'Listing feed for pool directories — this is the URL to hand to miningpoolstats.stream (they poll it; nothing is pushed). Pool + network aggregates in the same field layout as the toolkit\'s solo-mining poolstats_<net>.json, so an importer written for that needs no changes. Recomputed at most once every 60s and served from cache in between, so polling faster than 1/min returns identical bytes — 1–5 min is the sensible range. Every value is an aggregate already shown on the homepage; no address or per-miner row is included, so it needs no auth. The ts field is the generation time: if it stops advancing, the feed is stale. ts and pool.last_block.ts are ISO 8601 strings, not UNIX seconds — the solo feed layout this mirrors uses them. Fields are null (not 0) when the node is unreachable, and network.hashrate_gps_24h is null until the pool has an hour of history.', shape: 'raw' },
@@ -1515,7 +1515,7 @@ function setupRoutes() {
     'GET /api/pool/payments/history': { desc: 'Durable payments & transparency series: payouts, reward split, giveaways, donations, fee, plus lifetime totals. Payout figures are miners only; revenue withdrawals by the pool operator are reported separately as totals.operator_withdrawn_all / operator_withdrawal_count.', shape: 'raw', params: 'range=day|week|month|year|all (default month)' },
     'GET /api/pool/payments': { desc: 'Recent confirmed payouts: address, amount, flat fee charged, method, timestamps and has_kernel_proof (true once the payout\'s kernel has been seen mined; stays false on a pool with no Owner API wallet) and kernel_excess — the payout\'s Tx ID (66 hex chars, lowercase), or null until mined; link it to a chain explorer\'s kernel page to verify the payout on-chain. Addresses are MASKED (grin1qxy…mn4p). Revenue withdrawals by the pool operator are listed too, with operator: true and the fixed label "Pool operator" in place of an address (never the wallet they went to). Pool-internal payout machinery (slate id, Tor probe result, retry state, cancel reason) is deliberately not published either.', shape: 'array', params: 'limit (≤500, default 100)' },
     'GET /api/pool/miners': { desc: 'Balance distribution across accounts, richest first. Addresses are MASKED (grin1qxy…mn4p) — the distribution is public, the address→balance mapping is not.', shape: 'array', params: 'limit (≤500, default 50)' },
-    'GET /api/pool/top-block-finders': { desc: 'Lucky-miner leaderboard: blocks found and total reward per address over a recent window. Orphans do not count as a find. Addresses are MASKED.', shape: 'raw', params: 'days (≤3650, default 30) · limit (≤1000, default 500)' },
+    'GET /api/pool/top-block-finders': { desc: 'Lucky-miner leaderboard over a recent window: per address blocks_found, total_reward, total_fees (null = fees not captured), orphaned (count, never a find), last_found_at, last_height; plus total_blocks for the whole pool. Orphans do not count as a find. Addresses are MASKED.', shape: 'raw', params: 'days (≤3650, default 30) · limit (≤1000, default 500)' },
     'GET /api/pool/unclaimed': { desc: 'Lost-and-found: masked addresses of long-dormant balances with a per-address disposal countdown, plus the historical disposition ledger (sweeps into the prize pool).', shape: 'raw', params: 'limit (≤200, default 100)' },
     'GET /api/pool/donors': { desc: 'Donor league + past donors. `league` = addresses with a donation debit inside the ranking window, ranked by score = GRIN in window × loyalty multiplier (min(1 + loyalty_percent_per_month/100 × active_months, loyalty_cap); active_months = distinct UTC months with a debit, lifetime), ties by months then first donation; top 100 with `rank` 1..N. `past.donors` = up to 20 addresses with a lifetime total but nothing in the window, newest last donation first, plus `past.more` for the rest. Both arrays share one card shape: rank (null on past), name, name_state, banner, address, in_window_donated, total_donated, active_months, multiplier, score, first_donated_at, last_donated_at, donation_count, rigs_online, rigs_donating, pct_min, pct_max (live, display only, never ranked). A donation is per RIG: rigs_online = distinct rigs mining to the address now, rigs_donating = how many carry a `donateN` tag with N > 0, pct_min/pct_max = the range of those tags (0 when none). `name` is the donor\'s own nickname, set on their account page; the pool APPROVED it by an automatic check (reserved words, a blocked-word list, banned and taken names — live at once) or, before that check existed, by hand, and can take it down (2–32 chars: letters, digits, space and - _ . & \', case kept); it is null for every name_state but `shown` (masked = no approved name, expired = the approval aged out). Escape before rendering. `banner` = {url, width, height} (url always /uploads/donors/<file>, a PNG, JPEG or GIF the pool APPROVED, 320–1600 × 80–400 px, 2:1 to 8:1) only on league cards with rank ≤ ranking.banner_slots whose banner has not expired; null on every other card and always null on past. Addresses are MASKED. `totals` are LIFETIME over EVERY donor, not the cards (donor_count, total_donated) and `totals.active_donors` counts addresses with a tagged rig mining right now (a tag shows there before its first slice is taken — that only happens when a block matures). `ranking` = {window_days (0 = all-time), loyalty_percent_per_month, loyalty_cap, name_expiry_months, banner_slots (0–10; 0 = no banners)} for the page\'s ranking sentence and its Top-N spotlight. rigs_donating, pct_min, pct_max and active_donors read 0 while the operator has donations switched off. Window edge: a day already rolled into the daily ledger counts WHOLE when its UTC midnight is ≥ now − window.', shape: 'raw' },
     'GET /api/pool/prize-pool': { desc: 'Prize-pool transparency report: current balance + LIFETIME in/out totals by source (fee-cut, donations, operator top-ups, abandoned balances, orphan clawbacks). Per-event rows are deliberately withheld — their timestamps would expose the cadence of discretionary operator top-ups.', shape: 'raw' },
@@ -1524,8 +1524,8 @@ function setupRoutes() {
     // ── Stratum (live session aggregates) ─────────────────────────────────────
     'GET /api/stratum/stats': { desc: 'Live stratum server state: connection counts and per-session share tallies. Session addresses are truncated so the live list cannot be scraped to enumerate miners.', shape: 'raw' },
     'GET /api/stratum/hashrate': { desc: 'Pool hashrate aggregates (1h/24h GPS) plus the fixed top-10 by hashrate (addresses MASKED) — the gauge on the homepage.', shape: 'raw' },
-    'GET /api/stratum/top-miners': { desc: 'Top miners by hashrate over a recent window — the paginated contribution leaderboard. Addresses are MASKED.', shape: 'raw', params: 'window minutes (≤1440, default 1440) · limit (≤1000, default 500)' },
-    'GET /api/stratum/top-avg-hashrate': { desc: 'Top miners by AVERAGE hashrate over a multi-day window (sustained contribution). Backed by hashrate_history, so a 30-day window is meaningful. Addresses are MASKED.', shape: 'raw', params: 'days (≤90, default 30) · limit (≤1000, default 500)' },
+    'GET /api/stratum/top-miners': { desc: 'Top miners by hashrate over a recent window — the paginated contribution leaderboard. Per row: hashrate_gps, hashrate_1h_gps (last hour; null when the window is ≤ 1 h), share_pct of the pool\'s work, shares, rigs (count only), last_share_at. Cached 60 s. Addresses are MASKED.', shape: 'raw', params: 'window minutes (≤1440, default 1440) · limit (≤1000, default 500)' },
+    'GET /api/stratum/top-avg-hashrate': { desc: 'Top miners by AVERAGE hashrate over a multi-day window (sustained contribution). Backed by hashrate_history, so a 30-day window is meaningful. Per row: avg_hashrate_gps, share_pct, peak_day_gps (best fully covered UTC day; null if none), days_active, daily_gps (per-UTC-day average, oldest → today, over every day the window touches). Cached 60 s. Addresses are MASKED.', shape: 'raw', params: 'days (≤90, default 30) · limit (≤1000, default 500)' },
 
     // ── Network ───────────────────────────────────────────────────────────────
     'GET /api/network/peers': { desc: 'Distinct Grin nodes the pool box\'s node(s) have handshaked with — live connections plus each node\'s own peer store, NOT a network crawl — aggregated by country over a rolling window (+ mainnet/testnet split, and `sources` = which networks are read). Country-only, no IPs; thin countries merge into one unnamed bucket. timestamp is ISO 8601.', shape: 'raw', params: 'window days (1–90, default 30)', gated: 'the operator publishes the network map (on by default; 404 while switched off in admin → Access)' },
@@ -2789,7 +2789,7 @@ function setupRoutes() {
       const allowed = ['week', 'month', 'year', 'all'];
       const range = allowed.includes(req.query.range) ? req.query.range : 'month';
       res.json(blockManager ? blockManager.getBlocksHistory(range)
-                            : { range, bucket_seconds: null, points: [], luck: [], status: { confirmed: 0, immature: 0, orphaned: 0 } });
+                            : { range, bucket_seconds: null, points: [], luck: [], status: { confirmed: 0, immature: 0, orphaned: 0 }, hours: null });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -3951,21 +3951,36 @@ function setupRoutes() {
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 500, 1), 1000);
       const days = Math.min(parseInt(req.query.days || 30, 10) || 30, 3650);
       const cutoff = Math.floor(Date.now() / 1000) - days * 86400;
+      // Orphans are read in the same pass but still never count as a find: every find/reward
+      // aggregate is gated on status, the orphan count is its own column, and HAVING keeps a
+      // miner whose only blocks were orphaned off the board (as the old WHERE did).
+      // total_fees is NULL — not 0 — when no landed block in the window had its fees captured
+      // (blocks.fees NULL = not captured), so the page can say "unknown" rather than "none".
       const rows = db.prepare(`
         SELECT found_by AS grin_address,
-               COUNT(*) AS blocks_found,
-               COALESCE(SUM(reward), 0) AS total_reward,
-               MAX(found_at) AS last_found_at
+               SUM(CASE WHEN status != 'orphaned' THEN 1 ELSE 0 END) AS blocks_found,
+               COALESCE(SUM(CASE WHEN status != 'orphaned' THEN reward END), 0) AS total_reward,
+               SUM(CASE WHEN status != 'orphaned' THEN fees END) AS total_fees,
+               SUM(CASE WHEN status = 'orphaned' THEN 1 ELSE 0 END) AS orphaned,
+               MAX(CASE WHEN status != 'orphaned' THEN found_at END) AS last_found_at,
+               MAX(CASE WHEN status != 'orphaned' THEN height END) AS last_height
         FROM blocks
-        WHERE status != 'orphaned' AND found_at > ?
+        WHERE found_at > ?
         GROUP BY found_by
+        HAVING blocks_found > 0
         ORDER BY blocks_found DESC, total_reward DESC
         LIMIT ?
       `).all(cutoff, limit);
+      const total = db.prepare(
+        "SELECT COUNT(*) AS n FROM blocks WHERE status != 'orphaned' AND found_at > ?").get(cutoff);
       // MASKED since 2026-09-02 (audit §J11-1). This is a full address paired with a lifetime
       // reward total and sorted descending — byte for byte the shape §C1 masked on
       // `/api/pool/miners`, published at ten times the row cap and over a 10-year window.
-      res.json({ days, top_finders: rows.map((r) => ({ ...r, grin_address: maskAddr(r.grin_address) })) });
+      res.json({
+        days,
+        total_blocks: total ? total.n : 0,
+        top_finders: rows.map((r) => ({ ...r, grin_address: maskAddr(r.grin_address) })),
+      });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -6341,9 +6356,16 @@ function setupRoutes() {
       const windowMinutes = Math.min(parseInt(req.query.window || 1440, 10) || 1440, 1440);
       // MASKED since 2026-09-02 (audit §J11-1). The tracker keeps the full address for internal
       // callers; only this public projection truncates.
+      // Explicit projection: the tracker row is internal and may grow. Rig COUNT only — worker
+      // names are not published here (they are the miner's own labels, often hostnames).
       const miners = hashrateTracker.getTopMiners(limit, windowMinutes).map(m => ({
         grin_address: maskAddr(m.grin_address),
-        hashrate_gps: parseFloat((m.avg_hashrate || 0).toFixed(6))
+        hashrate_gps: parseFloat((m.avg_hashrate || 0).toFixed(6)),
+        hashrate_1h_gps: m.hashrate_1h == null ? null : parseFloat(m.hashrate_1h.toFixed(6)),
+        share_pct: parseFloat((m.share_pct || 0).toFixed(3)),
+        shares: m.share_count || 0,
+        rigs: m.rig_count || 0,
+        last_share_at: m.last_share_at || null
       }));
       res.json({ window_minutes: windowMinutes, top_miners: miners });
     } catch (err) {

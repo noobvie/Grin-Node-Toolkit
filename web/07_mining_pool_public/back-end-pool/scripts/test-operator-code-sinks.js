@@ -263,10 +263,15 @@ for (const [re, label] of FORBIDDEN) {
 // i.e. an `<img onerror>` in a body ran on the origin. The operator chose (2026-10-04) to
 // SANDBOX them: both now go through js/cms-frame.js (srcdoc, no allow-scripts) — pinned below
 // and in the srcdoc block above. page.html 3 → 2, post.html 4 → 3.
+//
+// blocks.html 4 → 7 (P-05 heatmap, 4ec39d3; reviewed 2026-10-10): `wrap.innerHTML = ''` (empty
+// state), `wrap.innerHTML = html` (the weekday × hour table) and `summary.innerHTML` (busiest /
+// quietest hour). No API text reaches any of them: labels are the HEAT_DAYS constants, every count
+// goes through Number() || 0, hours are loop indexes, `expected` goes through fmtExpected().
 const INNER_HTML = {
   'public_html/account-settings.html#inline0': 20,
   'public_html/api-docs.html#inline0': 4,
-  'public_html/blocks.html#inline0': 4,
+  'public_html/blocks.html#inline0': 7,
   'public_html/blog.html#inline0': 3,
   'public_html/donate.html#inline0': 5,
   'public_html/fortune-board.html#inline0': 5,

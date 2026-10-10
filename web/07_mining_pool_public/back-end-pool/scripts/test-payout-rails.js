@@ -20,6 +20,7 @@
 const fs = require('fs');
 const net = require('net');
 const path = require('path');
+const { readAppSource, routeSource } = require('./lib/app-source');
 
 const APP = path.resolve(__dirname, '..');
 const WalletAPI = require(path.join(APP, 'lib/wallet.js'));
@@ -310,15 +311,15 @@ async function torProbeSection() {
 
   section('Tor probe — tor-check route ?fresh=1 (source checks)');
   {
-    const idx = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
+    const idx = readAppSource();
     ok('a 10 s fresh floor constant sits beside the 60 s TTL',
       /const TOR_PROBE_TTL_MS = 60000;[\s\S]{0,200}const TOR_PROBE_FRESH_FLOOR_MS = 10000;/.test(idx));
     ok('the route passes ?fresh=1 into the cache', /torProbeCached\(addr, req\.query\.fresh === '1'\)/.test(idx));
     ok('fresh lowers the cache age to the floor, never to zero',
       /const ttl = fresh \? TOR_PROBE_FRESH_FLOOR_MS : TOR_PROBE_TTL_MS;/.test(idx));
-    const route = idx.slice(idx.indexOf("app.get('/api/account/:addr/tor-check'"));
+    const route = routeSource('get', '/api/account/:addr/tor-check');   // throws if absent/ambiguous
     ok('the route still sits behind the torcheck rate bucket',
-      /app\.get\('\/api\/account\/:addr\/tor-check', rateLimiter\.middleware\('torcheck'\)/.test(idx));
+      /(?:app|router)\.get\('\/api\/account\/:addr\/tor-check', rateLimiter\.middleware\('torcheck'\)/.test(idx));
     ok('the 404-for-unknown-address check still runs BEFORE the probe',
       route.indexOf('no mining account for this address') > 0 &&
       route.indexOf('no mining account for this address') < route.indexOf('torProbeCached('));
@@ -767,8 +768,8 @@ async function preflightRequesterGoneSection() {
       seen[0] && seen[1] && seen[0].reqDestroyed === true && seen[1].reqDestroyed === true, JSON.stringify(seen));
   }
   {
-    const idx = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
-    const route = idx.slice(idx.indexOf("app.post('/api/account/:addr/withdraw', "));
+    const idx = readAppSource();
+    const route = routeSource('post', '/api/account/:addr/withdraw');   // throws if absent/ambiguous
     const probeAt = route.indexOf('await walletTor.probeToronlineStatus(addr)');
     const createAt = route.indexOf('withdrawalScheduler.createWithdrawal(addr');
     const between = probeAt > 0 && createAt > probeAt ? route.slice(probeAt, createAt) : '';

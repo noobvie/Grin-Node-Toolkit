@@ -15,6 +15,7 @@
 // Never touches the pool DB.
 // Run: node scripts/test-admin-miners.js
 const path = require('path');
+const { readAppSource, routeSource } = require('./lib/app-source');
 const fs = require('fs');
 const os = require('os');
 
@@ -119,22 +120,14 @@ console.log('\n[2] recentShares() — window + plan');
 
 // ── 3. The real route handlers ────────────────────────────────────────────────
 console.log('\n[3] routes (real handlers)');
-const indexSrc = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
-const routeSrc = (verb, p) => {
-  const start = indexSrc.indexOf(`app.${verb}('${p}'`);
-  if (start < 0) return '';
-  const next = indexSrc.slice(start + 10).search(/\n\s{0,4}app\.(get|post|put|delete|patch)\(/);
-  return next < 0 ? indexSrc.slice(start) : indexSrc.slice(start, start + 10 + next);
-};
+const indexSrc = readAppSource();
+const routeSrc = routeSource;   // throws if the route is absent or ambiguous
 const load = (verb, p, deps) => {
-  const whole = routeSrc(verb, p);
-  const end = whole.indexOf('\n  });');
-  const src = end < 0 ? whole : whole.slice(0, end + 6);
-  if (!src) return null;
+  const src = routeSrc(verb, p);
   let handler = null;
   const app = { [verb]: (_p, ...fns) => { handler = fns[fns.length - 1]; } };
   // eslint-disable-next-line no-new-func
-  new Function('__d', `with (__d) {\n${src}\n}`)({ app, ...deps });
+  new Function('__d', `with (__d) {\n${src}\n}`)({ app, router: app, ...deps });
   return handler;
 };
 const call = (h, req) => {

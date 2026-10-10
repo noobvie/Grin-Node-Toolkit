@@ -227,10 +227,13 @@ _pbk_utc() {
 # C3: an older daily backup restored after a deploy, or a Migrate IN onto a box installed from
 # a newer checkout). Code comes from 1) Install / 9) Deploy, never from an archive: excluded
 # when an archive is made AND when one is extracted, so archives made before this change
-# cannot bring it back either. The cron wrapper below carries the same three names.
+# cannot bring it back either. The cron wrapper below carries the same names.
+# routes/ is the same kind of code: since the 2026-10 code-layout refactor index.js registers
+# its HTTP routes from routes/, so an archive's routes/ beside this box's index.js is C3 again.
+# A directory name here excludes everything under it, on create and on extract alike.
 _pbk_code_excludes() {
     local f
-    for f in index.js package.json package-lock.json; do
+    for f in index.js package.json package-lock.json routes; do
         printf -- '--exclude=%s\n' "${POOL_APP_DIR#/}/$f"
     done
 }
@@ -666,6 +669,7 @@ fi
 EX=( --exclude="\${WALLET_DIR#/}/grin-wallet" --exclude="*/node_modules" \
      --exclude="\${APP_DIR#/}/lib" --exclude="\${APP_DIR#/}/admin-panel" --exclude="\${APP_DIR#/}/scripts" \
      --exclude="\${APP_DIR#/}/index.js" --exclude="\${APP_DIR#/}/package.json" --exclude="\${APP_DIR#/}/package-lock.json" \
+     --exclude="\${APP_DIR#/}/routes" \
      --exclude="*.log" --exclude="*.db" --exclude="*.db-wal" --exclude="*.db-shm" --exclude="*.db-journal" )
 tar -cf "\$WORK" "\${EX[@]}" -C / "\${LIVE[@]}" 2>/dev/null || true
 if [[ -n "\$STAGE" && -n "\$DBREL" ]]; then

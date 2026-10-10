@@ -1,0 +1,1961 @@
+[
+ {
+  "method": "use",
+  "path": "/api/account",
+  "chain": [],
+  "handler": "anon"
+ },
+ {
+  "method": "use",
+  "path": "/uploads",
+  "chain": [],
+  "handler": "serveStatic"
+ },
+ {
+  "method": "get",
+  "path": [
+   "/health",
+   "/api/health"
+  ],
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/public/branding",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/games-link",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "all",
+  "path": "/api/admin/games/*",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/public/price",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/public/endpoints",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/public/lottery/winners",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/public/lottery/stats",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/public/page/:key",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/public/pages",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/public/posts",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/public/post/:slug",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/blog/rss.xml",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/robots.txt",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/sitemap.xml",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/manifest.json",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/blog/:slug",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/page.html",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/auth/captcha",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/auth/register",
+  "chain": [],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/auth/login",
+  "chain": [],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/auth/login/totp",
+  "chain": [
+   "rateLimiter.middleware('auth')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/auth/refresh",
+  "chain": [
+   "rateLimiter.middleware('auth')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/reauth",
+  "chain": [
+   "rateLimiter.middleware('stepup')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/2fa/status",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/2fa/enroll/begin",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/2fa/enroll/confirm",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/2fa/disable",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/2fa/recovery/regenerate",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/auth/logout",
+  "chain": [
+   "rateLimiter.middleware('auth')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/auth/change-password",
+  "chain": [
+   "rateLimiter.middleware('stepup')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/config/pool-info",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/stratum/stats",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/pool/stats",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/pool/status",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/pool/blocks",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/pool/blocks/history",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/account/:addr/shares",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/node-status",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/node-events",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/node-availability",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/block-monitor",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/reward-stats",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/withdrawals",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/withdrawals/:id/payment-proof",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/withdrawal-scheduler",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/withdrawals/:id/retry",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/withdrawals/:id/recheck",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/withdrawals/:id/force-refund",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/withdrawals/:id/cancel",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/reconciliation",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/payouts/control",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/payouts/freeze",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/payouts/resume",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/stratum/control",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/stratum/pause",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/stratum/extend",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/stratum/resume",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/stratum/window",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "delete",
+  "path": "/api/admin/stratum/window",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/dormancy",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/dormancy/run",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/dormancy/verify-owner",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/dormancy/manual-payout",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/dormancy/send-payout",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/revenue",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/revenue/address",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/revenue/withdraw",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/payouts/wallet-audit",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/wallet/identity",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/wallet/adopt-identity",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/ads",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/ads",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/ads/:id",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "delete",
+  "path": "/api/admin/ads/:id",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/ads-config",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/public/ads",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/public/ads/event",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/media",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/pages",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/pages",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/pages/:id",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "delete",
+  "path": "/api/admin/pages/:id",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/posts",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/posts",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/posts/:id",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "delete",
+  "path": "/api/admin/posts/:id",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/blocks",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/export/payouts.csv",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/export/fee-revenue.csv",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/export/operator-revenue.csv",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/pool/miners",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/pool/top-block-finders",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/pool/payments",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/pool/unclaimed",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/account/:addr",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/account/:addr/workers",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/account/:addr/hashrate/history",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/pool/hashrate/history",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/pool/metrics/history",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/pool/metrics/history/regions",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/pool/payments/history",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/pool/donors",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/pool/prize-pool",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/pool/effort",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/pool/poolstats",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/account/:addr/balance/log",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/account/:addr/withdrawals",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/account/:addr/withdrawals/proofs",
+  "chain": [
+   "rateLimiter.middleware('withdraw')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/account/:addr/earnings",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/account/:addr/tor-check",
+  "chain": [
+   "rateLimiter.middleware('torcheck')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/account/:addr/withdraw",
+  "chain": [
+   "rateLimiter.middleware('withdraw')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/account/:addr/withdraw/:id/finalize",
+  "chain": [
+   "rateLimiter.middleware('withdraw')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/account/:addr/withdraw/:id/slatepack",
+  "chain": [
+   "rateLimiter.middleware('withdraw')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/account/:addr/nostr-destination",
+  "chain": [
+   "rateLimiter.middleware('withdraw')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "delete",
+  "path": "/api/account/:addr/nostr-destination",
+  "chain": [
+   "rateLimiter.middleware('withdraw')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/account/:addr/donor-profile/name",
+  "chain": [
+   "rateLimiter.middleware('withdraw')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/account/:addr/donor-profile/banner",
+  "chain": [
+   "rateLimiter.middleware('withdraw')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "delete",
+  "path": "/api/account/:addr/donor-profile/:kind",
+  "chain": [
+   "rateLimiter.middleware('withdraw')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/pool/locations",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/pool/topology",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/network/peers",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/pool/stats/regions",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/pool/connect/suggest",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/stratum/hashrate",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/stratum/top-miners",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/stratum/top-avg-hashrate",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/metrics",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/audit-log",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/payments/audit",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/poolstats",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/poolstats/update-key",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/poolstats/test",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/security/rate-limit-status",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/security/rate-limit-reset",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/security/ip-filter-status",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/security/ip-allowlist/add",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/security/ip-allowlist/remove",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/security/ip-blacklist/add",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/security/ip-blacklist/remove",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/security/login-history",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/security/auth-activity",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/security/temp-ban/clear",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/security/revoke-sessions",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/alerts/test",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/alerts",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/alerts/:alertId/acknowledge",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/alerts/:alertId/resolve",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/alerts/:alertId/snooze",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/alerts/config",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/me",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/_authcheck",
+  "chain": [
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/dashboard",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/health",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/health/node",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/health/wallet",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/health/system",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/health/gateways",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/locations",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/locations",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/gateways/server",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/gateways/server",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/gateways/:region/pairing",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "delete",
+  "path": "/api/admin/locations/:id",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/miners",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/miners/:addr",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/miners/:addr/workers",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/miners/:addr/inject",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/miners/:addr/ban",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/miners/:addr/unban",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/miners/:addr/tor-pause/clear",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/donors",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/donors/summary",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/donors/requests",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/donors/requests/:id/image",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/donors/requests/:id/approve",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/donors/requests/:id/reject",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/donors/:addr/remove",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/donors/:addr/block",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/donors/:addr/unblock",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/donors/names",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/donors/banned-names",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/donors/banned-names",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/donors/banned-names/:norm/unban",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/incentives/award",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/settings",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/settings/:section",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/settings/:section",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/settings/:section/restore",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/database/status",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/database/cleanup",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/incentives/prize-pool",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/incentives/prize-pool/topup",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/incentives/lottery/draws",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/incentives/lottery/draw-now",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/incentives/campaigns",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/incentives/campaigns",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "put",
+  "path": "/api/admin/incentives/campaigns/:id",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/incentives/campaigns/:id/cancel",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/incentives/campaigns/:id/run",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/assets/upload",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/admin/assets",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "delete",
+  "path": "/api/admin/assets/:filename",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "use",
+  "path": "/",
+  "chain": [],
+  "handler": "anon"
+ }
+]

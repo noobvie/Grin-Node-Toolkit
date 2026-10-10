@@ -52,6 +52,7 @@
 // running. Run: node scripts/test-public-leakage.js
 const fs = require('fs');
 const path = require('path');
+const { readAppSource, routeSource } = require('./lib/app-source');
 
 const APP = path.resolve(__dirname, '..');
 const WEB = path.resolve(APP, '..');
@@ -59,7 +60,7 @@ const PoolSettings = require(path.join(APP, 'lib/pool-settings.js'));
 const ownerProof = require(path.join(APP, 'lib/owner-proof.js'));
 const geoip = require(path.join(APP, 'lib/geoip.js'));
 
-const indexSrc = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
+const indexSrc = readAppSource();
 const brandingSrc = fs.readFileSync(path.join(WEB, 'public_html/js/branding.js'), 'utf8');
 const dormancySrc = fs.readFileSync(path.join(APP, 'lib/dormancy.js'), 'utf8');
 const donorLedgerSrc = fs.readFileSync(path.join(APP, 'lib/donor-ledger.js'), 'utf8');
@@ -67,14 +68,13 @@ const donorNamesSrc = fs.readFileSync(path.join(APP, 'lib/donor-names.js'), 'utf
 const chartsSrc = fs.readFileSync(path.join(WEB, 'public_html/js/charts-init.js'), 'utf8');
 const PUBLIC_PAGES = fs.readdirSync(path.join(WEB, 'public_html')).filter((n) => n.endsWith('.html'));
 
-// A route's source text, from its `app.<verb>('<path>'` to the next route registration. Used to
-// assert what a specific handler does without booting the app (index.js starts a server on
-// require), the same way test-branding-sinks.js reads public_html/.
+// A route's source text: its `(app|router).<verb>('<path>'` registration up to its own closing
+// `  });`. Used to assert what a specific handler does without booting the app (index.js starts a
+// server on require), the same way test-branding-sinks.js reads public_html/. routeSource THROWS
+// when the route is absent or registered twice, so a moved/renamed route is a loud failure here,
+// never an empty string that every "must not appear" assertion passes against.
 function routeSrc(verb, routePath) {
-  const start = indexSrc.indexOf(`app.${verb}('${routePath}'`);
-  if (start < 0) return '';
-  const next = indexSrc.slice(start + 10).search(/\n\s{0,4}app\.(get|post|put|delete|patch)\(/);
-  return next < 0 ? indexSrc.slice(start) : indexSrc.slice(start, start + 10 + next);
+  return routeSource(verb, routePath);
 }
 
 // One API_DOC_META row's source line, by its `'VERB /path':` key (line-anchored, like §1b).
@@ -449,7 +449,7 @@ ok('§18.9 profileFor reads READ_COLS (no image, no name) + the name of APPROVED
 // admin readers (adminQueue, requestImage, adminProfiles — full addresses, pending text, bytes)
 // may appear under /api/admin/ only, behind secureAdmin/freshAdmin. A NEW public route here
 // fails this test on purpose: read what it emits (§18.9), then add it.
-const routeDecls = [...indexSrc.matchAll(/\n\s{2}app\.(get|post|put|delete|patch)\('([^']+)',\s*([A-Za-z]+)?/g)]
+const routeDecls = [...indexSrc.matchAll(/\n\s{2}(?:app|router)\.(get|post|put|delete|patch)\('([^']+)',\s*([A-Za-z]+)?/g)]
   .map((m) => ({ verb: m[1], path: m[2], guard: m[3] || '' }));
 // The handler only: routeSrc runs to the NEXT app.* call, so a route followed by a block of
 // shared setup (the donor-profile multer config follows the Goblin DELETE) would otherwise be
@@ -583,7 +583,7 @@ ok('§17.4 owner-proof.js interpolates no proof value, digest or salt into a log
 // SELECT * FROM withdrawals and serve the rows must still drop the slate.
 console.log('\n[F5] stepwise columns stay off every public route');
 {
-  const routes = [...indexSrc.matchAll(/\bapp\.(get|post|put|delete|patch)\('([^']+)'/g)].map((m) => [m[1], m[2]]);
+  const routes = [...indexSrc.matchAll(/\b(?:app|router)\.(get|post|put|delete|patch)\('([^']+)'/g)].map((m) => [m[1], m[2]]);
   const publicRoutes = routes.filter(([, p]) => !p.startsWith('/api/admin'));
   const leaks = publicRoutes.filter(([v, p]) => /tor_final_slate|tor_step/.test(routeSrc(v, p)));
   ok('no non-admin route mentions tor_final_slate or tor_step', publicRoutes.length > 20 && leaks.length === 0,
@@ -611,7 +611,7 @@ console.log('\n[F5] stepwise columns stay off every public route');
 console.log('\n[S1] the stored slatepack is served by one gated route only');
 {
   const RESHOW = ['post', '/api/account/:addr/withdraw/:id/slatepack'];
-  const routes = [...indexSrc.matchAll(/\bapp\.(get|post|put|delete|patch)\('([^']+)'/g)].map((m) => [m[1], m[2]]);
+  const routes = [...indexSrc.matchAll(/\b(?:app|router)\.(get|post|put|delete|patch)\('([^']+)'/g)].map((m) => [m[1], m[2]]);
   const mentions = routes.filter(([v, p]) => /slatepack_s1/.test(routeSrc(v, p).replace(/\/\/[^\n]*/g, '')));
   ok('only the re-fetch route reads slatepack_s1 (admin routes only strip it)',
     mentions.every(([v, p]) => (v === RESHOW[0] && p === RESHOW[1]) ||
@@ -643,7 +643,7 @@ console.log('\n[S1] the stored slatepack is served by one gated route only');
 // fail_code is the public-safe enum the account page words.
 console.log('\n[fail] fail_detail stays admin-only; fail_code and the Tor pause are the public surface');
 {
-  const routes = [...indexSrc.matchAll(/\bapp\.(get|post|put|delete|patch)\('([^']+)'/g)].map((m) => [m[1], m[2]]);
+  const routes = [...indexSrc.matchAll(/\b(?:app|router)\.(get|post|put|delete|patch)\('([^']+)'/g)].map((m) => [m[1], m[2]]);
   const code = (v, p) => routeSrc(v, p).replace(/\/\/[^\n]*/g, '');
   const leaks = routes.filter(([v, p]) => !p.startsWith('/api/admin') && /fail_detail/.test(code(v, p)));
   ok('no non-admin route names fail_detail', routes.length > 20 && leaks.length === 0, leaks.map(([v, p]) => `${v} ${p}`).join(', '));
@@ -677,7 +677,7 @@ console.log('\n[fail] fail_detail stays admin-only; fail_code and the Tor pause 
 console.log('\n[games] /internal stays off /api/; branding carries only { mode, chat }');
 {
   const gamesSrc = fs.readFileSync(path.join(APP, 'lib/games-link.js'), 'utf8');
-  const apiRoutes = [...indexSrc.matchAll(/\bapp\.(get|post|put|delete|patch|all|use)\('([^']+)'/g)].map((m) => m[2]);
+  const apiRoutes = [...indexSrc.matchAll(/\b(?:app|router)\.(get|post|put|delete|patch|all|use)\('([^']+)'/g)].map((m) => m[2]);
   ok('no index.js route under /api/ names "internal"', apiRoutes.length > 20 && !apiRoutes.some((p) => p.startsWith('/api/') && /internal/i.test(p)));
   ok('the lib answers its internal routes only under /internal/games/',
     /'POST \/internal\/games\/verify-proof'/.test(gamesSrc) && /'GET \/internal\/games\/activity'/.test(gamesSrc) &&

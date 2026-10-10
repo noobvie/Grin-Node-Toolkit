@@ -13,11 +13,12 @@
 
 const fs = require('fs');
 const path = require('path');
+const { readAppSource, routeSource } = require('./lib/app-source');
 const APP = path.resolve(__dirname, '..');
 
 const dbLib = require(path.join(APP, 'lib/db.js'));
 const { RTT_WINDOW, pushRttSample, hubRttMs } = require(path.join(APP, 'lib/region-rtt.js'));
-const indexSrc = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
+const indexSrc = readAppSource();
 
 let pass = 0, fail = 0;
 function ok(name, cond, extra = '') {
@@ -216,9 +217,7 @@ console.log('\n[e] hub_rtt_ms — the rolling window\n');
 
 console.log('\n[f] the route and the probe publish it (index.js, read as text)\n');
 {
-  const start = indexSrc.indexOf("app.get('/api/pool/stats/regions'");
-  const next = indexSrc.slice(start + 10).search(/\n\s{0,4}app\.(get|post|put|delete|patch)\(/);
-  const route = indexSrc.slice(start, start + 10 + next);
+  const route = routeSource('get', '/api/pool/stats/regions');   // throws if absent/ambiguous
   ok('f. the regions route publishes is_hub for the local region',
     /is_hub:\s*region === localRegion/.test(route));
   ok('f. …and hub_rtt_ms from the probe window, 0 on the hub row',

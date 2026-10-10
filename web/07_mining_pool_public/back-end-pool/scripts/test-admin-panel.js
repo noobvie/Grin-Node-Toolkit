@@ -13,6 +13,7 @@
 // Run: node scripts/test-admin-panel.js
 const fs = require('fs');
 const path = require('path');
+const { readAppSource } = require('./lib/app-source');
 
 const PANEL = path.resolve(__dirname, '../admin-panel');
 const read = (f) => fs.readFileSync(path.join(PANEL, f), 'utf8');
@@ -40,7 +41,7 @@ console.log('\n[1] §J14-1 — blocks.html and the paid state');
   ok('a filter chip exists for it — Confirmed alone hides the pool’s own history',
      /data-filter="paid"/.test(blocks));
 
-  const idx = fs.readFileSync(path.resolve(__dirname, '../index.js'), 'utf8');
+  const idx = readAppSource();
   ok('GET /api/admin/blocks computes blocks_to_maturity = 0 for paid too',
      /blocks_to_maturity = \(b\.status === 'confirmed' \|\| b\.status === 'paid' \|\| b\.status === 'orphaned'\)/.test(idx));
 }

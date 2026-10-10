@@ -10,6 +10,7 @@
 // those are the process boundaries. Never touches the pool DB.
 // Run: node scripts/test-payout-guard.js
 const path = require('path');
+const { readAppSource, routeSource } = require('./lib/app-source');
 const fs = require('fs');
 const os = require('os');
 
@@ -825,14 +826,8 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
   }
   {
     // ── the field is admin-only ──
-    const src = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
-    const route = (verb, p) => {
-      const start = src.indexOf(`app.${verb}('${p}'`);
-      if (start < 0) return '';
-      const next = src.slice(start + 10).search(/\n\s{0,4}app\.(get|post|put|delete|patch)\(/);
-      return next < 0 ? src.slice(start) : src.slice(start, start + 10 + next);
-    };
-    const admin = route('get', '/api/admin/withdrawals');
+    const src = readAppSource();
+    const admin = routeSource('get', '/api/admin/withdrawals');
     ok('GET /api/admin/withdrawals carries chain_state', /chain_state/.test(admin) && /secureAdmin/.test(admin));
     const hits = src.split('\n').filter((l) => /chainStateOf|chain_state/.test(l) && !/^\s*\/\//.test(l)).length;
     const inAdmin = admin.split('\n').filter((l) => /chainStateOf|chain_state/.test(l) && !/^\s*\/\//.test(l)).length;
@@ -1861,7 +1856,7 @@ async function pendingListSection() {
   console.log('\n[pending-lists] tor_held is in EVERY pending-status list');
   const lists = [];
   for (const f of ['index.js', 'lib/withdrawal-scheduler.js', 'lib/reconciliation.js', 'lib/alert-monitor.js']) {
-    const src = fs.readFileSync(path.join(APP, f), 'utf8');
+    const src = f === 'index.js' ? readAppSource() : fs.readFileSync(path.join(APP, f), 'utf8');
     for (const m of src.matchAll(/status\s+IN\s*\(([^)]*)\)/g)) {
       if (/'tor_sending'/.test(m[1]) && /'slatepack_pending'/.test(m[1])) lists.push({ f, held: /'tor_held'/.test(m[1]), body: m[1].trim() });
     }
@@ -1885,24 +1880,15 @@ async function pendingListSection() {
 // reads) and evaluated against stubs for everything but the DB and the scheduler.
 async function routeSection() {
   console.log('\n[routes] withdraw pause gate, pre-flight 409, summary, P-08, admin held/pause routes (real handlers)');
-  const indexSrc = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
-  const routeSrc = (verb, p) => {
-    const start = indexSrc.indexOf(`app.${verb}('${p}'`);
-    if (start < 0) return '';
-    const next = indexSrc.slice(start + 10).search(/\n\s{0,4}app\.(get|post|put|delete|patch)\(/);
-    return next < 0 ? indexSrc.slice(start) : indexSrc.slice(start, start + 10 + next);
-  };
+  const indexSrc = readAppSource();
   const load = (verb, p, deps) => {
-    // Only the registration itself: index.js routes close with a `});` line at two-space indent,
-    // and top-level code that follows a route (other helpers) must not be evaluated with it.
-    const whole = routeSrc(verb, p);
-    const end = whole.indexOf('\n  });');
-    const src = end < 0 ? whole : whole.slice(0, end + 6);
-    if (!src) return null;
+    // Only the registration itself: routeSource() cuts at the registration's own `});` line
+    // (two-space indent) and THROWS when the route is absent or ambiguous — never a silent null.
+    const src = routeSource(verb, p);
     let handler = null;
     const app = { [verb]: (_p, ...fns) => { handler = fns[fns.length - 1]; } };
     // eslint-disable-next-line no-new-func
-    new Function('__d', `with (__d) {\n${src}\n}`)({ app, ...deps });
+    new Function('__d', `with (__d) {\n${src}\n}`)({ app, router: app, ...deps });
     return handler;
   };
   const call = async (h, req) => {
@@ -2023,8 +2009,8 @@ async function routeSection() {
     const row = res.body && res.body.withdrawals && res.body.withdrawals[0];
     ok('RT5. GET /api/account/:addr/withdrawals rows carry fail_code', !!row && row.fail_code === 'pool_send_path', JSON.stringify(row));
     ok('RT5. …and never fail_detail', !!row && !('fail_detail' in row) && !JSON.stringify(res.body).includes('SECRET-CLI-OUTPUT'));
-    const routes = [...indexSrc.matchAll(/\bapp\.(get|post|put|delete|patch)\('([^']+)'/g)].map((m) => [m[1], m[2]]);
-    const leaks = routes.filter(([v, p]) => !p.startsWith('/api/admin') && /fail_detail/.test(routeSrc(v, p).replace(/\/\/[^\n]*/g, '')));
+    const routes = [...indexSrc.matchAll(/\b(?:app|router)\.(get|post|put|delete|patch)\('([^']+)'/g)].map((m) => [m[1], m[2]]);
+    const leaks = routes.filter(([v, p]) => !p.startsWith('/api/admin') && /fail_detail/.test(routeSource(v, p).replace(/\/\/[^\n]*/g, '')));
     ok('RT5. no non-admin route names fail_detail at all', leaks.length === 0, leaks.map((l) => l.join(' ')).join(', '));
   }
 
@@ -2100,7 +2086,8 @@ async function routeSection() {
     const good = await call(h, { params: { id: String(id) }, body: { confirm_id: String(id), reason: 'node checked' } });
     ok('RT6. forced refund with the typed id and an absent tx → refunded, audit row', good.statusCode === 200 && refundedOk(id) &&
       !!audit('withdrawal_force_refund'), JSON.stringify({ code: good.statusCode, body: good.body }));
-    ok('RT6. …the route is step-up gated (freshAdmin)', /app\.post\('\/api\/admin\/withdrawals\/:id\/force-refund', freshAdmin,/.test(indexSrc));
+    ok('RT6. …the route is step-up gated (freshAdmin)', /^\s*(?:app|router)\.post\('\/api\/admin\/withdrawals\/:id\/force-refund', freshAdmin,/
+      .test(routeSource('post', '/api/admin/withdrawals/:id/force-refund')));
   }
   {
     reset();
@@ -2404,7 +2391,7 @@ async function healthCardSection() {
   const c5 = fold({ status: 'warning', message: 'wallet short' });
   ok('HC5. critical outranks an already-degraded card', c5.status === 'critical', JSON.stringify(c5));
 
-  const src = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
+  const src = readAppSource();
   ok('HC6. /api/admin/health folds through AlertMonitor.foldPayoutAlerts (no second hand-written copy of the fold)',
     /AlertMonitor\.foldPayoutAlerts\(\s*db\s*,\s*services\.grin_wallet\s*\)/.test(src) &&
     !/WHERE type = 'payout_unmined' AND status = 'active'/.test(src));
@@ -3332,12 +3319,11 @@ async function doublePayCardSection() {
   wipe();
 
   // The route and the page, read from source (the admin-guards suite reads tiers the same way).
-  const src = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
-  const decl = /app\.post\('\/api\/admin\/alerts\/:alertId\/resolve',\s*([A-Za-z]+),/.exec(src);
+  const src = readAppSource();
+  const decl = /(?:app|router)\.post\('\/api\/admin\/alerts\/:alertId\/resolve',\s*([A-Za-z]+),/.exec(src);
   ok('D7. POST /api/admin/alerts/:alertId/resolve is freshAdmin (step-up: it silences a money alarm)',
     !!decl && decl[1] === 'freshAdmin', decl ? decl[1] : 'route not found');
-  const a = src.indexOf("app.post('/api/admin/alerts/:alertId/resolve'");
-  const body = a < 0 ? '' : src.slice(a, src.indexOf('\n  });', a));
+  const body = routeSource('post', '/api/admin/alerts/:alertId/resolve');
   ok('D7. …it requires a note, goes through resolveManual, and writes an alert_resolve audit row',
     /if \(!note\)/.test(body) && /AlertMonitor\.resolveManual\(/.test(body) && /'alert_resolve'/.test(body));
   const html = fs.readFileSync(path.join(APP, 'admin-panel/health.html'), 'utf8');

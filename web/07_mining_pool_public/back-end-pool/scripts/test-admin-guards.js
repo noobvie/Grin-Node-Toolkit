@@ -15,6 +15,7 @@
 // Runs against a throwaway SQLite file in the OS temp dir — never the pool DB.
 // Run: node scripts/test-admin-guards.js
 const path = require('path');
+const { readAppSource, routeSource } = require('./lib/app-source');
 const fs = require('fs');
 const os = require('os');
 
@@ -111,7 +112,7 @@ try {
 
   console.log('\n[4] §J1-1 — the script/CSS sinks stay behind step-up');
 
-  const src = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
+  const src = readAppSource();
   const at = src.indexOf('const STEP_UP_SETTINGS_KEYS');
   ok('STEP_UP_SETTINGS_KEYS still exists in index.js', at !== -1);
   const block = src.slice(at, src.indexOf(']);', at));
@@ -225,17 +226,12 @@ try {
   // Read the route DECLARATIONS from index.js: the guard array is the first argument after
   // the path, so a tier downgrade (freshAdmin → secureAdmin) is a one-word edit this catches.
   const routeGuard = (method, route) => {
-    const re = new RegExp("app\\." + method + "\\('" + route.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&') + "',\\s*([A-Za-z]+),");
+    const re = new RegExp("(?:app|router)\\." + method + "\\('" + route.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&') + "',\\s*([A-Za-z]+),");
     const m = src.match(re);
     return m ? m[1] : null;
   };
   // One handler's source: from its declaration to its own closing `  });`.
-  const handler = (method, route) => {
-    const a = src.indexOf("app." + method + "('" + route + "'");
-    if (a < 0) return '';
-    const b = src.indexOf('\n  });', a);
-    return (b < 0 ? src.slice(a) : src.slice(a, b)).replace(/\/\/[^\n]*/g, '');
-  };
+  const handler = (method, route) => routeSource(method, route).replace(/\/\/[^\n]*/g, '');
   const READS = [
     ['get', '/api/admin/donors'],
     ['get', '/api/admin/donors/summary'],
@@ -260,10 +256,15 @@ try {
   // Removed in §18 Part 3: v1's censor/uncensor. Express answers 404 for a path no route
   // declares, so "the declaration is gone" IS "the route 404s" — and no other handler may be
   // left calling the deleted lib functions.
-  ok('POST /api/admin/donors/:addr/censor no longer exists (→ 404)', !/app\.post\('\/api\/admin\/donors\/:addr\/censor'/.test(src));
-  ok('POST /api/admin/donors/:addr/uncensor no longer exists (→ 404)', !/app\.post\('\/api\/admin\/donors\/:addr\/uncensor'/.test(src));
+  // Either receiver (route files register on `router`) and any quote — a negative written for
+  // `app.` alone passes vacuously once the route moves (R1 2026-10-10). The control proves the
+  // same regex shape still SEES a donors registration that does exist.
+  const REG = (verb, rest) => new RegExp(`\\b(?:app|router)\\.${verb}\\(\\s*['"\`]\\/api\\/admin\\/donors${rest}`);
+  ok('control — the registration reader sees POST /api/admin/donors/:addr/block', REG('post', "\\/:addr\\/block['\"`]").test(src));
+  ok('POST /api/admin/donors/:addr/censor no longer exists (→ 404)', !REG('post', "\\/:addr\\/censor['\"`]").test(src));
+  ok('POST /api/admin/donors/:addr/uncensor no longer exists (→ 404)', !REG('post', "\\/:addr\\/uncensor['\"`]").test(src));
   ok('no :addr catch-all could answer the removed paths instead',
-    !/app\.post\('\/api\/admin\/donors\/:addr\/:[a-z]+'/.test(src) && !/app\.all\('\/api\/admin\/donors/.test(src));
+    !REG('post', '\\/:addr\\/:[a-z]+').test(src) && !REG('all', '').test(src));
   ok('nothing in index.js calls the deleted v1 moderation functions',
     !/donorAdminCensor|donorRescanAll|donorCountNewNames|donorDisplayState|adminCensor\(|rescanAll\(|countNewNames\(|captureDonorName\(/.test(src.replace(/\/\/[^\n]*/g, '')));
 
@@ -316,7 +317,7 @@ try {
   // accident. The route delegates to lib/donor-ledger.js donorWall() and hands it the mask as
   // an argument (the lib throws without one); the full public contract is pinned in
   // test-public-leakage.js §9 and test-donor-league.js.
-  const pubBlock = src.slice(src.indexOf("app.get('/api/pool/donors'"), src.indexOf("app.get('/api/pool/prize-pool'"));
+  const pubBlock = routeSource('get', '/api/pool/donors');   // throws if absent — never a vacuous ''
   ok('public /api/pool/donors emits no v1 donor_* field and calls no admin reader',
     !/donor_censor|donor_name/.test(pubBlock) && !/adminQueue|requestImage|adminProfiles/.test(pubBlock));
   ok('public /api/pool/donors still masks the address', /mask:\s*\(a\)\s*=>\s*maskAddr\(a\)/.test(pubBlock));

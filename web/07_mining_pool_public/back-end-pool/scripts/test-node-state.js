@@ -21,6 +21,7 @@ const fs = require('fs');
 const os = require('os');
 const net = require('net');
 const path = require('path');
+const { readAppSource } = require('./lib/app-source');
 const fetch = require('node-fetch');
 
 const APP = path.resolve(__dirname, '..');
@@ -142,7 +143,7 @@ const api = (url, network = 'mainnet') => new GrinNodeAPI({
 
   console.log('\n[4] the route and the lamp use it\n');
 
-  const indexSrc = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
+  const indexSrc = readAppSource();
   const lampSrc = fs.readFileSync(path.join(APP, '..', 'public_html', 'js', 'reactor-dashboard.js'), 'utf8');
   ok('/api/pool/status sets node.state from downState()',
     /out\.node\.state\s*=\s*await blockMonitor\.grinNode\.downState\(status\)/.test(indexSrc));

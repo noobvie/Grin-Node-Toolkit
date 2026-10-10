@@ -13,11 +13,12 @@
 
 const fs = require('fs');
 const path = require('path');
+const { readAppSource, routeSource } = require('./lib/app-source');
 const APP = path.resolve(__dirname, '..');
 const SH = path.resolve(APP, '../../../scripts/07_grin_mining_public_pool.sh');
 
 const lp = require(path.join(APP, 'lib/latency-probe.js'));
-const indexSrc = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
+const indexSrc = readAppSource();
 
 let pass = 0, fail = 0;
 function ok(name, cond, extra = '') {
@@ -96,9 +97,8 @@ ok('d. no subdomain → probe_domain null (no gateway is probed)', lc({ cloudfla
 
 console.log('\n[e] the branding route publishes it\n');
 {
-  const rs = indexSrc.indexOf("app.get('/api/public/branding'");
-  const route = rs >= 0 ? indexSrc.slice(rs, rs + 6000) : '';
-  ok('e. branding route found', rs >= 0);
+  const route = routeSource('get', '/api/public/branding');   // throws if absent/ambiguous
+  ok('e. branding route found', route.length > 0);
   ok('e. connection.latency = latencyConfig(config)', /latency:\s*latencyConfig\(config\)/.test(route));
   ok('e. latencyConfig is the lib\'s, not a local copy',
     /require\('\.\/lib\/latency-probe'\)/.test(indexSrc) && !/function latencyConfig/.test(indexSrc));

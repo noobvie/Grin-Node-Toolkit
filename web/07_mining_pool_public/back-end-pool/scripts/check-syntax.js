@@ -28,6 +28,7 @@ const TARGETS = [
   ['lib', false],
   ['scripts', false],
   ['admin-panel', false],
+  ['routes', true],   // route files (routes/ is recursive: routes/admin/, routes/_shared/)
 ];
 
 const files = [path.join(ROOT, 'index.js')];

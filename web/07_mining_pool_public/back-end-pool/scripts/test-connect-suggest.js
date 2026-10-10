@@ -14,11 +14,12 @@
 
 const fs = require('fs');
 const path = require('path');
+const { readAppSource, routeSource } = require('./lib/app-source');
 const APP = path.resolve(__dirname, '..');
 
 const cs = require(path.join(APP, 'lib/connect-suggest.js'));
 const geoip = require(path.join(APP, 'lib/geoip.js'));
-const indexSrc = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
+const indexSrc = readAppSource();
 
 let pass = 0, fail = 0;
 function ok(name, cond, extra = '') {
@@ -170,9 +171,7 @@ console.log('\n[g] a same-country server placed by centroid is NOT 0 km from the
 
 console.log('\n[f] the route — privacy, caching, one status implementation\n');
 {
-  const start = indexSrc.indexOf("app.get('/api/pool/connect/suggest'");
-  const next = start < 0 ? -1 : indexSrc.slice(start + 10).search(/\n\s{0,4}app\.(get|post|put|delete|patch)\(/);
-  const route = start < 0 ? '' : indexSrc.slice(start, start + 10 + next);
+  const route = routeSource('get', '/api/pool/connect/suggest');   // throws if absent/ambiguous
   const code = route.replace(/\/\/[^\n]*/g, '');
   ok('f. GET /api/pool/connect/suggest exists behind the public rate limiter',
     route.length > 0 && /rateLimiter\.middleware\('public'\)/.test(route));
@@ -191,9 +190,7 @@ console.log('\n[f] the route — privacy, caching, one status implementation\n')
     /l\.stratum_url && \(l\.is_active === 1 \|\| l\.is_active === true\)/.test(code));
   ok('f. status comes from publicRegionStatus(), shared with /api/pool/stats/regions',
     /publicRegionStatus\(/.test(code));
-  const rs = indexSrc.indexOf("app.get('/api/pool/stats/regions'");
-  const rn = indexSrc.slice(rs + 10).search(/\n\s{0,4}app\.(get|post|put|delete|patch)\(/);
-  const regionsRoute = indexSrc.slice(rs, rs + 10 + rn);
+  const regionsRoute = routeSource('get', '/api/pool/stats/regions');
   ok('f. /api/pool/stats/regions uses the same publicRegionStatus()', /publicRegionStatus\(/.test(regionsRoute));
   ok('f. …and no longer carries its own copy of the precedence',
     !/sharesFresh/.test(regionsRoute));

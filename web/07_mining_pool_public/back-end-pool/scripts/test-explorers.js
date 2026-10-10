@@ -22,10 +22,11 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { readAppSource, routeSource } = require('./lib/app-source');
 const APP = path.resolve(__dirname, '..');
 
 const ex = require(path.join(APP, 'lib/explorers.js'));
-const indexSrc = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
+const indexSrc = readAppSource();
 
 let pass = 0, fail = 0;
 function ok(name, cond, extra = '') {
@@ -219,13 +220,8 @@ console.log('\n[g] the routes publish the RESOLVED key and build links through t
   // Line comments stripped — but not the `//` of a URL (`https://…`), or the hardcoded-host
   // check below would strip the very thing it looks for and always pass.
   const stripComments = (src) => src.replace(/(^|[^:])\/\/[^\n]*/gm, '$1');
-  // Route source between its app.<verb>( and the next one, comments stripped.
-  const routeSrc = (verb, p) => {
-    const start = indexSrc.indexOf(`app.${verb}('${p}'`);
-    if (start < 0) return '';
-    const next = indexSrc.slice(start + 10).search(/\n\s{0,4}app\.(get|post|put|delete|patch)\(/);
-    return stripComments(indexSrc.slice(start, start + 10 + next));
-  };
+  // One route registration (routeSource throws if it is absent or ambiguous), comments stripped.
+  const routeSrc = (verb, p) => stripComments(routeSource(verb, p));
   const code = stripComments(indexSrc);
   ok('g. index.js requires lib/explorers', /require\('\.\/lib\/explorers'\)/.test(indexSrc));
 

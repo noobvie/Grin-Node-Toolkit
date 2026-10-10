@@ -18,6 +18,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { readAppSource } = require('./lib/app-source');
 const http = require('http');
 const express = require('express');
 
@@ -622,13 +623,17 @@ const L = (extra) => ({ 'X-Games-Link': SECRET, ...(extra || {}) });
 
     console.log('\n[12] index.js wiring (static — index.js starts a server on require)');
     {
-      const src = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
+      const src = readAppSource();
       const iInternal = src.indexOf('app.use(gamesLink.internal)');
       const iJson = src.indexOf('app.use(express.json())');
       ok('the internal middleware is mounted BEFORE express.json() (secret before body)', iInternal > 0 && iJson > 0 && iInternal < iJson);
       const firstLimiter = src.indexOf("rateLimiter.middleware(");
       ok('…and before any rate limiter', iInternal < firstLimiter);
-      ok('no pool route is registered under /internal (the lib answers the whole prefix)', !/app\.(get|post|put|patch|delete|all|use)\(\s*'\/internal/.test(src));
+      // Either receiver (route files register on `router`) and any quote — `app.` alone would pass
+      // vacuously once routes move (R1 2026-10-10); the control proves the reader sees a real one.
+      const REG = (p) => new RegExp(`\\b(?:app|router)\\.(?:get|post|put|patch|delete|all|use)\\(\\s*['"\`]${p}`);
+      ok('control — the registration reader sees a real route (/api/pool/stats)', REG('\\/api\\/pool\\/stats').test(src));
+      ok('no pool route is registered under /internal (the lib answers the whole prefix)', !REG('\\/internal').test(src));
       ok('no /internal route is mounted under /api/', !/'\/api\/[^']*internal/.test(src));
       ok('attach gets the real verifyOwnerProof/auditOwnerProof and the branding flush',
          /gamesLink\.attach\(\{[^}]*verifyOwnerProof[^}]*auditOwnerProof[^}]*onHealthChange: invalidateBranding/.test(src));

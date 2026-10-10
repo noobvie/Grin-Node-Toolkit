@@ -16,6 +16,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { readAppSource } = require('./lib/app-source');
 
 const APP = path.join(__dirname, '..');
 const GAMES_RULE = path.join(APP, '..', 'play', 'server', 'lib', 'name-rule.js');
@@ -92,7 +93,7 @@ console.log('\n[3] names.blocked_words — validator, default, step-up, the page
     && V.blocked_words(Array(800).fill('same').join('\n')) === 'same');
   ok('a non-text line in an array is refused', throws(() => V.blocked_words(['ok', 5])));
 
-  const index = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
+  const index = readAppSource();
   ok("the 'names' settings section is step-up (emptying it would let offensive names go live)",
     /STEP_UP_SETTINGS_SECTIONS = new Set\(\[[^\]]*'names'/.test(index));
 

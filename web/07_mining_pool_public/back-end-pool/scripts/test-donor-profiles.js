@@ -18,6 +18,7 @@
 // Run: node scripts/test-donor-profiles.js   (no server; temp dirs under the OS temp dir, removed)
 
 const path = require('path');
+const { readAppSource, routeSource } = require('./lib/app-source');
 const fs = require('fs');
 const os = require('os');
 const APP = path.resolve(__dirname, '..');
@@ -601,20 +602,10 @@ try {
   console.log('');
   console.log('[8] route wiring');
   console.log('');
-  const src = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
-  const srcLines = src.split(String.fromCharCode(10));
-  // One handler, from its `app.<verb>('<path>'` line to the next route registration.
-  const isRouteLine = (l) => {
-    const t = l.trimStart();
-    return l.length - t.length <= 4 && ['app.get(', 'app.post(', 'app.put(', 'app.delete(', 'app.patch('].some((p) => t.startsWith(p));
-  };
-  const route = (verb, p) => {
-    const i = srcLines.findIndex((l) => l.trimStart().startsWith('app.' + verb + "('" + p + "'"));
-    if (i < 0) return '';
-    let j = i + 1;
-    while (j < srcLines.length && !isRouteLine(srcLines[j])) j++;
-    return srcLines.slice(i, j).join(String.fromCharCode(10));
-  };
+  const src = readAppSource();
+  // One handler: its `(app|router).<verb>('<path>'` registration up to its own closing `  });`.
+  // routeSource THROWS if the route is absent or registered twice (never a silent '').
+  const route = (verb, p) => routeSource(verb, p);
   const rName = route('post', '/api/account/:addr/donor-profile/name');
   const rBan = route('post', '/api/account/:addr/donor-profile/banner');
   const rDel = route('delete', '/api/account/:addr/donor-profile/:kind');

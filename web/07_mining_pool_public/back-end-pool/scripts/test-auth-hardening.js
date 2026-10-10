@@ -8,6 +8,7 @@
 // Runs against a throwaway SQLite file in the OS temp dir — never the pool DB, and never a
 // listening server. Run: node scripts/test-auth-hardening.js
 const path = require('path');
+const { readAppSource, routeSource } = require('./lib/app-source');
 const fs = require('fs');
 const os = require('os');
 
@@ -242,7 +243,7 @@ console.log('\n[J2-4] captcha store eviction');
 // ═══ Wiring checks — the guards actually applied in index.js ════════════════
 console.log('\n[wiring] index.js + rate-limiter');
 {
-  const src = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
+  const src = readAppSource();
   const rl = fs.readFileSync(path.join(APP, 'lib/rate-limiter.js'), 'utf8');
 
   ok('a `stepup` bucket exists', /\bstepup:\s*\d+/.test(rl));
@@ -251,7 +252,7 @@ console.log('\n[wiring] index.js + rate-limiter');
   ok('reauth still runs the admin IP filter and requireAdmin',
      /'\/api\/admin\/reauth',[\s\S]{0,300}ipFilter\.middleware\('admin'\)[\s\S]{0,200}requireAdmin\(authManager\)/.test(src));
   ok('reauth records a failed attempt against the auto-ban',
-     /reauth[\s\S]{0,4000}recordAdminLoginFailure\(req\.ip/.test(src));
+     /recordAdminLoginFailure\(req\.ip/.test(routeSource('post', '/api/admin/reauth')));
   ok('change-password runs on the stepup bucket',
      /'\/api\/auth\/change-password',\s*\n\s*rateLimiter\.middleware\('stepup'\)/.test(src));
   ok('change-password is on requireAdmin, not requireAuth',

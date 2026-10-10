@@ -23,6 +23,7 @@ const os = require('os');
 const net = require('net');
 const http = require('http');
 const path = require('path');
+const { readAppSource, routeSource } = require('./lib/app-source');
 const fetch = require('node-fetch');
 
 const APP = path.resolve(__dirname, '..');
@@ -407,9 +408,11 @@ const quiet = () => {};
     ok('upDaysPublic returns only an integer or null', [true, false].every((x) => { const v = ing.upDaysPublic(x); return v === null || Number.isSafeInteger(v); }));
 
     // The public route: the node object can carry no timestamp.
-    const indexSrc = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
+    const indexSrc = readAppSource();
     const a0 = indexSrc.indexOf('const buildPoolStatus = async () => {');
-    const a1 = indexSrc.indexOf("app.get('/api/pool/status'");
+    // The builder sits directly above its route in routes/pool.js; the route's own source is the end marker.
+    const routeText = routeSource('get', '/api/pool/status');   // throws if absent
+    const a1 = indexSrc.indexOf(routeText);
     const builder = indexSrc.slice(a0, a1);
     ok('buildPoolStatus found', a0 > 0 && a1 > a0);
     const keys = new Set((builder.match(/^\s+([a-z_]+):/gm) || []).map((k) => k.trim().replace(':', '')));

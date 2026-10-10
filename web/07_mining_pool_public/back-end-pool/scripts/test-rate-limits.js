@@ -23,12 +23,13 @@
 // nothing left running. Run: node scripts/test-rate-limits.js
 const fs = require('fs');
 const path = require('path');
+const { readAppSource, routeSource } = require('./lib/app-source');
 const { DatabaseSync } = require('node:sqlite');
 
 const APP = path.resolve(__dirname, '..');
 const RateLimiter = require(path.join(APP, 'lib/rate-limiter.js'));
 
-const indexSrc = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
+const indexSrc = readAppSource();
 const trackerSrc = fs.readFileSync(path.join(APP, 'lib/hashrate-tracker.js'), 'utf8');
 
 let pass = 0, fail = 0;
@@ -124,9 +125,9 @@ ok('§J12-6 concurrent misses are collapsed onto one outbound call', /_priceInfl
 console.log('\n[5] §J12-8 — the branding payload is memoised and invalidated on a write\n');
 
 ok('§J12-8 /api/public/branding holds a server-side memo',
-  /BRANDING_TTL_MS\s*=\s*\d+/.test(indexSrc) && /_brandingCache/.test(indexSrc));
+  /BRANDING_TTL_MS\s*=\s*\d+/.test(indexSrc) && /caches\.branding/.test(indexSrc));
 ok('§J12-8 the memo key space is bounded (hostname is attacker-chosen)',
-  /_brandingCache\.size >= \d+/.test(indexSrc));
+  /caches\.branding\.size >= \d+/.test(indexSrc));
 {
   const n = (indexSrc.match(/invalidateBranding\(\);/g) || []).length;
   ok('§J12-8 every settings/asset write invalidates it (updateSection, resetSection, saveAsset, deleteAsset)',
@@ -312,10 +313,10 @@ console.log('\n[8] §J12-3 / -5 / -9 / -11 / -12 — the remaining resolution pa
   // Every pool-wide admin export, not a count: the operator revenue CSV (2026-10-05) made it three,
   // and a fixed number would pass again the day a fourth one forgot the gate while one was removed.
   {
-    const exportRoutes = [...indexSrc.matchAll(/app\.get\('(\/api\/admin\/export\/[^']+)'/g)].map((m) => m[1]);
+    const exportRoutes = [...indexSrc.matchAll(/(?:app|router)\.get\('(\/api\/admin\/export\/[^']+)'/g)].map((m) => m[1]);
     const ungated = exportRoutes.filter((p) => {
-      const i = indexSrc.indexOf(`app.get('${p}'`);
-      return !/adminCsvGate\(req, res\)/.test(indexSrc.slice(i, i + 600));
+      // The gate sits at the top of the handler: look at the first 600 chars of THIS route only.
+      return !/adminCsvGate\(req, res\)/.test(routeSource('get', p).slice(0, 600));
     });
     ok('§J12-5 every admin CSV export goes through the export bucket',
       exportRoutes.length >= 3 && ungated.length === 0, `routes ${exportRoutes.join(', ')}; ungated: ${ungated.join(', ')}`);
@@ -331,7 +332,7 @@ console.log('\n[8] §J12-3 / -5 / -9 / -11 / -12 — the remaining resolution pa
 
   // §J12-9 — topology memoised.
   ok('§J12-9 /api/pool/topology holds a server-side memo',
-    /TOPOLOGY_TTL_MS/.test(indexSrc) && /_topologyCache = \{ at: Date\.now\(\), body \}/.test(indexSrc));
+    /TOPOLOGY_TTL_MS/.test(indexSrc) && /caches\.topology = \{ at: Date\.now\(\), body \}/.test(indexSrc));
 
   // §J12-11 — every previously unbounded map now has a bound, and violations still does NOT
   // get size-evicted (that would lift a lockout).

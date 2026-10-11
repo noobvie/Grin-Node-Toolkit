@@ -1758,12 +1758,20 @@ $admin_rules
     # Forwards the client IP, unlike the SEO-file proxies above: this one is a real page a
     # visitor loads, and the app rate-limits it per IP — without these headers every visitor
     # would share nginx's single 127.0.0.1 bucket.
+    # CSP: the app sets its own CSP pair on every response, and a browser enforces EVERY CSP
+    # header it receives - so passed through, the app's narrower policy (no analytics or
+    # Google-font host) was intersected with the page policy on this page alone, silently
+    # blocking both, and its Report-Only twin logged violations no static page has. Both are
+    # hidden here, and this block adds no header of its own, so it inherits the server-level
+    # page snippet: the same headers the file gets when served from disk. Same for /blog/ below.
     location = /page.html {
         proxy_pass         http://127.0.0.1:$POOL_PORT;
         proxy_set_header   Host \$host;
         proxy_set_header   X-Real-IP \$remote_addr;
         proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header   X-Forwarded-Proto \$scheme;
+        proxy_hide_header  Content-Security-Policy;
+        proxy_hide_header  Content-Security-Policy-Report-Only;
     }
 
     # CMS media (cover images + in-body images uploaded via the admin editor). Stored in a
@@ -1807,6 +1815,8 @@ $admin_rules
     # The exact-match "location = /blog/rss.xml" above wins over this regex, and the blog
     # index /blog.html doesn't match (no slash after "blog"). Slug charset mirrors slugify()
     # in lib/posts.js (lowercase alnum + hyphen); underscores allowed for safety.
+    # The app's own CSP pair is hidden for the reason given at page.html above; no add_header
+    # here, so the server-level page snippet applies.
     location ~ ^/blog/([A-Za-z0-9_-]+)/?\$ {
         limit_req zone=${POOL_SERVICE}_static burst=100 nodelay;
         proxy_pass         http://127.0.0.1:$POOL_PORT;
@@ -1814,6 +1824,8 @@ $admin_rules
         proxy_set_header   X-Real-IP \$remote_addr;
         proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header   X-Forwarded-Proto \$scheme;
+        proxy_hide_header  Content-Security-Policy;
+        proxy_hide_header  Content-Security-Policy-Report-Only;
     }
 
 ${ping_block}

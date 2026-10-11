@@ -694,5 +694,42 @@ console.log('\n[games] /internal stays off /api/; branding carries only { mode, 
     !/games_port|games_link_secret_file|linkSecret/.test(routeSrc('get', '/api/public/branding')));
 }
 
+// A form whose submit JavaScript handles still submits NATIVELY whenever that script is missing:
+// a 404 on the page's js/pages/*.js mid-deploy, a network blip, or any top-level throw before the
+// delegated listeners at the END of the file (code-layout F2 — the old onsubmit= attribute did not
+// depend on the rest of the script running). With no method that fallback is a GET, so the admin
+// password lands in the URL: nginx access log, browser history, sync. POST keeps it in the body.
+console.log('\n[forms] a form holding a password field never falls back to GET');
+{
+  const files = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      if (e.name === 'vendor' || e.name === 'node_modules') continue;
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p); else if (e.name.endsWith('.html')) files.push(p);
+    }
+  };
+  walk(path.join(WEB, 'public_html'));
+  walk(path.join(APP, 'admin-panel'));
+  // Markup only: comments, <style> and <script> bodies out first — login.html's own CSS comment
+  // says "these sit inside <form>", which a tag regex would otherwise read as a method-less form.
+  const markup = (f) => fs.readFileSync(f, 'utf8')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<(style|script)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+  const forms = [];
+  for (const f of files) {
+    for (const m of markup(f).matchAll(/<form\b([^>]*)>([\s\S]*?)<\/form>/gi)) {
+      if (/type\s*=\s*["']?password\b/i.test(m[2])) forms.push({ file: path.relative(WEB, f), open: m[1] });
+    }
+  }
+  const getForms = forms.filter((x) => !/\bmethod\s*=\s*["']?post\b/i.test(x.open));
+  ok('the login + register password forms are found (non-vacuity)', forms.length >= 2, `found ${forms.length}`);
+  ok('every form holding a password field declares method="post"', getForms.length === 0,
+    getForms.map((x) => x.file).join(', '));
+  const loginForms = [...markup(path.join(WEB, 'public_html/login.html')).matchAll(/<form\b([^>]*)>/gi)].map((m) => m[1]);
+  ok('all three login.html forms (login, register, 2FA code) are method="post"',
+    loginForms.length === 3 && loginForms.every((a) => /\bmethod="post"/i.test(a)), loginForms.join(' | '));
+}
+
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

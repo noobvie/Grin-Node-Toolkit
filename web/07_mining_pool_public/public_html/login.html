@@ -287,7 +287,12 @@
     <div class="success" id="success-msg"></div>
 
     <div id="login-form">
-      <form data-action="login-submit">
+      <!-- method="post" on all three forms is load-bearing: submit is handled by the delegated
+           listener at the END of /js/pages/login.js. If that file fails to load (404 mid-deploy,
+           network) the browser submits natively, and a method-less form is a GET that puts the
+           admin password in the URL, the nginx access log and browser history. A POST keeps it
+           in the body (nginx answers 405 for a static page). -->
+      <form data-action="login-submit" method="post">
         <div class="form-group">
           <label for="username">Username</label>
           <input type="text" id="username" name="username" placeholder="Enter admin username" required>
@@ -318,7 +323,7 @@
     </div>
 
     <div id="register-form" style="display: none;">
-      <form data-action="register-submit">
+      <form data-action="register-submit" method="post">
         <div class="form-group">
           <label for="reg-username">Username</label>
           <input type="text" id="reg-username" name="username" placeholder="Choose username (3+ chars)" required>
@@ -346,7 +351,7 @@
     </div>
 
     <div id="totp-form" style="display: none;">
-      <form data-action="totp-submit">
+      <form data-action="totp-submit" method="post">
         <div class="form-group">
           <label for="totp-code">Two-factor code</label>
           <input type="text" id="totp-code" name="totp-code" inputmode="numeric" autocomplete="one-time-code"

@@ -20,8 +20,8 @@
 // make "all zero" unreachable. CMS bodies render in a sandboxed srcdoc iframe with no allow-scripts,
 // so they never needed 'unsafe-inline' and are not front-end work.
 //
-// Scanned: public_html/*.html, admin-panel/*.html (all four counts) and public_html/js/**/*.js (not
-// vendor/), admin-panel/**/*.js (counts 2–4, string literals only). Within an HTML page the on*=
+// Scanned: public_html/**/*.html, admin-panel/**/*.html (all four counts) and public_html/js/**/*.js,
+// admin-panel/**/*.js (counts 2–4, string literals only); vendor/ and node_modules/ skipped. Within an HTML page the on*=
 // scan also covers the inline script bodies: a row template built in a page's inline JS becomes a
 // JS-file hit once the block is extracted, so the page's number must not drop merely by moving it.
 //
@@ -117,26 +117,33 @@ function countJs(js) {
 
 // ── tree walk ───────────────────────────────────────────────────────────────
 
-function walkJs(dir, out = []) {
+function walk(dir, ext, out = []) {
   if (!fs.existsSync(dir)) return out;
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, e.name);
-    if (e.isDirectory()) { if (e.name !== 'vendor' && e.name !== 'node_modules') walkJs(full, out); }
-    else if (e.name.endsWith('.js')) out.push(full);
+    if (e.isDirectory()) { if (e.name !== 'vendor' && e.name !== 'node_modules') walk(full, ext, out); }
+    else if (e.name.endsWith(ext)) out.push(full);
   }
   return out;
 }
+const walkJs = (dir) => walk(dir, '.js');
 
-function scanTree() {
+// HTML is walked recursively too (R3): a page added in a subfolder (public_html/guides/x.html)
+// is served by the same `location /` and carries the same CSP, so it must be counted the same.
+// `stats` (optional) receives how many files were read — the floors in main need it.
+function scanTree(stats = {}) {
   const result = {};
+  stats.html = 0; stats.js = 0;
   const put = (rel, c) => { if (Object.values(c).some((v) => v > 0)) result[rel] = c; };
   for (const [root, label] of [[PUB, 'public_html'], [PANEL, 'admin-panel']]) {
-    for (const name of fs.readdirSync(root).filter((f) => f.endsWith('.html')).sort()) {
-      put(`${label}/${name}`, countHtml(fs.readFileSync(path.join(root, name), 'utf8')));
+    for (const f of walk(root, '.html').sort()) {
+      stats.html++;
+      put(`${label}/${path.relative(root, f).replace(/\\/g, '/')}`, countHtml(fs.readFileSync(f, 'utf8')));
     }
   }
   for (const [root, label] of [[path.join(PUB, 'js'), 'public_html/js'], [PANEL, 'admin-panel']]) {
     for (const f of walkJs(root).sort()) {
+      stats.js++;
       const rel = `${label}/${path.relative(root, f).replace(/\\/g, '/')}`;
       put(rel, countJs(fs.readFileSync(f, 'utf8')));
     }
@@ -185,7 +192,15 @@ const ok = (name, cond, extra) => {
      countJs('/* CMS bodies: no onclick="…" survives */\nvar a = 1;').onAttrs === 0);
 }
 
-const current = scanTree();
+const scanned = {};
+const current = scanTree(scanned);
+
+// Non-vacuity (R3): `--zero` and the ratchet both pass on a tree that holds no files — R3 ran this
+// script against empty public_html/ + admin-panel/ dirs and got "16 passed, 0 failed". A moved or
+// renamed root would turn F7's gate into a no-op. Floors sit a little under today's tree (44 HTML
+// pages, 53 JS files on 2026-10-10); a deliberate large deletion lowers them in the same commit.
+ok(`non-vacuity: at least 40 HTML pages scanned (${scanned.html})`, scanned.html >= 40);
+ok(`non-vacuity: at least 45 JS files scanned (${scanned.js})`, scanned.js >= 45);
 
 if (args.has('--write')) {
   fs.mkdirSync(path.dirname(BASELINE), { recursive: true });

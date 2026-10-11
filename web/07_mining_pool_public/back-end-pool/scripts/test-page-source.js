@@ -40,6 +40,49 @@ for (const root of [PUBLIC_ROOT, ADMIN_ROOT]) {
   }
 }
 ok('walked at least 40 pages (the loop is not vacuous)', compared + extracted >= 40, `${compared} + ${extracted}`);
+
+// Every extracted script is still LOADED, by exactly one page (R3). Nothing above notices a page
+// that lost its <script src>: the page then holds no page-specific src, so it is classed as
+// "never extracted" and compared byte for byte against itself — green — while its code sits in
+// js/pages/ unused. R3 planted exactly that (fortune-board.html) and the whole suite stayed green.
+// One page per file is the §2 layout ("one script per page"); a script two pages share belongs
+// with the shared scripts, not under js/pages/ or admin-panel/js/.
+{
+  const walk = (d, out = []) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const f = path.join(d, e.name);
+      if (e.isDirectory()) walk(f, out); else if (e.name.endsWith('.js')) out.push(f);
+    }
+    return out;
+  };
+  const norm = (p) => p.replace(/\\/g, '/');
+  const files = [...walk(path.join(PUBLIC_ROOT, 'js', 'pages')), ...walk(path.join(ADMIN_ROOT, 'js'))];
+  const loadedBy = new Map(files.map((f) => [path.resolve(f), []]));
+  const unquoted = [];
+  for (const root of [PUBLIC_ROOT, ADMIN_ROOT]) {
+    for (const n of fs.readdirSync(root).filter((f) => f.endsWith('.html'))) {
+      const p = path.join(root, n);
+      const raw = fs.readFileSync(p, 'utf8');
+      // An unquoted src (`<script src=/js/pages/x.js>`) loads fine in a browser but is invisible
+      // to readPageSource() and to SRC_RE — the page's code would silently drop out of every
+      // test that reads the page. Refuse it rather than teach three regexes a fourth form.
+      if (/<script\b[^>]*\ssrc\s*=\s*(?!["'])/i.test(raw)) unquoted.push(`${path.basename(root)}/${n}`);
+      for (const f of ownSrcs(p, raw)) {
+        const k = path.resolve(f);
+        if (loadedBy.has(k)) loadedBy.get(k).push(`${path.basename(root)}/${n}`);
+      }
+    }
+  }
+  ok('non-vacuity: at least 30 page-specific scripts found', files.length >= 30, `found ${files.length}`);
+  for (const [f, pages] of loadedBy) {
+    ok(`page-specific script loaded by exactly one page: ${norm(path.relative(path.join(PUBLIC_ROOT, '..'), f))}`,
+      pages.length === 1, pages.length ? `loaded by ${pages.join(', ')}` : 'loaded by NO page — a page lost its <script src>');
+  }
+  ok('no page loads a script with an unquoted src (readPageSource cannot see it)', unquoted.length === 0, unquoted.join(', '));
+  ok('control: the unquoted-src pattern sees an unquoted tag and passes a quoted one',
+    /<script\b[^>]*\ssrc\s*=\s*(?!["'])/i.test('<script src=/js/pages/x.js></script>') &&
+    !/<script\b[^>]*\ssrc\s*=\s*(?!["'])/i.test('<script src="/js/pages/x.js"></script>'));
+}
 ok('the src regex sees a real tag (control: a pattern that never matches would skip nothing)',
   ownSrcs(path.join(PUBLIC_ROOT, 'a.html'), '<script src="/js/pages/x.js"></script>').length === 1);
 

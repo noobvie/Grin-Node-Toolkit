@@ -15,6 +15,9 @@
 // policies still allow inline script — the strict flip (F7) is a separate, reviewed commit
 // that rewrites the last group of assertions.
 //
+// [5] (R3): the two app-rendered pages (/blog/<slug>, /page.html) must hide the app's own CSP
+// pair at nginx, or the browser enforces both policies there and reports what neither page loads.
+//
 // Run: node scripts/test-csp-report-only.js
 'use strict';
 const fs = require('fs');
@@ -128,6 +131,40 @@ console.log('\n[4] scope — where the twin must NOT be');
     `found ${allPolicies.length}`);
   ok('no policy carries report-uri / report-to (no new endpoint)',
     allPolicies.length > 0 && !allPolicies.some((p) => /report-uri|report-to/.test(p)));
+}
+
+console.log('\n[5] Express-rendered pages carry the nginx page policy ONLY (R3)');
+{
+  // /blog/<slug> and /page.html are HTML documents the app renders (routes/seo.js sendShell) and
+  // nginx proxies. The app sets its own CSP pair on EVERY response (index.js, [1]); nginx does not
+  // strip upstream headers, and a browser enforces every CSP it receives — so on exactly these two
+  // pages the app's narrower policy (no analytics or Google-font host) was intersected with the
+  // page one, and its Report-Only twin logged violations no static page has. Each location hides
+  // both app headers and declares no add_header of its own, so it inherits the server-level page
+  // snippet: the same headers the shell gets when served from disk.
+  const seo = fs.readFileSync(path.resolve(__dirname, '../routes/seo.js'), 'utf8');
+  const shells = [...new Set([...seo.matchAll(/sendShell\(res, '([a-z-]+\.html)'/g)].map((m) => m[1]))].sort();
+  ok('seo.js renders exactly post.html + page.html (a NEW app-rendered page needs the same nginx treatment)',
+    JSON.stringify(shells) === '["page.html","post.html"]', JSON.stringify(shells));
+  ok('server block includes the page snippet at server level (what the two locations inherit)',
+    /\n    include \$hdr_page;\n/.test(vhostSrc));
+  // Cut a location block by its opening line; comment lines dropped so prose cannot satisfy a check.
+  const locBlock = (head) => {
+    const i = vhostSrc.indexOf(`\n    location ${head}`);
+    if (i < 0) return '';
+    const j = vhostSrc.indexOf('\n    }', i + 1);
+    if (j < 0) return '';
+    return vhostSrc.slice(i, j + 6).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  };
+  for (const [label, head] of [['/blog/<slug>', '~ ^/blog/('], ['/page.html', '= /page.html {']]) {
+    const b = locBlock(head);
+    ok(`${label}: location found and proxied to the app`, /proxy_pass\s+http:\/\/127\.0\.0\.1:\$POOL_PORT;/.test(b),
+      b.slice(0, 80));
+    ok(`${label}: hides the app's enforcing CSP`, /\n\s+proxy_hide_header\s+Content-Security-Policy;/.test(b));
+    ok(`${label}: hides the app's Report-Only twin`, /\n\s+proxy_hide_header\s+Content-Security-Policy-Report-Only;/.test(b));
+    ok(`${label}: no add_header of its own (else it drops the inherited page snippet)`,
+      b.length > 0 && !/\badd_header\b/.test(b));
+  }
 }
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);

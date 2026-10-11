@@ -11,6 +11,7 @@
 // Run: node scripts/test-payout-guard.js
 const path = require('path');
 const { readAppSource, routeSource } = require('./lib/app-source');
+const { readPageSource } = require('./lib/page-source');
 const fs = require('fs');
 const os = require('os');
 
@@ -2098,7 +2099,8 @@ async function routeSection() {
     ok('RT6. pause clear → 200, 5 rows un-counted, not paused any more, audit row',
       res.statusCode === 200 && res.body.cleared === 5 && res.body.tor_pause && res.body.tor_pause.paused_until === null && !!audit('miner_tor_pause_clear'),
       JSON.stringify({ code: res.statusCode, body: res.body }));
-    ok('RT6. …step-up gated (freshAdmin)', /app\.post\('\/api\/admin\/miners\/:addr\/tor-pause\/clear', freshAdmin,/.test(indexSrc));
+    ok('RT6. …step-up gated (freshAdmin)', /^\s*(?:app|router)\.post\('\/api\/admin\/miners\/:addr\/tor-pause\/clear', freshAdmin,/m
+      .test(routeSource('post', '/api/admin/miners/:addr/tor-pause/clear')));
     const none = await call(h, { params: { addr: 'tgrin1nobody' } });
     ok('RT6. pause clear for an unknown address → 404', none.statusCode === 404, JSON.stringify(none.body));
     for (let i = 1; i <= 5; i++) seedFailed('wallet_offline', i * 3600);
@@ -3252,7 +3254,7 @@ async function walletVersionSection() {
       afterCached === 1 && runs === 2, String(runs));
   }
 
-  const html = fs.readFileSync(path.join(APP, 'admin-panel/settings-payout.html'), 'utf8');
+  const html = readPageSource(path.join(APP, 'admin-panel/settings-payout.html'));
   const m = /data-tested-grin-wallet>v?([^<]+)</.exec(html);
   ok('W5. the Payout settings "Pool wallet safety" note states the tested version', !!m && m[1].trim() === T, m ? m[1] : 'not found');
 
@@ -3326,10 +3328,10 @@ async function doublePayCardSection() {
   const body = routeSource('post', '/api/admin/alerts/:alertId/resolve');
   ok('D7. …it requires a note, goes through resolveManual, and writes an alert_resolve audit row',
     /if \(!note\)/.test(body) && /AlertMonitor\.resolveManual\(/.test(body) && /'alert_resolve'/.test(body));
-  const html = fs.readFileSync(path.join(APP, 'admin-panel/health.html'), 'utf8');
+  const html = readPageSource(path.join(APP, 'admin-panel/health.html'));
   ok('D8. the Health page loads stepup.js and resolves through adminFetch (the step-up retry)',
     /<script src="\/js\/stepup\.js"><\/script>/.test(html) && /adminFetch\('\/api\/admin\/alerts\/' \+ id \+ '\/resolve'/.test(html));
-  const acct = fs.readFileSync(path.join(APP, '../public_html/account-settings.html'), 'utf8');
+  const acct = readPageSource(path.join(APP, '../public_html/account-settings.html'));
   ok('D9. the account page tells a CLI miner to run `grin-wallet receive -m` (skips the Tor reply that cannot reach the pool)',
     /<code>grin-wallet receive -m<\/code>/.test(acct));
 }

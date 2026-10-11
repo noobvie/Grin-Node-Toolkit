@@ -101,7 +101,7 @@ console.log('\n[e] the branding route publishes it\n');
   ok('e. branding route found', route.length > 0);
   ok('e. connection.latency = latencyConfig(config)', /latency:\s*latencyConfig\(config\)/.test(route));
   ok('e. latencyConfig is the lib\'s, not a local copy',
-    /require\('\.\/lib\/latency-probe'\)/.test(indexSrc) && !/function latencyConfig/.test(indexSrc));
+    /require\('\.{1,2}\/lib\/latency-probe'\)/.test(indexSrc) && !/function latencyConfig/.test(indexSrc));
   const meta = indexSrc.split('\n').find((l) => l.trimStart().startsWith("'GET /api/public/branding':")) || '';
   ok('e. API_DOC_META documents connection.latency, probe_domain, hub_url, direct_bias_ms and the CDN null',
     /connection\.latency/.test(meta) && /probe_domain/.test(meta) && /hub_url/.test(meta) && /CDN/.test(meta)

@@ -127,13 +127,16 @@ const CFG = {
 // branding.js is an IIFE that exposes nothing, so it is driven through its REAL entry point:
 // load() fetches /api/public/branding and hands the payload to apply(). Serving the config from
 // the stubbed fetch exercises the actual path rather than a hook added for the test.
-async function runFor(pageKey, attrExempt, cfgOverride) {
+async function runFor(pageKey, attrExempt, cfgOverride, nav) {
   const { document, head, body, documentElement } = makeDom(pageKey, attrExempt);
+  // nav = { href, referrer } — only the GA4 scrub assertions ([8]) need a non-default URL.
+  const href = (nav && nav.href) || `https://pool.example/${pageKey}.html`;
+  document.referrer = (nav && nav.referrer) || '';
   let fetched = false;
   const sandbox = {
     document,
     window: null,
-    location: { pathname: `/${pageKey}.html`, href: `https://pool.example/${pageKey}.html`, search: '' },
+    location: { pathname: `/${pageKey}.html`, href, search: new URL(href).search, origin: new URL(href).origin },
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     navigator: { userAgent: 'test' },
@@ -181,6 +184,8 @@ async function runFor(pageKey, attrExempt, cfgOverride) {
     cssVars: Object.assign({}, documentElement._vars, body._vars),
     // Raw innerHTML of everything under <body>, for the maintenance-overlay assertion.
     bodyHtml: body.children.map((c) => c.innerHTML || '').join('~'),
+    // GA4's init (F6: direct JS, no inline script) — what gtag.js reads once it loads.
+    dataLayer: sandbox.dataLayer, gtag: sandbox.gtag,
   };
 }
 
@@ -296,10 +301,11 @@ async function main() {
     const r = await runFor(page);
     ok(`${page}: no node carries the legacy head/body HTML markers`,
       !/__PWNED_HEAD|__PWNED_BODY|__PWNED_IMG/.test(r.deep), r.deep.slice(0, 300));
-    // Exactly the two GA4 nodes (loader + init) and nothing else may be a SCRIPT. Counting is
-    // what catches a half-revert that re-adds the head sink but keeps the markers out of text.
+    // Exactly ONE GA4 node (the gtag.js loader) and nothing else may be a SCRIPT — since F6 the
+    // init runs as direct JS, not an injected inline script. Counting is what catches a
+    // half-revert that re-adds the head sink but keeps the markers out of text.
     const scripts = r.deep.split('~').filter((n) => n.startsWith('SCRIPT|'));
-    ok(`${page}: the only SCRIPT nodes are the two GA4 nodes`, scripts.length === 2 &&
+    ok(`${page}: the only SCRIPT node is the GA4 loader`, scripts.length === 1 &&
       scripts.every((n) => /G-PWNED/.test(n)), scripts.join(' ~ '));
   }
 
@@ -350,6 +356,38 @@ async function main() {
       ok(`${c.name}: refuses ${JSON.stringify(b).slice(0, 110)}`, s.length === 0, s.join(' ~ '));
     }
   }
+
+  console.log('');
+  console.log('[8] F6 - GA4 init is direct JS: dataLayer gets the same pushes the inline snippet made');
+  // The init used to be an injected inline <script> (blocked by a strict script-src). The
+  // shim above never EXECUTES an inline script, so these pushes can only come from direct JS.
+  const ga = await runFor('account-settings', false,
+    withAnalytics({ provider: 'ga4', ga_tracking_id: 'G-ABC123' }),
+    { href: 'https://pool.example/account-settings.html?addr=grin1secretaddr&utm_source=x',
+      referrer: 'https://pool.example/account-settings.html?addr=grin1prevaddr&x=1' });
+  const dl = Array.isArray(ga.dataLayer) ? ga.dataLayer : [];
+  const kind = (v) => Object.prototype.toString.call(v);
+  ok('GA4: window.gtag is a function', typeof ga.gtag === 'function', typeof ga.gtag);
+  ok('GA4: exactly two init pushes, in order js → config', dl.length === 2 &&
+    dl[0][0] === 'js' && dl[1][0] === 'config', JSON.stringify(dl.map((e) => Array.from(e))));
+  // gtag.js acts only on Arguments entries — an array push is silently ignored by it.
+  ok('GA4: every push is an Arguments object (not an array)',
+    dl.length > 0 && dl.every((e) => kind(e) === '[object Arguments]'), dl.map(kind).join(','));
+  ok("GA4: gtag('js', <Date>)", dl[0] && dl[0].length === 2 && kind(dl[0][1]) === '[object Date]');
+  const conf = (dl[1] && dl[1][2]) || {};
+  ok("GA4: gtag('config', id, …) carries the validated id", dl[1] && dl[1][1] === 'G-ABC123');
+  ok('GA4: page_location is scrubbed of addr, keeps the rest',
+    conf.page_location === 'https://pool.example/account-settings.html?utm_source=x', conf.page_location);
+  ok('GA4: page_referrer is scrubbed of addr, keeps the rest',
+    conf.page_referrer === 'https://pool.example/account-settings.html?x=1', conf.page_referrer);
+  ok('GA4: config carries ONLY the two pinned keys',
+    JSON.stringify(Object.keys(conf)) === '["page_location","page_referrer"]', JSON.stringify(conf));
+  if (ga.gtag) ga.gtag('event', 'probe');
+  ok('GA4: a later gtag() call still pushes to the same dataLayer', dl.length === 3 &&
+    kind(dl[2]) === '[object Arguments]' && dl[2][0] === 'event', String(dl.length));
+  const bad = await runFor('home', false, withAnalytics({ provider: 'ga4', ga_tracking_id: 'G-ABC\\' }));
+  ok('GA4: a refused id defines no gtag and pushes nothing',
+    bad.gtag === undefined && bad.dataLayer === undefined, typeof bad.gtag);
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
   process.exit(fail === 0 ? 0 : 1);

@@ -19,6 +19,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { readAppSource } = require('./lib/app-source');
+const { readPageSource } = require('./lib/page-source');
 const http = require('http');
 const express = require('express');
 
@@ -753,7 +754,7 @@ const L = (extra) => ({ 'X-Games-Link': SECRET, ...(extra || {}) });
       ok('applyGamesNav runs with the rest of the header enhancement', /applyIncentivesNav\(cfg\);\s*\n\s*applyGamesNav\(cfg\);/.test(brand));
 
       const PANEL = path.join(APP, 'admin-panel');
-      const page = fs.readFileSync(path.join(PANEL, 'settings-games.html'), 'utf8');
+      const page = readPageSource(path.join(PANEL, 'settings-games.html'));
       const form = (page.match(/<div id="games" class="settings-content[^"]*">([\s\S]*?)<script/) || [])[1] || '';
       const ids = [];
       for (const m of form.matchAll(/<(input|select|textarea)\b([^>]*)>/g)) {
@@ -764,7 +765,7 @@ const L = (extra) => ({ 'X-Games-Link': SECRET, ...(extra || {}) });
       ok('settings-games.html harvests exactly the games keys (an unknown id fails the save)', JSON.stringify(ids.sort()) === JSON.stringify(keys), `${ids} vs ${keys}`);
       ok('mode is a <select> with exactly off/preview/on (radios are not harvested)',
          /<select id="mode"/.test(form) && JSON.stringify([...form.matchAll(/<option value="([^"]+)"/g)].map((m) => m[1])) === JSON.stringify(PoolSettings.GAMES_MODES));
-      ok('the page declares SETTINGS_SECTION games', /window\.SETTINGS_SECTION = "games"/.test(page));
+      ok('the page declares SETTINGS_SECTION games', /<script src="\/admin\/settings-common\.js" data-section="games"><\/script>/.test(page));
       const shellAdmin = fs.readFileSync(path.join(PANEL, 'admin-shell.js'), 'utf8');
       ok('admin nav links it under Settings', /file: 'settings-games\.html',\s*title: 'Games'/.test(shellAdmin));
       const common = fs.readFileSync(path.join(PANEL, 'settings-common.js'), 'utf8');

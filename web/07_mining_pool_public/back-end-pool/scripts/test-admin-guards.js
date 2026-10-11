@@ -16,6 +16,7 @@
 // Run: node scripts/test-admin-guards.js
 const path = require('path');
 const { readAppSource, routeSource } = require('./lib/app-source');
+const { readPageSource } = require('./lib/page-source');
 const fs = require('fs');
 const os = require('os');
 
@@ -307,7 +308,7 @@ try {
 
   // The rescan hook is gone from the settings save (names are pre-moderated; flags are
   // computed at queue-read time), and the save is back to its plain shape.
-  const saveBlock = src.slice(src.indexOf("app.post('/api/admin/settings/:section'"), src.indexOf("app.post('/api/admin/settings/:section/restore'"))
+  const saveBlock = routeSource('post', '/api/admin/settings/:section')   // throws if absent — never a vacuous ''
     .replace(/\/\/[^\n]*/g, '');
   ok('the settings save no longer rescans donor names', !/rescan/i.test(saveBlock));
   ok('the settings save still writes through updateSection and invalidates branding',
@@ -324,7 +325,7 @@ try {
 
   // The dashboard carries the pending count (the Overview tile) from the same lib count the
   // nav badge's summary route reads.
-  const dashBlock = src.slice(src.indexOf("app.get('/api/admin/dashboard'"), src.indexOf("// REMOVED (2026-07-28): GET /api/miners/top"));
+  const dashBlock = routeSource('get', '/api/admin/dashboard');   // throws if absent — never a vacuous ''
   ok('/api/admin/dashboard emits pending_donor_requests from DonorProfiles.pendingCount',
     /pending_donor_requests:\s*pendingDonorRequests/.test(dashBlock) && /DonorProfiles\.pendingCount\(db\)/.test(dashBlock) &&
     !/new_donor_names_7d/.test(dashBlock));
@@ -348,7 +349,7 @@ try {
 
   // Mimic the page: populateForm fills the fields from getSection, saveSection harvests every id
   // in the form (checkbox → boolean, textarea → text, empty scalar → dropped).
-  const payoutPage = fs.readFileSync(path.join(APP, 'admin-panel/settings-payout.html'), 'utf8');
+  const payoutPage = readPageSource(path.join(APP, 'admin-panel/settings-payout.html'));
   const body = {};
   for (const m of payoutPage.matchAll(/<(input|select|textarea)\b([^>]*)>/gi)) {
     const id = (m[2].match(/\bid="([^"]+)"/) || [])[1];
@@ -466,7 +467,7 @@ try {
     ok('applyToConfig copies it to config.payout_target_outputs (what the scheduler reads)', cfg.payout_target_outputs === 5,
       JSON.stringify(cfg));
   }
-  const payoutHtml = fs.readFileSync(path.join(APP, 'admin-panel/settings-payout.html'), 'utf8');
+  const payoutHtml = readPageSource(path.join(APP, 'admin-panel/settings-payout.html'));
   ok('the Payout page has an input with id="payout_target_outputs" (binding is by id)',
     /<input[^>]*id="payout_target_outputs"/.test(payoutHtml));
 

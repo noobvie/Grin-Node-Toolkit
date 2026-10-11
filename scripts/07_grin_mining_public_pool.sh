@@ -1494,6 +1494,13 @@ HDREOF
 # injected script a destination on any host under it. HTTPS only, default port only.
 include $hdr_common;
 add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://plausible.io https://cloud.umami.is; connect-src 'self'${probe_csp} https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com https://plausible.io https://cloud.umami.is; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.google-analytics.com https://*.googletagmanager.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
+#
+# Report-Only twin (added 2026-10-10): the policy above, byte for byte, minus 'unsafe-inline'
+# in script-src (style-src keeps it). The browser console logs whatever the strict policy WOULD
+# block and blocks nothing. No report-uri on purpose: the console is the report, so no new
+# endpoint. Once a full browse of every page logs nothing, the strict flip drops
+# 'unsafe-inline' from the line above and deletes this one.
+add_header Content-Security-Policy-Report-Only "default-src 'self'; script-src 'self' https://www.googletagmanager.com https://plausible.io https://cloud.umami.is; connect-src 'self'${probe_csp} https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com https://plausible.io https://cloud.umami.is; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.google-analytics.com https://*.googletagmanager.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
 HDREOF
 
     # Third snippet: the ADMIN panel CSP (audit §J14-4). /admin/ is served as STATIC files by
@@ -1518,6 +1525,9 @@ HDREOF
 # at the page snippet instead — see audit §J14-4.
 include $hdr_common;
 add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
+# Report-Only twin (added 2026-10-10): the line above minus 'unsafe-inline' in script-src. The
+# console logs what the strict policy WOULD block; nothing is blocked; no report-uri.
+add_header Content-Security-Policy-Report-Only "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
 HDREOF
 
     info "Writing nginx vhost (${POOL_NET_LABEL}): $POOL_NGINX_CONF"

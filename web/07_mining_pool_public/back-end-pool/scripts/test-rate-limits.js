@@ -307,7 +307,8 @@ console.log('\n[8] §J12-3 / -5 / -9 / -11 / -12 — the remaining resolution pa
   ok('§J12-3 all four SEO proxies forward X-Forwarded-For and carry a limit_req zone',
     missing.length === 0, missing.join(', '));
   ok('§J12-3 isLocalRequest requires BOTH a loopback ip and no forwarding header',
-    /function isLocalRequest\([\s\S]{0,600}?x-forwarded-for/.test(indexSrc));
+    /function isLocalRequest\([\s\S]{0,600}?x-forwarded-for/.test(
+      require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'http-util.js'), 'utf8')));   // P10: moved out of index.js
 
   // §J12-5 — the pool-wide admin exports must be capped, paged, throttled and streamed.
   // Every pool-wide admin export, not a count: the operator revenue CSV (2026-10-05) made it three,

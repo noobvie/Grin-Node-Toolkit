@@ -5,10 +5,11 @@
 
 const express = require('express');
 const { requireAdmin } = require('../lib/auth-middleware');
+const { isLocalRequest } = require('../lib/http-util');
 
 module.exports = function createAuthRoutes(ctx, guards) {
   const {
-    authManager, db, ipFilter, isLocalRequest, loginCaptcha, poolSettings, rateLimiter,
+    authManager, db, ipFilter, loginCaptcha, poolSettings, rateLimiter,
     adminLoginFailures, admin2faFailures, ADMIN_LOGIN_FAIL_THRESHOLD, ADMIN_LOGIN_FAIL_WINDOW_MS,
     ADMIN_LOGIN_BAN_MS, ADMIN_FAIL_MAP_MAX, ADMIN_2FA_FAIL_THRESHOLD
   } = ctx;

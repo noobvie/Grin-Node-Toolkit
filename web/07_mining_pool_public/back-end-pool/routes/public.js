@@ -14,6 +14,23 @@ module.exports = function createPublicRoutes(ctx) {
   } = ctx;
   const router = express.Router();
 
+  // ─── Public Health Check (rate-limited, no auth) ───────────────────────────
+  // Registered on both /health and /api/health: nginx proxies /api/* to the backend,
+  // so the /api/health alias is what reaches the pool through the standard proxy path.
+  router.get(['/health', '/api/health'],
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      res.json({
+        // `status` reports the HTTP backend, which is fine during a stratum pause (§21.9);
+        // `stratum` says whether miners are being accepted.
+        status: 'ok',
+        network: config.network,
+        stratum: stratumPause && stratumPause.isPaused() ? 'paused' : 'accepting',
+        timestamp: new Date().toISOString()
+      });
+    }
+  );
+
   // ─── Public White-Label Config (rate-limited, no auth) ─────────────────────
   // Serves the curated branding/SEO/analytics payload consumed by /js/branding.js
   // on every public page. Only operator-set, non-sensitive fields are exposed.

@@ -423,7 +423,7 @@ const quiet = () => {};
       /up_days: nodeAvailability \? nodeAvailability\.upDaysPublic\(true\) : null/.test(builder) &&
       (indexSrc.match(/height: 0, up_days: null \}/g) || []).length === 2);
     ok('the admin routes sit behind secureAdmin',
-      /app\.get\('\/api\/admin\/node-events', secureAdmin/.test(indexSrc) && /app\.get\('\/api\/admin\/node-availability', secureAdmin/.test(indexSrc));
+      /(?:app|router)\.get\('\/api\/admin\/node-events', secureAdmin/.test(indexSrc) && /(?:app|router)\.get\('\/api\/admin\/node-availability', secureAdmin/.test(indexSrc));
     ok('the node_down alert reuses the fresh probe', /nodeAvailability\.recentStatus\(\)/.test(fs.readFileSync(path.join(APP, 'lib/alert-monitor.js'), 'utf8')));
     const naSrc = fs.readFileSync(path.join(APP, 'lib/node-availability.js'), 'utf8');
     ok('node-availability never classifies on message text', !/\.message\.includes|\.error\.includes|status\.error/.test(naSrc));

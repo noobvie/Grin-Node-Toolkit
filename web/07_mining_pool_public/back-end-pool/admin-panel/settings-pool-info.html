@@ -104,8 +104,8 @@
              Site notices come from Settings → Announcements — do not re-add a second one. -->
 
         <div class="form-actions">
-          <button class="btn btn-primary" onclick="saveSection('pool_info')">Save Changes</button>
-          <button class="btn btn-secondary" onclick="restoreSection('pool_info')">Restore Defaults</button>
+          <button class="btn btn-primary" data-action="save-section" data-section="pool_info">Save Changes</button>
+          <button class="btn btn-secondary" data-action="restore-section" data-section="pool_info">Restore Defaults</button>
         </div>
       </div>
     </div>
@@ -116,7 +116,6 @@
   <script src="/js/api.js"></script>
   <script src="/js/stepup.js"></script>
   <script src="/admin/admin-shell.js"></script>
-  <script>window.SETTINGS_SECTION = "pool_info";</script>
-  <script src="/admin/settings-common.js"></script>
+  <script src="/admin/settings-common.js" data-section="pool_info"></script>
 </body>
 </html>

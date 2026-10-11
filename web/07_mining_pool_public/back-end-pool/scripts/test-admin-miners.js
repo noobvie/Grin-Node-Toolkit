@@ -157,7 +157,8 @@ const call = (h, req) => {
     ok('the list no longer runs per-row share subqueries',
        !/FROM shares s WHERE s\.grin_address = ma\.grin_address/.test(src) && /minerStatus\.recentShares\(db, now\)/.test(src));
     ok('both routes are secureAdmin reads',
-       /app\.get\('\/api\/admin\/miners', secureAdmin,/.test(indexSrc) && /app\.get\('\/api\/admin\/miners\/:addr\/workers', secureAdmin,/.test(indexSrc));
+       /^\s*(?:app|router)\.get\('\/api\/admin\/miners', secureAdmin,/m.test(routeSrc('get', '/api/admin/miners')) &&
+       /^\s*(?:app|router)\.get\('\/api\/admin\/miners\/:addr\/workers', secureAdmin,/m.test(routeSrc('get', '/api/admin/miners/:addr/workers')));
 
     const res = call(load('get', '/api/admin/miners', deps), { query: { limit: '500' } });
     const byAddr = new Map(((res.body && res.body.miners) || []).map((m) => [m.grin_address, m]));

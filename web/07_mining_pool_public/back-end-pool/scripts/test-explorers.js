@@ -23,6 +23,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { readAppSource, routeSource } = require('./lib/app-source');
+const { readPageSource } = require('./lib/page-source');
 const APP = path.resolve(__dirname, '..');
 
 const ex = require(path.join(APP, 'lib/explorers.js'));
@@ -223,7 +224,7 @@ console.log('\n[g] the routes publish the RESOLVED key and build links through t
   // One route registration (routeSource throws if it is absent or ambiguous), comments stripped.
   const routeSrc = (verb, p) => stripComments(routeSource(verb, p));
   const code = stripComments(indexSrc);
-  ok('g. index.js requires lib/explorers', /require\('\.\/lib\/explorers'\)/.test(indexSrc));
+  ok('g. the route code requires lib/explorers', /require\('\.{1,2}(?:\/\.\.)?\/lib\/explorers'\)/.test(indexSrc));
 
   const helper = (code.match(/const currentExplorerKey = \(\) => \{[\s\S]*?\n  \};/) || [''])[0];
   ok('g. currentExplorerKey() resolves via the lib from config.network + the stored setting',
@@ -279,8 +280,8 @@ const vm = require('vm');
 const PUB = path.resolve(APP, '../public_html');
 const brandingSrc = fs.readFileSync(path.join(PUB, 'js/branding.js'), 'utf8');
 const shellSrc = fs.readFileSync(path.join(APP, 'admin-panel/admin-shell.js'), 'utf8');
-const blocksSrc = fs.readFileSync(path.join(PUB, 'blocks.html'), 'utf8');
-const brandPageSrc = fs.readFileSync(path.join(APP, 'admin-panel/settings-branding.html'), 'utf8');
+const blocksSrc = readPageSource(path.join(PUB, 'blocks.html'));
+const brandPageSrc = readPageSource(path.join(APP, 'admin-panel/settings-branding.html'));
 
 // Canonical JSON (sorted keys) so a registry comparison does not depend on key order.
 const canon = (v) => JSON.stringify(v, (k, x) => (x && typeof x === 'object' && !Array.isArray(x))
@@ -546,7 +547,7 @@ const expectedKey = (c) => ex.resolveExplorerKey(c.net === null ? 'mainnet' : c.
       /id="explorer-help"[^>]*>[^<]*test\.grinscan\.org/.test(brandPageSrc) && !/testnet\.grinscan/.test(brandPageSrc));
 
     // Run the page's testnet script against a stub DOM: attribute path, event path, mainnet no-op.
-    const scriptM = brandPageSrc.match(/<script>\s*(\/\/ Testnet pools always link[\s\S]*?)<\/script>/);
+    const scriptM = brandPageSrc.match(/(\/\/ Testnet pools always link[\s\S]*?)<\/script>/);
     ok('k. the testnet greying script was found', !!scriptM);
     const runPage = (attrNet) => {
       const listeners = {};

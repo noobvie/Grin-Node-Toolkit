@@ -26,9 +26,10 @@ const ROOT = path.join(__dirname, '..');
 // [dir, recurse] — admin-panel ships browser JS that Node can still parse for syntax.
 const TARGETS = [
   ['lib', false],
-  ['scripts', false],
-  ['admin-panel', false],
-  ['routes', true],   // route files (routes/ is recursive: routes/admin/, routes/_shared/)
+  ['scripts', true],        // recursive: scripts/lib/ (app-source.js, page-source.js) is test plumbing too
+  ['admin-panel', true],    // recursive: admin-panel/js/ holds the extracted page scripts (F1–F5)
+  ['routes', true],         // route files (routes/ is recursive: routes/admin/, routes/_shared/)
+  ['../public_html/js', true],   // public page scripts + js/pages/ (H20); vendor/ is skipped below
 ];
 
 const files = [path.join(ROOT, 'index.js')];
@@ -39,7 +40,7 @@ for (const [dir, recurse] of TARGETS) {
   const walk = (d) => {
     for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
       const full = path.join(d, entry.name);
-      if (entry.isDirectory()) { if (recurse) walk(full); continue; }
+      if (entry.isDirectory()) { if (recurse && entry.name !== 'vendor' && entry.name !== 'node_modules') walk(full); continue; }
       if (entry.name.endsWith('.js')) files.push(full);
     }
   };

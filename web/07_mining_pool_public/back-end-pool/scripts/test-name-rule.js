@@ -17,6 +17,7 @@
 const fs = require('fs');
 const path = require('path');
 const { readAppSource } = require('./lib/app-source');
+const { readPageSource } = require('./lib/page-source');
 
 const APP = path.join(__dirname, '..');
 const GAMES_RULE = path.join(APP, '..', 'play', 'server', 'lib', 'name-rule.js');
@@ -98,7 +99,7 @@ console.log('\n[3] names.blocked_words — validator, default, step-up, the page
     /STEP_UP_SETTINGS_SECTIONS = new Set\(\[[^\]]*'names'/.test(index));
 
   const PANEL = path.join(APP, 'admin-panel');
-  const page = fs.readFileSync(path.join(PANEL, 'settings-names.html'), 'utf8');
+  const page = readPageSource(path.join(PANEL, 'settings-names.html'));
   const form = (page.match(/<div id="names" class="settings-content[^"]*">([\s\S]*?)<script/) || [])[1] || '';
   const ids = [];
   for (const m of form.matchAll(/<(input|select|textarea)\b([^>]*)>/g)) {
@@ -107,7 +108,7 @@ console.log('\n[3] names.blocked_words — validator, default, step-up, the page
   }
   ok('settings-names.html harvests exactly the names keys (an unknown id fails the save)',
     JSON.stringify(ids.sort()) === JSON.stringify(Object.keys(PoolSettings.defaults.names).sort()), ids.join());
-  ok('the page declares SETTINGS_SECTION names and loads stepup.js', /window\.SETTINGS_SECTION = "names"/.test(page) && /<script src="\/js\/stepup\.js"><\/script>/.test(page));
+  ok('the page declares SETTINGS_SECTION names and loads stepup.js', /<script src="\/admin\/settings-common\.js" data-section="names"><\/script>/.test(page) && /<script src="\/js\/stepup\.js"><\/script>/.test(page));
   ok('the page explains the 4-letter rule and the * / = prefixes', /4 letters or fewer/.test(page) && /<code>\*crap<\/code>/.test(page) && /<code>=scammer<\/code>/.test(page));
   const shell = fs.readFileSync(path.join(PANEL, 'admin-shell.js'), 'utf8');
   ok('admin nav links it under Settings, after Games',

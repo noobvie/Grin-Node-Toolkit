@@ -19,6 +19,7 @@
 
 const path = require('path');
 const { readAppSource, routeSource } = require('./lib/app-source');
+const { readPageSource } = require('./lib/page-source');
 const fs = require('fs');
 const os = require('os');
 const APP = path.resolve(__dirname, '..');
@@ -847,7 +848,7 @@ try {
 // to send a name its own rules reject), so pin the two together: the constants, and the name
 // verdict over a matrix, with the page's own dpCheckName evaluated from its source.
 {
-  const html = fs.readFileSync(path.join(APP, '..', 'public_html', 'account-settings.html'), 'utf8');
+  const html = readPageSource(path.join(APP, '..', 'public_html', 'account-settings.html'));
   const grab = (re) => { const m = html.match(re); return m ? m[0] : ''; };
   const nameLit = grab(/const DP_NAME = \{[^\n]*\};/);
   const banLit = grab(/const DP_BANNER = \{[^\n]*\};/);

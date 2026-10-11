@@ -19,6 +19,7 @@ const APP = path.resolve(__dirname, '..');
 const dbLib = require(path.join(APP, 'lib/db.js'));
 const { RTT_WINDOW, pushRttSample, hubRttMs } = require(path.join(APP, 'lib/region-rtt.js'));
 const indexSrc = readAppSource();
+const gatewaySrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'gateway-status.js'), 'utf8');   // P10: the probe lives here now
 
 let pass = 0, fail = 0;
 function ok(name, cond, extra = '') {
@@ -223,9 +224,9 @@ console.log('\n[f] the route and the probe publish it (index.js, read as text)\n
   ok('f. …and hub_rtt_ms from the probe window, 0 on the hub row',
     /hub_rtt_ms:\s*hubRttMs\(stratumRttWindow\(region\),\s*region === localRegion\)/.test(route));
   ok('f. the probe cache keeps the window (pushRttSample in refreshStratumProbes)',
-    /rtt:\s*pushRttSample\(prev\.rtt,\s*ms\)/.test(indexSrc));
+    /rtt:\s*pushRttSample\(prev\.rtt,\s*ms\)/.test(gatewaySrc));
   ok('f. probeStratumTcp restarts its clock after DNS and per connection attempt',
-    /sock\.on\('lookup',\s*restart\)/.test(indexSrc) && /sock\.on\('connectionAttempt',\s*restart\)/.test(indexSrc));
+    /sock\.on\('lookup',\s*restart\)/.test(gatewaySrc) && /sock\.on\('connectionAttempt',\s*restart\)/.test(gatewaySrc));
   const meta = indexSrc.split('\n').find(l => l.trimStart().startsWith("'GET /api/pool/stats/regions':")) || '';
   ok('f. API_DOC_META documents is_hub and hub_rtt_ms, the unit and when it is null',
     /is_hub/.test(meta) && /hub_rtt_ms/.test(meta) && /milliseconds/.test(meta) && /null/.test(meta) && /0 on the is_hub row/.test(meta));

@@ -1,4 +1,5 @@
 const fs = require('fs');
+const crypto = require('crypto');
 const path = require('path');
 
 // The flat withdrawal fee can never go below this (operator decision 2026-10-05). It is a FIXED
@@ -313,7 +314,55 @@ function mergeDbSettings(config, db) {
   return config;
 }
 
+// Config integrity hash — compared against <config>.sha256 on every startup.
+// Takes the RAW FILE BYTES, not the merged config object (audit §J9-6): the merged object
+// carries the systemd environment and every per-network default, so hashing it made a unit-file
+// edit or a toolkit upgrade look like tampering.
+function hashConfig(bytes) {
+  return crypto.createHash('sha256').update(bytes).digest('hex');
+}
+
+// Validation constants
+const VALID_NETWORKS = ['mainnet', 'testnet'];
+
+// Config validation
+function validateBootConfig(cfg) {
+  if (!VALID_NETWORKS.includes(cfg.network)) {
+    throw new Error(`Invalid network: ${cfg.network}`);
+  }
+  if (!cfg.port || cfg.port < 1024 || cfg.port > 65535) {
+    throw new Error(`Invalid port: ${cfg.port}`);
+  }
+  // db_path comes from the operator's own root-written pool.json, so this guards a TYPO
+  // (a stray path that would silently create a second, empty ledger somewhere unexpected),
+  // not an attacker. It was an `includes()` substring test, which is not the same question:
+  // `/tmp/x/./y` and `/opt/grin/../../tmp/y` both contained an accepted fragment and passed.
+  // Anchor it instead — installed pools write /opt/grin/pubpool/<net>/pool.db, the dev/manual
+  // fallback is a ./ relative path — and reject traversal outright.
+  if (!cfg.db_path || typeof cfg.db_path !== 'string') {
+    throw new Error(`Invalid db_path: ${cfg.db_path}`);
+  }
+  if (cfg.db_path.split(/[\\/]/).includes('..')) {
+    throw new Error(`Invalid db_path (path traversal): ${cfg.db_path}`);
+  }
+  if (!cfg.db_path.startsWith('/opt/grin/') && !cfg.db_path.startsWith('./')) {
+    throw new Error(
+      `Invalid db_path: ${cfg.db_path} (must be under /opt/grin/ or a ./ relative dev path)`
+    );
+  }
+  if (!cfg.stratum_port || cfg.stratum_port < 1024 || cfg.stratum_port > 65535) {
+    throw new Error(`Invalid stratum_port: ${cfg.stratum_port}`);
+  }
+  // Pool fee must be 0-50% (prevent fee theft).
+  if (cfg.pool_fee_percent !== undefined && (cfg.pool_fee_percent < 0 || cfg.pool_fee_percent > 50)) {
+    throw new Error(`Invalid pool_fee_percent: ${cfg.pool_fee_percent} (must be 0-50)`);
+  }
+  return cfg;
+}
+
 module.exports = {
+  hashConfig,
+  validateBootConfig,
   loadConfig,
   getConfirmDepth,
   mergeDbSettings,

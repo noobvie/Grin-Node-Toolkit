@@ -61,7 +61,7 @@
           <h3 class="section-title">Games service</h3>
           <div id="games-link-status" class="helper-text">Loading…</div>
           <div class="form-actions" style="margin-top:.75rem;">
-            <button type="button" class="btn btn-secondary" onclick="loadGamesLinkStatus()">Refresh</button>
+            <button type="button" class="btn btn-secondary" data-action="load-games-link-status">Refresh</button>
           </div>
           <div class="helper-text">
             The pool checks the games service once a minute. Install, update or remove the
@@ -70,8 +70,8 @@
         </div>
 
         <div class="form-actions">
-          <button class="btn btn-primary" onclick="saveSection('games')">Save Changes</button>
-          <button class="btn btn-secondary" onclick="restoreSection('games')">Restore Defaults</button>
+          <button class="btn btn-primary" data-action="save-section" data-section="games">Save Changes</button>
+          <button class="btn btn-secondary" data-action="restore-section" data-section="games">Restore Defaults</button>
         </div>
       </div>
     </div>
@@ -82,7 +82,6 @@
   <script src="/js/api.js"></script>
   <script src="/js/stepup.js"></script>
   <script src="/admin/admin-shell.js"></script>
-  <script>window.SETTINGS_SECTION = "games";</script>
-  <script src="/admin/settings-common.js"></script>
+  <script src="/admin/settings-common.js" data-section="games"></script>
 </body>
 </html>

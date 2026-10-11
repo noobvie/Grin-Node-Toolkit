@@ -36,6 +36,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const vm = require('vm');
+const { readPageSource } = require('./lib/page-source');
 
 const APP = path.resolve(__dirname, '..');
 const WEB = path.resolve(APP, '..');
@@ -137,8 +138,8 @@ const SCRIPT_CREATORS = {
   'public_html/js/branding.js': {
     injectStructuredData: { n: 1, guard: /s\.type = 'application\/ld\+json';[\s\S]*s\.textContent = JSON\.stringify\(ld\)/,
       why: 'JSON-LD data block — a non-executing type, filled with textContent' },
-    loadGa4: { n: 2, guard: /if \(typeof id !== 'string' \|\| !GA_ID_RE\.test\(id\)\) return;/,
-      why: 'GA4 loader + init — id must match GA_ID_RE before it is spliced into the init text' },
+    loadGa4: { n: 1, guard: /if \(typeof id !== 'string' \|\| !GA_ID_RE\.test\(id\)\) return;/,
+      why: 'GA4 loader only (F6: the init is direct JS, no inline script) — id must match GA_ID_RE first' },
     loadPlausible: { n: 1, guard: /httpsScriptUrl\(a\.plausible_src\)[\s\S]*PLAUSIBLE_DOMAIN_RE\.test/,
       why: 'Plausible loader — https URL + domain pattern' },
     loadUmami: { n: 1, guard: /httpsScriptUrl\(a\.umami_src\)[\s\S]*UMAMI_ID_RE\.test/,
@@ -268,27 +269,30 @@ for (const [re, label] of FORBIDDEN) {
 // state), `wrap.innerHTML = html` (the weekday × hour table) and `summary.innerHTML` (busiest /
 // quietest hour). No API text reaches any of them: labels are the HEAT_DAYS constants, every count
 // goes through Number() || 0, hours are loop indexes, `expected` goes through fmtExpected().
+//
+// account-settings 20 (code-layout F1, 2026-10-10): the page's inline block moved byte-for-byte to
+// js/pages/account-settings.js, so its row is re-keyed from `…html#inline0` — same 20 lines.
 const INNER_HTML = {
-  'public_html/account-settings.html#inline0': 20,
-  'public_html/api-docs.html#inline0': 4,
-  'public_html/blocks.html#inline0': 7,
-  'public_html/blog.html#inline0': 3,
-  'public_html/donate.html#inline0': 5,
-  'public_html/fortune-board.html#inline0': 5,
+  'public_html/js/pages/api-docs.js': 4,
+  'public_html/js/pages/blocks.js': 7,
+  'public_html/js/pages/blog.js': 3,
+  'public_html/js/pages/donate.js': 5,
+  'public_html/js/pages/fortune-board.js': 5,
   'public_html/js/ads.js': 1,
   'public_html/js/api.js': 1,
   'public_html/js/branding.js': 7,
   'public_html/js/network-map.js': 7,
+  'public_html/js/pages/account-settings.js': 20,
   'public_html/js/payout-goblin.js': 3,
   'public_html/js/public-shell.js': 2,
   'public_html/js/public-theme.js': 4,
   'public_html/js/reactor-dashboard.js': 2,
   'public_html/js/stepup.js': 1,
-  'public_html/login.html#inline0': 6,
-  'public_html/miners-stats.html#inline0': 4,
-  'public_html/page.html#inline0': 2,
-  'public_html/payment-history.html#inline0': 7,
-  'public_html/post.html#inline0': 3,
+  'public_html/js/pages/login.js': 6,
+  'public_html/js/pages/miners-stats.js': 4,
+  'public_html/js/pages/page.js': 2,
+  'public_html/js/pages/payment-history.js': 7,
+  'public_html/js/pages/post.js': 3,
 };
 const innerCount = {};
 for (const u of units) {
@@ -306,8 +310,11 @@ ok('play/shell assigns no innerHTML at all (Part 6 rule)',
 // cms-frame.js shows a sentence — never an innerHTML fallback.
 const unitCode = (f) => (units.find((u) => u.file === f) || {}).code || '';
 for (const [page, payload, wrap] of [['page.html', 'json.data.html', 'content'], ['post.html', 'p.body_html', 'post-body']]) {
-  const code = unitCode(`public_html/${page}#inline0`);
-  const html = fs.readFileSync(path.join(PUB, page), 'utf8');
+  // F2: the page's script moved to js/pages/<page>.js (its key was `…html#inline0`). unitCode() answers ''
+  // for a missing unit, which would make every "never assigns" check below pass on nothing — so require code.
+  const code = unitCode(`public_html/js/pages/${page.replace(/\.html$/, '.js')}`);
+  ok(`D22-4: ${page}'s script unit is found and non-empty (the checks below are not vacuous)`, code.length > 200);
+  const html = readPageSource(path.join(PUB, page));
   ok(`D22-4 closed: ${page} never assigns the body (${payload}) as markup`,
     !new RegExp(`innerHTML\\s*=\\s*${payload.replace(/\./g, '\\.')}`).test(code) && !/\.body_html\s*;|data\.html\s*;/.test(code.replace(/showBody\([^)]*\)/g, '')));
   ok(`D22-4 closed: ${page} hands the body to the sandboxed frame (showBody → CmsFrame.mount)`,

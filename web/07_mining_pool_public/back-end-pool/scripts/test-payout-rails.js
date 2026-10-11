@@ -21,6 +21,7 @@ const fs = require('fs');
 const net = require('net');
 const path = require('path');
 const { readAppSource, routeSource } = require('./lib/app-source');
+const { readPageSource } = require('./lib/page-source');
 
 const APP = path.resolve(__dirname, '..');
 const WalletAPI = require(path.join(APP, 'lib/wallet.js'));
@@ -807,10 +808,10 @@ function accountOfferSection() {
   section('account page — Slatepack offer, Tor pause line, outcome wording');
   const vm = require('vm');
   const WEB = path.resolve(APP, '..', 'public_html');
-  const page = fs.readFileSync(path.join(WEB, 'account-settings.html'), 'utf8');
+  const page = readPageSource(path.join(WEB, 'account-settings.html'));
   const script = page.slice(page.indexOf('// Theme switching is handled site-wide'), page.lastIndexOf('</script>'));
   const methods = fs.readFileSync(path.join(WEB, 'js/payout-methods.js'), 'utf8');
-  const home = fs.readFileSync(path.join(WEB, 'index.html'), 'utf8');
+  const home = readPageSource(path.join(WEB, 'index.html'));
 
   const names = ['pad2', 'fmtWhen', 'TOR_FAIL_OUTCOME', 'TOR_FAIL_GENERIC', 'torFailOutcome',
                  'slatepackOfferMode', 'slatepackOfferTerms', 'torPauseLine'];

@@ -9,6 +9,13 @@
    switchTab(window.SETTINGS_SECTION) call on DOMContentLoaded, which reveals this page's
    one .settings-content and runs its section loader. Old #hash deep-links are handled a
    step earlier, by settings.html's redirect stub. */
+// Each settings page names its section on this script's own tag:
+// <script src="/admin/settings-common.js" data-section="access">. It replaces the per-page inline
+// <script>window.SETTINGS_SECTION = "…";</script> (code-layout F4 — an inline block is what a strict
+// script-src forbids). Read it now, at evaluation time: document.currentScript is null afterwards.
+if (document.currentScript && document.currentScript.getAttribute('data-section')) {
+  window.SETTINGS_SECTION = document.currentScript.getAttribute('data-section');
+}
     document.querySelectorAll('.tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         location.hash = btn.getAttribute('data-tab');
@@ -642,7 +649,7 @@
       item.className = 'list-item';
       item.innerHTML = `
         <span>${escapeHtmlSafe(value)}</span>
-        <button class="btn-icon btn-icon-danger" onclick="this.parentElement.remove()" data-tip="Remove from the list" aria-label="Remove from the list">🗑️</button>
+        <button class="btn-icon btn-icon-danger" data-action="remove-parent" data-tip="Remove from the list" aria-label="Remove from the list">🗑️</button>
       `;
       list.appendChild(item);
     }
@@ -801,7 +808,7 @@
       row.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem;">
           <strong>${escapeHtmlSafe(key)}</strong>
-          <button type="button" class="btn-icon btn-icon-danger" onclick="this.closest('.page-seo-row').remove()" data-tip="Remove this page's SEO override" aria-label="Remove this page's SEO override">🗑️</button>
+          <button type="button" class="btn-icon btn-icon-danger" data-action="remove-closest" data-closest=".page-seo-row" data-tip="Remove this page's SEO override" aria-label="Remove this page's SEO override">🗑️</button>
         </div>
         <div class="form-group">
           <label>Title</label>
@@ -868,7 +875,7 @@
             <input type="checkbox" class="banner-enabled settings-skip"${(b.enabled === false || b.enabled === 'false') ? '' : ' checked'}>
             <label>Enabled</label>
           </div>
-          <button type="button" class="btn-icon btn-icon-danger" onclick="this.closest('.banner-row').remove()" data-tip="Remove this banner" aria-label="Remove this banner">🗑️</button>
+          <button type="button" class="btn-icon btn-icon-danger" data-action="remove-closest" data-closest=".banner-row" data-tip="Remove this banner" aria-label="Remove this banner">🗑️</button>
         </div>
         <div class="form-row">
           <div class="form-group">
@@ -954,7 +961,7 @@
             <input type="checkbox" class="event-enabled settings-skip"${(ev.enabled === false || ev.enabled === 'false') ? '' : ' checked'}>
             <label>Enabled</label>
           </div>
-          <button type="button" class="btn-icon btn-icon-danger" onclick="this.closest('.event-row').remove()" data-tip="Remove this event" aria-label="Remove this event">🗑️</button>
+          <button type="button" class="btn-icon btn-icon-danger" data-action="remove-closest" data-closest=".event-row" data-tip="Remove this event" aria-label="Remove this event">🗑️</button>
         </div>
         <div class="form-row">
           <div class="form-group">
@@ -1198,9 +1205,9 @@
           const scheduled = c.status === 'scheduled';
           // No .row-actions wrapper here — the card below already lays these out in a flex row.
           const actions = scheduled
-            ? `<button type="button" class="btn-icon" onclick="editCampaign(${c.id})" data-tip="Edit this campaign" aria-label="Edit this campaign">✏️</button>
-               <button type="button" class="btn-icon" onclick="runCampaignNow(${c.id})" data-tip="Run this campaign now" aria-label="Run this campaign now">▶️</button>
-               <button type="button" class="btn-icon btn-icon-danger" onclick="cancelCampaign(${c.id})" data-tip="Cancel this campaign" aria-label="Cancel this campaign">❌</button>`
+            ? `<button type="button" class="btn-icon" data-action="edit-campaign" data-id="${c.id}" data-tip="Edit this campaign" aria-label="Edit this campaign">✏️</button>
+               <button type="button" class="btn-icon" data-action="run-campaign-now" data-id="${c.id}" data-tip="Run this campaign now" aria-label="Run this campaign now">▶️</button>
+               <button type="button" class="btn-icon btn-icon-danger" data-action="cancel-campaign" data-id="${c.id}" data-tip="Cancel this campaign" aria-label="Cancel this campaign">❌</button>`
             : '';
           const rules = [
             c.weighted_percent != null ? `A ${c.weighted_percent}%` : null,
@@ -1325,3 +1332,48 @@
       document.getElementById('provider')?.addEventListener('change', updateProviderFields);
       document.getElementById('theme_color')?.addEventListener('input', (e) => updateColorPreview(e.target));
     });
+
+// ==== F4: event wiring — replaces the on*= attributes (inline handlers are blocked by a strict script-src) ====
+document.addEventListener('click', function (e) {
+  var el = e.target.closest && e.target.closest('[data-action]');
+  if (!el) return;
+  switch (el.dataset.action) {
+    case 'begin-2fa': begin2fa(); break;
+    case 'confirm-2fa': confirm2fa(); break;
+    case 'cancel-2fa-enroll': cancel2faEnroll(); break;
+    case 'regen-2fa-recovery': regen2faRecovery(); break;
+    case 'disable-2fa': disable2fa(); break;
+    case 'hide-2fa-recovery': document.getElementById('twofa-recovery').style.display = 'none'; break;
+    case 'add-admin-allowlist': addToAdminAllowlist(); break;
+    case 'add-admin-blacklist': addToAdminBlacklist(); break;
+    case 'save-section': saveSection(el.dataset.section); break;
+    case 'restore-section': restoreSection(el.dataset.section); break;
+    case 'add-banner': addBanner(); break;
+    case 'pick-file': document.getElementById(el.dataset.target).click(); break;
+    case 'load-db-status': loadDbStatus(); break;
+    case 'run-db-cleanup': runDbCleanup(); break;
+    case 'load-games-link-status': loadGamesLinkStatus(); break;
+    case 'top-up-prize-pool': topUpPrizePool(); break;
+    case 'award-prize': awardPrize(); break;
+    case 'add-event': addEvent(); break;
+    case 'draw-lottery-now': drawLotteryNow(el.dataset.kind); break;
+    case 'set-campaign-duration': setCampaignDuration(Number(el.dataset.days)); break;
+    case 'save-campaign': saveCampaign(); break;
+    case 'reset-campaign-form': resetCampaignForm(); break;
+    case 'add-page-seo-row': addPageSeoRow(); break;
+    case 'edit-campaign': editCampaign(Number(el.dataset.id)); break;
+    case 'run-campaign-now': runCampaignNow(Number(el.dataset.id)); break;
+    case 'cancel-campaign': cancelCampaign(Number(el.dataset.id)); break;
+    // Generated row-remove buttons: this.parentElement / this.closest(sel) in the old handler.
+    case 'remove-parent': el.parentElement.remove(); break;
+    case 'remove-closest': el.closest(el.dataset.closest).remove(); break;
+  }
+});
+document.addEventListener('change', function (e) {
+  var el = e.target.closest && e.target.closest('[data-action]');
+  if (!el) return;
+  switch (el.dataset.action) {
+    case 'upload-asset': uploadAsset(el.dataset.asset); break;
+    case 'apply-campaign-preset': applyCampaignPreset(el.value); break;
+  }
+});

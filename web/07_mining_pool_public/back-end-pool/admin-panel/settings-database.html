@@ -92,15 +92,15 @@
           <h3 class="section-title">Database Status</h3>
           <div id="db-status" class="helper-text">Loading…</div>
           <div class="form-actions" style="margin-top:.75rem;">
-            <button type="button" class="btn btn-secondary" onclick="loadDbStatus()">Refresh</button>
-            <button type="button" class="btn btn-secondary" onclick="runDbCleanup()">Run cleanup now</button>
+            <button type="button" class="btn btn-secondary" data-action="load-db-status">Refresh</button>
+            <button type="button" class="btn btn-secondary" data-action="run-db-cleanup">Run cleanup now</button>
           </div>
           <div class="helper-text">File size shrinks after the weekly <code>VACUUM</code> cron, not immediately after a prune.</div>
         </div>
 
         <div class="form-actions">
-          <button class="btn btn-primary" onclick="saveSection('database')">Save Changes</button>
-          <button class="btn btn-secondary" onclick="restoreSection('database')">Restore Defaults</button>
+          <button class="btn btn-primary" data-action="save-section" data-section="database">Save Changes</button>
+          <button class="btn btn-secondary" data-action="restore-section" data-section="database">Restore Defaults</button>
         </div>
       </div>
     </div>
@@ -111,7 +111,6 @@
   <script src="/js/api.js"></script>
   <script src="/js/stepup.js"></script>
   <script src="/admin/admin-shell.js"></script>
-  <script>window.SETTINGS_SECTION = "database";</script>
-  <script src="/admin/settings-common.js"></script>
+  <script src="/admin/settings-common.js" data-section="database"></script>
 </body>
 </html>

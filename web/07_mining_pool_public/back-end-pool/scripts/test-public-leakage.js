@@ -53,6 +53,7 @@
 const fs = require('fs');
 const path = require('path');
 const { readAppSource, routeSource } = require('./lib/app-source');
+const { readPageSource } = require('./lib/page-source');
 
 const APP = path.resolve(__dirname, '..');
 const WEB = path.resolve(APP, '..');
@@ -173,7 +174,7 @@ for (const [verb, p] of MASKED_LIST_ROUTES) {
 // The deep-link was the other half: it needed the FULL address to build the href, so every
 // leaderboard row put one in the page even when the API masked. No public page may emit one.
 const linkers = PUBLIC_PAGES.filter((n) => {
-  const html = fs.readFileSync(path.join(WEB, 'public_html', n), 'utf8');
+  const html = readPageSource(path.join(WEB, 'public_html', n));
   return /account-settings\.html\?addr='\s*\+|account-settings\.html\?addr=" \+/.test(html);
 });
 ok('§J11-1 no public page builds an /account-settings.html?addr= link', linkers.length === 0,
@@ -292,7 +293,7 @@ ok('§J11-7 every `parseInt(req.query.x || N)` site carries a NaN default',
 
 console.log('\n[6] §J11-3 — the account dossier is not offered to crawlers\n');
 
-const acctHtml = fs.readFileSync(path.join(WEB, 'public_html/account-settings.html'), 'utf8');
+const acctHtml = readPageSource(path.join(WEB, 'public_html/account-settings.html'));
 const robotsTag = /<meta\s+name=["']robots["']\s+content=["']([^"']+)["']/i.exec(acctHtml);
 ok('§J11-3 account-settings.html declares a robots meta', !!robotsTag);
 ok('§J11-3 …and it is noindex', !!robotsTag && /noindex/i.test(robotsTag[1]),
@@ -407,7 +408,7 @@ ok('§18.7 current_percent is gone from the card (Part 4 drops the v1 alias of p
 
 // The page. donate.html is the wall's only renderer: no v1 copy may survive the §18.7
 // rewrite, it must not read the dropped field, and it keeps its own fence on the banner URL.
-const donateHtml = fs.readFileSync(path.join(WEB, 'public_html/donate.html'), 'utf8');
+const donateHtml = readPageSource(path.join(WEB, 'public_html/donate.html'));
 ok('§18.7 donate.html carries no v1 copy (yourbrandname / ceremony / donate0-first / censored)',
   !/yourbrandname|ceremony|go through <code>donate0|censored/i.test(donateHtml));
 ok('§18.7 donate.html no longer reads current_percent', !/current_percent/.test(donateHtml));
@@ -514,7 +515,7 @@ ok('§18.3 the account api-docs row no longer documents the dropped aliases',
 // no v1 copy, no dropped alias read, a live banner only through the exact-shape URL fence,
 // previews from data: URLs (the public CSP's img-src has no blob:), and the two proof boxes
 // cleared after every change that went through.
-const acctHtml5 = fs.readFileSync(path.join(WEB, 'public_html/account-settings.html'), 'utf8');
+const acctHtml5 = readPageSource(path.join(WEB, 'public_html/account-settings.html'));
 const acctPageJs = acctHtml5.replace(/<!--[\s\S]*?-->/g, '').replace(/^\s*\/\/[^\n]*$/gm, '');
 ok('§18.8 account-settings.html carries no v1 donation copy (ceremony / yourbrand / donate0-first / censored)',
   !/yourbrand|ceremony|go through donate0|donate0 first|censored/i.test(acctPageJs));
@@ -663,7 +664,7 @@ console.log('\n[fail] fail_detail stays admin-only; fail_code and the Tor pause 
   // The page half (Session 3): it words fail_code and nothing else. A page that read fail_detail
   // would show it the day a route leaked it, so the page must not even know the name.
   const pageFiles = ['public_html/account-settings.html', 'public_html/js/payout-methods.js'];
-  const pageSrc = pageFiles.map((f) => fs.readFileSync(path.join(WEB, f), 'utf8')).join('\n');
+  const pageSrc = pageFiles.map((f) => (/\.html$/.test(f) ? readPageSource(path.join(WEB, f)) : fs.readFileSync(path.join(WEB, f), 'utf8'))).join('\n');
   ok('the account page and the rail registry never read fail_detail', !/fail_detail/.test(pageSrc));
   ok('…and word a failed Tor payout from fail_code', /row\.fail_code/.test(pageSrc));
   ok('…and name no grin-wallet figure (available / needed / NotEnoughFunds)', !/available_disp|amount_needed|NotEnoughFunds/.test(pageSrc));

@@ -9,16 +9,17 @@ const createCurrentExplorerKey = require('./_shared/explorer');
 const geoip = require('../lib/geoip');
 const connectSuggest = require('../lib/connect-suggest');
 const { hubRttMs } = require('../lib/region-rtt');
+const { maskAddr } = require('../lib/http-util');
+const { cachedGatewayStatus, publicRegionStatus, refreshStratumProbes, stratumRttWindow, stratumVerdict } = require('../lib/gateway-status');
 const { getHorizon: getLedgerRollupHorizon } = require('../lib/ledger-rollup');
 const { donorSettings } = require('../lib/donor-names');
 const { donorWall, liveDonations: donorLiveDonations } = require('../lib/donor-ledger');
 
 module.exports = function createPoolRoutes(ctx, app) {
   const {
-    _peerSensorNets, blockManager, blockMonitor, cachedGatewayStatus, config, db, dormancyManager,
-    hashrateTracker, incentivesManager, maskAddr, minerManager, nodeAvailability, poolSettings,
-    publicRegionStatus, rateLimiter, refreshStratumProbes, stratumPause, stratumRttWindow,
-    stratumServer, stratumVerdict, wallet
+    _peerSensorNets, blockManager, blockMonitor, config, db, dormancyManager,
+    hashrateTracker, incentivesManager, minerManager, nodeAvailability, poolSettings,
+    rateLimiter, stratumPause, stratumServer, wallet
   } = ctx;
   const router = express.Router();
   const currentExplorerKey = createCurrentExplorerKey(ctx);

@@ -361,10 +361,12 @@ async function main() {
   console.log('[8] F6 - GA4 init is direct JS: dataLayer gets the same pushes the inline snippet made');
   // The init used to be an injected inline <script> (blocked by a strict script-src). The
   // shim above never EXECUTES an inline script, so these pushes can only come from direct JS.
+  // A SECOND addr on each URL (and a percent-encoded `%61ddr` on the referrer): a scrub that
+  // removed only the first occurrence would ship the second one (R3 L9 G6).
   const ga = await runFor('account-settings', false,
     withAnalytics({ provider: 'ga4', ga_tracking_id: 'G-ABC123' }),
-    { href: 'https://pool.example/account-settings.html?addr=grin1secretaddr&utm_source=x',
-      referrer: 'https://pool.example/account-settings.html?addr=grin1prevaddr&x=1' });
+    { href: 'https://pool.example/account-settings.html?addr=grin1secretaddr&utm_source=x&addr=grin1dupaddr',
+      referrer: 'https://pool.example/account-settings.html?addr=grin1prevaddr&x=1&%61ddr=grin1encaddr' });
   const dl = Array.isArray(ga.dataLayer) ? ga.dataLayer : [];
   const kind = (v) => Object.prototype.toString.call(v);
   ok('GA4: window.gtag is a function', typeof ga.gtag === 'function', typeof ga.gtag);

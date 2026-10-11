@@ -1,6 +1,7 @@
 /* settings-common.js — shared logic for the split settings pages (2026-06).
    Extracted verbatim from the old settings.html <script>; init is driven by
-   window.SETTINGS_SECTION (set inline on each page). Builder calls are guarded so
+   window.SETTINGS_SECTION (set by the prelude below, from this script tag's data-section
+   attribute on each page). Builder calls are guarded so
    a section absent from the current page never throws.
 
    LEGACY TAB MACHINERY. The sidebar now links to real per-section PAGES, and no page
@@ -45,8 +46,9 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
       // settings chrome to a logged-out visitor. See API.guardAdminPage.
       API.guardAdminPage();
       loadAllSettings();
-      // Each split settings page declares its section inline (window.SETTINGS_SECTION);
-      // fall back to a URL hash for any legacy deep-link.
+      // Each split settings page names its section on this script's data-section attribute
+      // (→ window.SETTINGS_SECTION, the prelude at the top); fall back to a URL hash for any
+      // legacy deep-link.
       switchTab(window.SETTINGS_SECTION || tabFromHash());
     });
 

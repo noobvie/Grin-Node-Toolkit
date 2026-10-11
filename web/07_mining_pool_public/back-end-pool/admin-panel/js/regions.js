@@ -1,4 +1,5 @@
-// regions.html page script — moved BYTE-verbatim out of the page's inline script block (code-layout F5).
+// regions.html page script — moved out of the page's inline script block (code-layout F5): byte-verbatim, then a second commit
+// turned the on*= attributes inside its markup STRINGS into data-action (the delegated wiring is at the end).
 // Classic script (no defer/module) loaded at the same position as the old block, after the <script src> tags before it, whose globals it uses (H14).
 API.guardAdminPage();
 

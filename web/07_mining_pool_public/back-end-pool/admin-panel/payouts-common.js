@@ -2,9 +2,9 @@
    Moved out of payments.html's inline <script>; only flash() (which message element) and
    renderFreeze() (the hook below) changed. Loaded by the payout pages only (payments.html =
    the queue, treasury.html, dormant.html), after stepup.js — togglePayouts() needs
-   adminFetch() — and before the page's own inline script, which calls into it. A classic
-   script, not a module: the top-level function declarations stay global so the pages'
-   onclick="…" handlers reach them.
+   adminFetch() — and before the page's own script (admin-panel/js/<page>.js), which calls into
+   it. A classic script, not a module: the top-level function declarations stay global so the
+   pages' delegated data-action listeners reach them.
 
    WHY a shared file: the payouts page was split by SUBJECT (queue / treasury / dormant
    balances), and every one of those pages needs the same freeze kill-switch, helpers and

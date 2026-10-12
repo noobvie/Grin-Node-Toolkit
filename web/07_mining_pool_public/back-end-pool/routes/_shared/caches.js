@@ -4,7 +4,7 @@
 // live on this HOLDER object and every site writes `caches.topology = …` / reads
 // `caches.branding.get(…)`. Same cached module everywhere => ONE home per cache.
 //
-//   topology  GET /api/network/topology (routes/pool.js) is read here; the admin location
+//   topology  GET /api/pool/topology (routes/pool.js) is read here; the admin location
 //             upsert/delete (routes/admin/regions.js) drop it.
 //   branding  GET /api/public/branding (routes/public.js) memoises per hostname; the settings
 //             and asset writes (admin/settings.js, admin/cms.js), the stratum-pause onChange and

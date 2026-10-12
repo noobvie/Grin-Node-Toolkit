@@ -62,7 +62,7 @@ app.disable('x-powered-by');
 // Games platform internal routes (/internal/games/*, design §19.3) — all logic in
 // lib/games-link.js. Mounted BEFORE express.json() and every rate limiter on purpose: the link
 // secret is checked before any body is parsed, and every games call comes from 127.0.0.1, so a
-// per-IP bucket would be one bucket for every player (D7). attach() in setupRoutes wires it up.
+// per-IP bucket would be one bucket for every player (D7). attach() in routes/index.js wires it up.
 const gamesLink = createGamesLink();
 app.use(gamesLink.internal);
 app.use(express.json());

@@ -46,7 +46,7 @@ const { RESERVED_ADDRESSES } = require('./incentives');
 const PoolSettings = require('./pool-settings');
 
 const GAMES_MODES = PoolSettings.GAMES_MODES;
-// The same shape check /api/account applies (index.js setupRoutes). The network prefix is
+// The same shape check /api/account applies (routes/_shared/grin-address.js). The network prefix is
 // checked separately: a tgrin1 address on a mainnet pool is well-formed and still wrong.
 const GRIN_ADDR_RE = /^t?grin1[ac-hj-np-z02-9]{58}$/;
 // names.blocked_words entries as the validator stores them, and its entry cap (§19.17.5). The

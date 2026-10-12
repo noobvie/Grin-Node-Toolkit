@@ -328,7 +328,10 @@ async function loadRegions(silent) {
       const pin = (r.lat != null && r.lng != null)
         ? ` <span class="dim" title="Network map pin: ${escHtml(String(r.lat))}, ${escHtml(String(r.lng))} (edit to change)">📍</span>`
         : ` <span class="dim" title="No map position set — the network map puts this marker on the country centre. Edit → Map latitude/longitude to pin it on its city.">○</span>`;
-      const url = r.stratum_url ? `stratum+tcp://${escHtml(r.stratum_url)}` : '<span class="dim">—</span>';
+      // Bare host:port, as the public patch bay shows it (operator request 2026-07-14) — the
+      // scheme only lengthened the widest cell in the table. One line: break-all let the auto
+      // layout squeeze it to a few characters per line (a four-line, 100px-tall row).
+      const url = r.stratum_url ? escHtml(r.stratum_url) : '<span class="dim">—</span>';
       const minersShares = hb
         ? `${(hb.miners || 0).toLocaleString()} <span class="dim">/ ${(hb.shares_window || 0).toLocaleString()} sh</span>`
         : '—';
@@ -358,7 +361,7 @@ async function loadRegions(silent) {
         <tr>
           <td><strong>${escHtml(r.label || r.region)}</strong>${hiddenTag}<br><span class="dim mono">${escHtml(r.region)}</span></td>
           <td>${country}${pin}</td>
-          <td class="mono" style="word-break:break-all;">${url}</td>
+          <td class="mono" style="white-space:nowrap;">${url}</td>
           <td>${portCheck}</td>
           <td>${tunnelChip(r.region)}</td>
           <td>${statusBadge(r.region)}</td>

@@ -63,7 +63,7 @@
           <div id="page-seo-list"></div>
           <div class="list-item-input" style="margin-top: 1rem;">
             <input type="text" id="page-seo-key" class="settings-skip" placeholder="page key (e.g. miners-stats)">
-            <button type="button" class="btn btn-secondary" onclick="addPageSeoRow()">Add Page</button>
+            <button type="button" class="btn btn-secondary" data-action="add-page-seo-row">Add Page</button>
           </div>
         </div>
 
@@ -81,8 +81,8 @@
 
           <div class="form-group">
             <label>OG Image</label>
-            <div class="file-upload" onclick="document.getElementById('og-input').click()">
-              <input type="file" id="og-input" class="settings-skip" accept="image/*" onchange="uploadAsset('og_image')">
+            <div class="file-upload" data-action="pick-file" data-target="og-input">
+              <input type="file" id="og-input" class="settings-skip" accept="image/*" data-action="upload-asset" data-asset="og_image">
               <p>Click to upload OG image (1200x630 recommended)</p>
               <div class="current-asset" id="og_image-current"></div>
             </div>
@@ -158,8 +158,8 @@
         </div>
 
         <div class="form-actions">
-          <button class="btn btn-primary" onclick="saveSection('seo')">Save Changes</button>
-          <button class="btn btn-secondary" onclick="restoreSection('seo')">Restore Defaults</button>
+          <button class="btn btn-primary" data-action="save-section" data-section="seo">Save Changes</button>
+          <button class="btn btn-secondary" data-action="restore-section" data-section="seo">Restore Defaults</button>
         </div>
       </div>
     </div>
@@ -170,7 +170,6 @@
   <script src="/js/api.js"></script>
   <script src="/js/stepup.js"></script>
   <script src="/admin/admin-shell.js"></script>
-  <script>window.SETTINGS_SECTION = "seo";</script>
-  <script src="/admin/settings-common.js"></script>
+  <script src="/admin/settings-common.js" data-section="seo"></script>
 </body>
 </html>

@@ -15,6 +15,8 @@
 // Runs against a throwaway SQLite file in the OS temp dir — never the pool DB.
 // Run: node scripts/test-admin-guards.js
 const path = require('path');
+const { readAppSource, routeSource } = require('./lib/app-source');
+const { readPageSource } = require('./lib/page-source');
 const fs = require('fs');
 const os = require('os');
 
@@ -111,7 +113,7 @@ try {
 
   console.log('\n[4] §J1-1 — the script/CSS sinks stay behind step-up');
 
-  const src = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
+  const src = readAppSource();
   const at = src.indexOf('const STEP_UP_SETTINGS_KEYS');
   ok('STEP_UP_SETTINGS_KEYS still exists in index.js', at !== -1);
   const block = src.slice(at, src.indexOf(']);', at));
@@ -225,17 +227,12 @@ try {
   // Read the route DECLARATIONS from index.js: the guard array is the first argument after
   // the path, so a tier downgrade (freshAdmin → secureAdmin) is a one-word edit this catches.
   const routeGuard = (method, route) => {
-    const re = new RegExp("app\\." + method + "\\('" + route.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&') + "',\\s*([A-Za-z]+),");
+    const re = new RegExp("(?:app|router)\\." + method + "\\('" + route.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&') + "',\\s*([A-Za-z]+),");
     const m = src.match(re);
     return m ? m[1] : null;
   };
   // One handler's source: from its declaration to its own closing `  });`.
-  const handler = (method, route) => {
-    const a = src.indexOf("app." + method + "('" + route + "'");
-    if (a < 0) return '';
-    const b = src.indexOf('\n  });', a);
-    return (b < 0 ? src.slice(a) : src.slice(a, b)).replace(/\/\/[^\n]*/g, '');
-  };
+  const handler = (method, route) => routeSource(method, route).replace(/\/\/[^\n]*/g, '');
   const READS = [
     ['get', '/api/admin/donors'],
     ['get', '/api/admin/donors/summary'],
@@ -260,10 +257,15 @@ try {
   // Removed in §18 Part 3: v1's censor/uncensor. Express answers 404 for a path no route
   // declares, so "the declaration is gone" IS "the route 404s" — and no other handler may be
   // left calling the deleted lib functions.
-  ok('POST /api/admin/donors/:addr/censor no longer exists (→ 404)', !/app\.post\('\/api\/admin\/donors\/:addr\/censor'/.test(src));
-  ok('POST /api/admin/donors/:addr/uncensor no longer exists (→ 404)', !/app\.post\('\/api\/admin\/donors\/:addr\/uncensor'/.test(src));
+  // Either receiver (route files register on `router`) and any quote — a negative written for
+  // `app.` alone passes vacuously once the route moves (R1 2026-10-10). The control proves the
+  // same regex shape still SEES a donors registration that does exist.
+  const REG = (verb, rest) => new RegExp(`\\b(?:app|router)\\.${verb}\\(\\s*['"\`]\\/api\\/admin\\/donors${rest}`);
+  ok('control — the registration reader sees POST /api/admin/donors/:addr/block', REG('post', "\\/:addr\\/block['\"`]").test(src));
+  ok('POST /api/admin/donors/:addr/censor no longer exists (→ 404)', !REG('post', "\\/:addr\\/censor['\"`]").test(src));
+  ok('POST /api/admin/donors/:addr/uncensor no longer exists (→ 404)', !REG('post', "\\/:addr\\/uncensor['\"`]").test(src));
   ok('no :addr catch-all could answer the removed paths instead',
-    !/app\.post\('\/api\/admin\/donors\/:addr\/:[a-z]+'/.test(src) && !/app\.all\('\/api\/admin\/donors/.test(src));
+    !REG('post', '\\/:addr\\/:[a-z]+').test(src) && !REG('all', '').test(src));
   ok('nothing in index.js calls the deleted v1 moderation functions',
     !/donorAdminCensor|donorRescanAll|donorCountNewNames|donorDisplayState|adminCensor\(|rescanAll\(|countNewNames\(|captureDonorName\(/.test(src.replace(/\/\/[^\n]*/g, '')));
 
@@ -306,7 +308,7 @@ try {
 
   // The rescan hook is gone from the settings save (names are pre-moderated; flags are
   // computed at queue-read time), and the save is back to its plain shape.
-  const saveBlock = src.slice(src.indexOf("app.post('/api/admin/settings/:section'"), src.indexOf("app.post('/api/admin/settings/:section/restore'"))
+  const saveBlock = routeSource('post', '/api/admin/settings/:section')   // throws if absent — never a vacuous ''
     .replace(/\/\/[^\n]*/g, '');
   ok('the settings save no longer rescans donor names', !/rescan/i.test(saveBlock));
   ok('the settings save still writes through updateSection and invalidates branding',
@@ -316,14 +318,14 @@ try {
   // accident. The route delegates to lib/donor-ledger.js donorWall() and hands it the mask as
   // an argument (the lib throws without one); the full public contract is pinned in
   // test-public-leakage.js §9 and test-donor-league.js.
-  const pubBlock = src.slice(src.indexOf("app.get('/api/pool/donors'"), src.indexOf("app.get('/api/pool/prize-pool'"));
+  const pubBlock = routeSource('get', '/api/pool/donors');   // throws if absent — never a vacuous ''
   ok('public /api/pool/donors emits no v1 donor_* field and calls no admin reader',
     !/donor_censor|donor_name/.test(pubBlock) && !/adminQueue|requestImage|adminProfiles/.test(pubBlock));
   ok('public /api/pool/donors still masks the address', /mask:\s*\(a\)\s*=>\s*maskAddr\(a\)/.test(pubBlock));
 
   // The dashboard carries the pending count (the Overview tile) from the same lib count the
   // nav badge's summary route reads.
-  const dashBlock = src.slice(src.indexOf("app.get('/api/admin/dashboard'"), src.indexOf("// REMOVED (2026-07-28): GET /api/miners/top"));
+  const dashBlock = routeSource('get', '/api/admin/dashboard');   // throws if absent — never a vacuous ''
   ok('/api/admin/dashboard emits pending_donor_requests from DonorProfiles.pendingCount',
     /pending_donor_requests:\s*pendingDonorRequests/.test(dashBlock) && /DonorProfiles\.pendingCount\(db\)/.test(dashBlock) &&
     !/new_donor_names_7d/.test(dashBlock));
@@ -347,7 +349,7 @@ try {
 
   // Mimic the page: populateForm fills the fields from getSection, saveSection harvests every id
   // in the form (checkbox → boolean, textarea → text, empty scalar → dropped).
-  const payoutPage = fs.readFileSync(path.join(APP, 'admin-panel/settings-payout.html'), 'utf8');
+  const payoutPage = readPageSource(path.join(APP, 'admin-panel/settings-payout.html'));
   const body = {};
   for (const m of payoutPage.matchAll(/<(input|select|textarea)\b([^>]*)>/gi)) {
     const id = (m[2].match(/\bid="([^"]+)"/) || [])[1];
@@ -465,7 +467,7 @@ try {
     ok('applyToConfig copies it to config.payout_target_outputs (what the scheduler reads)', cfg.payout_target_outputs === 5,
       JSON.stringify(cfg));
   }
-  const payoutHtml = fs.readFileSync(path.join(APP, 'admin-panel/settings-payout.html'), 'utf8');
+  const payoutHtml = readPageSource(path.join(APP, 'admin-panel/settings-payout.html'));
   ok('the Payout page has an input with id="payout_target_outputs" (binding is by id)',
     /<input[^>]*id="payout_target_outputs"/.test(payoutHtml));
 

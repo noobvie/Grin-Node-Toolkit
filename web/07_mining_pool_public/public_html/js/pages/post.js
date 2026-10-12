@@ -1,0 +1,80 @@
+// post.js — the post page's own script. Until 2026-10 (pool code-layout refactor,
+// part F2) this was post.html's inline <script> block; it moved out byte-for-byte so
+// a strict script-src can drop 'unsafe-inline'. The block's indent is kept.
+//
+// The page loads it as a CLASSIC script at the block's old position. Never add defer / async /
+// type="module": the order and the shared global scope are what this code was written against.
+    (function () {
+      // Slug from the clean permalink /blog/<slug>; fall back to the legacy ?slug= form.
+      var pathMatch = location.pathname.match(/^\/blog\/([A-Za-z0-9_-]+)/);
+      var rawSlug = pathMatch ? pathMatch[1] : (new URLSearchParams(location.search).get('slug') || '');
+      var slug = rawSlug.replace(/[^a-z0-9_-]/gi, '');
+      if (!slug) { renderMissing(); return; }
+
+      // Canonical URL is always the clean /blog/<slug> form (dedupes the legacy ?slug= path
+      // for SEO). Skip if the server already injected one: /blog/<slug> is proxied to the
+      // app, which emits a canonical built from the operator's configured site_url. Adding
+      // a second one derived from location.origin would contradict it whenever the pool is
+      // reached on a host other than site_url — and two conflicting canonicals make Google
+      // discard both. The server's value wins; this only covers the legacy ?slug= entry.
+      if (!document.querySelector('link[rel="canonical"]')) {
+        var link = document.createElement('link');
+        link.rel = 'canonical';
+        link.href = location.origin + '/blog/' + slug;
+        document.head.appendChild(link);
+      }
+
+      function esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+          return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+      }
+      function fmtDate(unix) {
+        if (!unix) return '';
+        try { return new Date(unix * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }); }
+        catch (e) { return ''; }
+      }
+
+      fetch('/api/public/post/' + encodeURIComponent(slug))
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (json) {
+          if (!json || !json.data) { renderMissing(); return; }
+          var p = json.data;
+          // Only when the server did NOT render the head (the legacy ?slug= entry point).
+          // Its title is "<post> — <pool>"; overwriting it with the bare post title would
+          // make the tab disagree with the search result and the shared card.
+          if (!document.querySelector('meta[name="server-seo"]')) document.title = p.title;
+          var t = document.getElementById('post-title');
+          t.textContent = p.title;
+          t.classList.remove('muted');
+          document.getElementById('post-meta').textContent = fmtDate(p.published_at);
+          if (p.cover_image) {
+            document.getElementById('post-cover').innerHTML =
+              '<img class="cover" src="' + esc(p.cover_image) + '" alt="">';
+          }
+          // Operator-authored HTML: rendered in a sandboxed frame, never on this origin (D22-4).
+          showBody(document.getElementById('post-body'), p.body_html, 'post-body', p.title);
+          var tags = (p.tags || []).map(function (tg) { return '<span class="tag">' + esc(tg) + '</span>'; }).join('');
+          document.getElementById('post-tags').innerHTML = tags;
+          document.documentElement.setAttribute('data-page', 'post-' + slug);
+        })
+        .catch(renderMissing);
+
+      // The body goes into a frame with no allow-scripts (js/cms-frame.js). If that script did
+      // not load, the body is NOT shown — falling back to innerHTML would undo the fix.
+      function showBody(host, html, wrapClass, title) {
+        if (window.CmsFrame) { window.CmsFrame.mount(host, html, { wrapClass: wrapClass, title: title }); return; }
+        var q = document.createElement('p');
+        q.className = 'muted';
+        q.textContent = 'This post could not be shown. Reload to try again.';
+        host.appendChild(q);
+      }
+
+      function renderMissing() {
+        document.title = 'Post not found';
+        document.getElementById('post-title').textContent = 'Post not found';
+        document.getElementById('post-title').classList.remove('muted');
+        document.getElementById('post-body').innerHTML =
+          '<p class="muted">This post is not available. <a href="/blog.html">Back to the blog</a>.</p>';
+      }
+    })();

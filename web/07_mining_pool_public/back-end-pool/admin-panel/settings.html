@@ -9,18 +9,6 @@
 </head>
 <body>
 <main><div class="container"><p style="padding:2rem;color:var(--text-dim)">Redirecting…</p></div></main>
-<script>
-  // The monolithic settings page was split into one file per section (2026-06). Preserve any
-  // legacy deep-link: /admin/settings.html#access → /admin/settings-access.html.
-  (function () {
-    var TABS = ['pool-info','branding','seo','analytics','announcements',
-                'payout','incentives','access','database'];  // 'alerts' removed — audit §J8-3
-    var tab = (location.hash || '').replace(/^#/, '');
-    // Pages became a standalone CMS CRUD page (no longer a settings section).
-    if (tab === 'pages') { location.replace('/admin/pages.html'); return; }
-    var target = (TABS.indexOf(tab) >= 0) ? tab : 'pool-info';
-    location.replace('/admin/settings-' + target + '.html');
-  })();
-</script>
+<script src="/admin/js/settings.js"></script>
 </body>
 </html>

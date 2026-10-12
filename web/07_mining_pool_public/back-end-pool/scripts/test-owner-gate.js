@@ -9,6 +9,7 @@
 
 const assert = require('assert');
 const path = require('path');
+const { readAppSource } = require('./lib/app-source');
 // The SAME driver wrapper production uses — not a bare node:sqlite DatabaseSync. That one has
 // no .transaction(), so a migration that opens one would throw here and pass in production,
 // which is the wrong way round for a test to be wrong.
@@ -590,7 +591,7 @@ const backdate = (db, a, secs) => db.prepare(
   // Every other check in this file passed throughout (Part 4 review).
   {
     const fs = require('fs');
-    const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+    const src = readAppSource();
     // Anchored on the STATEMENTS, not the names — comments mention both.
     const at = (re) => { const m = re.exec(src); return m ? m.index : -1; };
     const mig = at(/^[ \t]*migrateProofSet\(db\);/m);

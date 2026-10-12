@@ -23,6 +23,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { readAppSource, routeSource } = require('./lib/app-source');
 
 const APP = path.resolve(__dirname, '..');
 const StratumPause = require(path.join(APP, 'lib/stratum-pause.js'));
@@ -98,9 +99,9 @@ function stubServer() {
 
   // ── [2] guard tiers + wiring, read from index.js ───────────────────────────────────────────
   console.log('\n[2] route guards + public wiring (index.js)');
-  const src = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
+  const src = readAppSource();
   const routeGuard = (method, route) => {
-    const re = new RegExp("app\\." + method + "\\('" + route.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&') + "',\\s*([A-Za-z]+),");
+    const re = new RegExp("(?:app|router)\\." + method + "\\('" + route.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&') + "',\\s*([A-Za-z]+),");
     const m = src.match(re);
     return m ? m[1] : null;
   };
@@ -125,21 +126,12 @@ function stubServer() {
   const db = getDb();
   db.prepare("INSERT INTO users (id, username, password_hash, is_admin) VALUES (7, 'route-admin', 'x', 1)").run();
 
-  const routeSrc = (verb, p) => {
-    const start = src.indexOf(`app.${verb}('${p}'`);
-    if (start < 0) return '';
-    const next = src.slice(start + 10).search(/\n\s{0,4}app\.(get|post|put|delete|patch)\(/);
-    const whole = next < 0 ? src.slice(start) : src.slice(start, start + 10 + next);
-    const end = whole.indexOf('\n  });');
-    return end < 0 ? whole : whole.slice(0, end + 6);
-  };
   const load = (verb, p, deps) => {
-    const s = routeSrc(verb, p);
-    if (!s) return null;
+    const s = routeSource(verb, p);   // throws if the route is absent or ambiguous
     let handler = null;
     const app = { [verb]: (_p, ...fns) => { handler = fns[fns.length - 1]; } };
     // eslint-disable-next-line no-new-func
-    new Function('__d', `with (__d) {\n${s}\n}`)({ app, ...deps });
+    new Function('__d', `with (__d) {\n${s}\n}`)({ app, router: app, ...deps });
     return handler;
   };
   const call = async (h, req = {}) => {

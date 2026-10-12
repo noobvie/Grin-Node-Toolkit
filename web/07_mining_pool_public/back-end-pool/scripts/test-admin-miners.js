@@ -15,6 +15,7 @@
 // Never touches the pool DB.
 // Run: node scripts/test-admin-miners.js
 const path = require('path');
+const { readAppSource, routeSource } = require('./lib/app-source');
 const fs = require('fs');
 const os = require('os');
 
@@ -119,22 +120,14 @@ console.log('\n[2] recentShares() — window + plan');
 
 // ── 3. The real route handlers ────────────────────────────────────────────────
 console.log('\n[3] routes (real handlers)');
-const indexSrc = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
-const routeSrc = (verb, p) => {
-  const start = indexSrc.indexOf(`app.${verb}('${p}'`);
-  if (start < 0) return '';
-  const next = indexSrc.slice(start + 10).search(/\n\s{0,4}app\.(get|post|put|delete|patch)\(/);
-  return next < 0 ? indexSrc.slice(start) : indexSrc.slice(start, start + 10 + next);
-};
+const indexSrc = readAppSource();
+const routeSrc = routeSource;   // throws if the route is absent or ambiguous
 const load = (verb, p, deps) => {
-  const whole = routeSrc(verb, p);
-  const end = whole.indexOf('\n  });');
-  const src = end < 0 ? whole : whole.slice(0, end + 6);
-  if (!src) return null;
+  const src = routeSrc(verb, p);
   let handler = null;
   const app = { [verb]: (_p, ...fns) => { handler = fns[fns.length - 1]; } };
   // eslint-disable-next-line no-new-func
-  new Function('__d', `with (__d) {\n${src}\n}`)({ app, ...deps });
+  new Function('__d', `with (__d) {\n${src}\n}`)({ app, router: app, ...deps });
   return handler;
 };
 const call = (h, req) => {
@@ -164,7 +157,8 @@ const call = (h, req) => {
     ok('the list no longer runs per-row share subqueries',
        !/FROM shares s WHERE s\.grin_address = ma\.grin_address/.test(src) && /minerStatus\.recentShares\(db, now\)/.test(src));
     ok('both routes are secureAdmin reads',
-       /app\.get\('\/api\/admin\/miners', secureAdmin,/.test(indexSrc) && /app\.get\('\/api\/admin\/miners\/:addr\/workers', secureAdmin,/.test(indexSrc));
+       /^\s*(?:app|router)\.get\('\/api\/admin\/miners', secureAdmin,/m.test(routeSrc('get', '/api/admin/miners')) &&
+       /^\s*(?:app|router)\.get\('\/api\/admin\/miners\/:addr\/workers', secureAdmin,/m.test(routeSrc('get', '/api/admin/miners/:addr/workers')));
 
     const res = call(load('get', '/api/admin/miners', deps), { query: { limit: '500' } });
     const byAddr = new Map(((res.body && res.body.miners) || []).map((m) => [m.grin_address, m]));

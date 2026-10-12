@@ -52,6 +52,8 @@
 // running. Run: node scripts/test-public-leakage.js
 const fs = require('fs');
 const path = require('path');
+const { readAppSource, routeSource } = require('./lib/app-source');
+const { readPageSource } = require('./lib/page-source');
 
 const APP = path.resolve(__dirname, '..');
 const WEB = path.resolve(APP, '..');
@@ -59,7 +61,7 @@ const PoolSettings = require(path.join(APP, 'lib/pool-settings.js'));
 const ownerProof = require(path.join(APP, 'lib/owner-proof.js'));
 const geoip = require(path.join(APP, 'lib/geoip.js'));
 
-const indexSrc = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
+const indexSrc = readAppSource();
 const brandingSrc = fs.readFileSync(path.join(WEB, 'public_html/js/branding.js'), 'utf8');
 const dormancySrc = fs.readFileSync(path.join(APP, 'lib/dormancy.js'), 'utf8');
 const donorLedgerSrc = fs.readFileSync(path.join(APP, 'lib/donor-ledger.js'), 'utf8');
@@ -67,14 +69,13 @@ const donorNamesSrc = fs.readFileSync(path.join(APP, 'lib/donor-names.js'), 'utf
 const chartsSrc = fs.readFileSync(path.join(WEB, 'public_html/js/charts-init.js'), 'utf8');
 const PUBLIC_PAGES = fs.readdirSync(path.join(WEB, 'public_html')).filter((n) => n.endsWith('.html'));
 
-// A route's source text, from its `app.<verb>('<path>'` to the next route registration. Used to
-// assert what a specific handler does without booting the app (index.js starts a server on
-// require), the same way test-branding-sinks.js reads public_html/.
+// A route's source text: its `(app|router).<verb>('<path>'` registration up to its own closing
+// `  });`. Used to assert what a specific handler does without booting the app (index.js starts a
+// server on require), the same way test-branding-sinks.js reads public_html/. routeSource THROWS
+// when the route is absent or registered twice, so a moved/renamed route is a loud failure here,
+// never an empty string that every "must not appear" assertion passes against.
 function routeSrc(verb, routePath) {
-  const start = indexSrc.indexOf(`app.${verb}('${routePath}'`);
-  if (start < 0) return '';
-  const next = indexSrc.slice(start + 10).search(/\n\s{0,4}app\.(get|post|put|delete|patch)\(/);
-  return next < 0 ? indexSrc.slice(start) : indexSrc.slice(start, start + 10 + next);
+  return routeSource(verb, routePath);
 }
 
 // One API_DOC_META row's source line, by its `'VERB /path':` key (line-anchored, like §1b).
@@ -173,7 +174,7 @@ for (const [verb, p] of MASKED_LIST_ROUTES) {
 // The deep-link was the other half: it needed the FULL address to build the href, so every
 // leaderboard row put one in the page even when the API masked. No public page may emit one.
 const linkers = PUBLIC_PAGES.filter((n) => {
-  const html = fs.readFileSync(path.join(WEB, 'public_html', n), 'utf8');
+  const html = readPageSource(path.join(WEB, 'public_html', n));
   return /account-settings\.html\?addr='\s*\+|account-settings\.html\?addr=" \+/.test(html);
 });
 ok('§J11-1 no public page builds an /account-settings.html?addr= link', linkers.length === 0,
@@ -292,7 +293,7 @@ ok('§J11-7 every `parseInt(req.query.x || N)` site carries a NaN default',
 
 console.log('\n[6] §J11-3 — the account dossier is not offered to crawlers\n');
 
-const acctHtml = fs.readFileSync(path.join(WEB, 'public_html/account-settings.html'), 'utf8');
+const acctHtml = readPageSource(path.join(WEB, 'public_html/account-settings.html'));
 const robotsTag = /<meta\s+name=["']robots["']\s+content=["']([^"']+)["']/i.exec(acctHtml);
 ok('§J11-3 account-settings.html declares a robots meta', !!robotsTag);
 ok('§J11-3 …and it is noindex', !!robotsTag && /noindex/i.test(robotsTag[1]),
@@ -407,7 +408,7 @@ ok('§18.7 current_percent is gone from the card (Part 4 drops the v1 alias of p
 
 // The page. donate.html is the wall's only renderer: no v1 copy may survive the §18.7
 // rewrite, it must not read the dropped field, and it keeps its own fence on the banner URL.
-const donateHtml = fs.readFileSync(path.join(WEB, 'public_html/donate.html'), 'utf8');
+const donateHtml = readPageSource(path.join(WEB, 'public_html/donate.html'));
 ok('§18.7 donate.html carries no v1 copy (yourbrandname / ceremony / donate0-first / censored)',
   !/yourbrandname|ceremony|go through <code>donate0|censored/i.test(donateHtml));
 ok('§18.7 donate.html no longer reads current_percent', !/current_percent/.test(donateHtml));
@@ -449,7 +450,7 @@ ok('§18.9 profileFor reads READ_COLS (no image, no name) + the name of APPROVED
 // admin readers (adminQueue, requestImage, adminProfiles — full addresses, pending text, bytes)
 // may appear under /api/admin/ only, behind secureAdmin/freshAdmin. A NEW public route here
 // fails this test on purpose: read what it emits (§18.9), then add it.
-const routeDecls = [...indexSrc.matchAll(/\n\s{2}app\.(get|post|put|delete|patch)\('([^']+)',\s*([A-Za-z]+)?/g)]
+const routeDecls = [...indexSrc.matchAll(/\n\s{2}(?:app|router)\.(get|post|put|delete|patch)\('([^']+)',\s*([A-Za-z]+)?/g)]
   .map((m) => ({ verb: m[1], path: m[2], guard: m[3] || '' }));
 // The handler only: routeSrc runs to the NEXT app.* call, so a route followed by a block of
 // shared setup (the donor-profile multer config follows the Goblin DELETE) would otherwise be
@@ -514,7 +515,7 @@ ok('§18.3 the account api-docs row no longer documents the dropped aliases',
 // no v1 copy, no dropped alias read, a live banner only through the exact-shape URL fence,
 // previews from data: URLs (the public CSP's img-src has no blob:), and the two proof boxes
 // cleared after every change that went through.
-const acctHtml5 = fs.readFileSync(path.join(WEB, 'public_html/account-settings.html'), 'utf8');
+const acctHtml5 = readPageSource(path.join(WEB, 'public_html/account-settings.html'));
 const acctPageJs = acctHtml5.replace(/<!--[\s\S]*?-->/g, '').replace(/^\s*\/\/[^\n]*$/gm, '');
 ok('§18.8 account-settings.html carries no v1 donation copy (ceremony / yourbrand / donate0-first / censored)',
   !/yourbrand|ceremony|go through donate0|donate0 first|censored/i.test(acctPageJs));
@@ -583,7 +584,7 @@ ok('§17.4 owner-proof.js interpolates no proof value, digest or salt into a log
 // SELECT * FROM withdrawals and serve the rows must still drop the slate.
 console.log('\n[F5] stepwise columns stay off every public route');
 {
-  const routes = [...indexSrc.matchAll(/\bapp\.(get|post|put|delete|patch)\('([^']+)'/g)].map((m) => [m[1], m[2]]);
+  const routes = [...indexSrc.matchAll(/\b(?:app|router)\.(get|post|put|delete|patch)\('([^']+)'/g)].map((m) => [m[1], m[2]]);
   const publicRoutes = routes.filter(([, p]) => !p.startsWith('/api/admin'));
   const leaks = publicRoutes.filter(([v, p]) => /tor_final_slate|tor_step/.test(routeSrc(v, p)));
   ok('no non-admin route mentions tor_final_slate or tor_step', publicRoutes.length > 20 && leaks.length === 0,
@@ -611,7 +612,7 @@ console.log('\n[F5] stepwise columns stay off every public route');
 console.log('\n[S1] the stored slatepack is served by one gated route only');
 {
   const RESHOW = ['post', '/api/account/:addr/withdraw/:id/slatepack'];
-  const routes = [...indexSrc.matchAll(/\bapp\.(get|post|put|delete|patch)\('([^']+)'/g)].map((m) => [m[1], m[2]]);
+  const routes = [...indexSrc.matchAll(/\b(?:app|router)\.(get|post|put|delete|patch)\('([^']+)'/g)].map((m) => [m[1], m[2]]);
   const mentions = routes.filter(([v, p]) => /slatepack_s1/.test(routeSrc(v, p).replace(/\/\/[^\n]*/g, '')));
   ok('only the re-fetch route reads slatepack_s1 (admin routes only strip it)',
     mentions.every(([v, p]) => (v === RESHOW[0] && p === RESHOW[1]) ||
@@ -643,7 +644,7 @@ console.log('\n[S1] the stored slatepack is served by one gated route only');
 // fail_code is the public-safe enum the account page words.
 console.log('\n[fail] fail_detail stays admin-only; fail_code and the Tor pause are the public surface');
 {
-  const routes = [...indexSrc.matchAll(/\bapp\.(get|post|put|delete|patch)\('([^']+)'/g)].map((m) => [m[1], m[2]]);
+  const routes = [...indexSrc.matchAll(/\b(?:app|router)\.(get|post|put|delete|patch)\('([^']+)'/g)].map((m) => [m[1], m[2]]);
   const code = (v, p) => routeSrc(v, p).replace(/\/\/[^\n]*/g, '');
   const leaks = routes.filter(([v, p]) => !p.startsWith('/api/admin') && /fail_detail/.test(code(v, p)));
   ok('no non-admin route names fail_detail', routes.length > 20 && leaks.length === 0, leaks.map(([v, p]) => `${v} ${p}`).join(', '));
@@ -663,7 +664,7 @@ console.log('\n[fail] fail_detail stays admin-only; fail_code and the Tor pause 
   // The page half (Session 3): it words fail_code and nothing else. A page that read fail_detail
   // would show it the day a route leaked it, so the page must not even know the name.
   const pageFiles = ['public_html/account-settings.html', 'public_html/js/payout-methods.js'];
-  const pageSrc = pageFiles.map((f) => fs.readFileSync(path.join(WEB, f), 'utf8')).join('\n');
+  const pageSrc = pageFiles.map((f) => (/\.html$/.test(f) ? readPageSource(path.join(WEB, f)) : fs.readFileSync(path.join(WEB, f), 'utf8'))).join('\n');
   ok('the account page and the rail registry never read fail_detail', !/fail_detail/.test(pageSrc));
   ok('…and word a failed Tor payout from fail_code', /row\.fail_code/.test(pageSrc));
   ok('…and name no grin-wallet figure (available / needed / NotEnoughFunds)', !/available_disp|amount_needed|NotEnoughFunds/.test(pageSrc));
@@ -677,7 +678,7 @@ console.log('\n[fail] fail_detail stays admin-only; fail_code and the Tor pause 
 console.log('\n[games] /internal stays off /api/; branding carries only { mode, chat }');
 {
   const gamesSrc = fs.readFileSync(path.join(APP, 'lib/games-link.js'), 'utf8');
-  const apiRoutes = [...indexSrc.matchAll(/\bapp\.(get|post|put|delete|patch|all|use)\('([^']+)'/g)].map((m) => m[2]);
+  const apiRoutes = [...indexSrc.matchAll(/\b(?:app|router)\.(get|post|put|delete|patch|all|use)\('([^']+)'/g)].map((m) => m[2]);
   ok('no index.js route under /api/ names "internal"', apiRoutes.length > 20 && !apiRoutes.some((p) => p.startsWith('/api/') && /internal/i.test(p)));
   ok('the lib answers its internal routes only under /internal/games/',
     /'POST \/internal\/games\/verify-proof'/.test(gamesSrc) && /'GET \/internal\/games\/activity'/.test(gamesSrc) &&
@@ -691,6 +692,43 @@ console.log('\n[games] /internal stays off /api/; branding carries only { mode, 
   ok('the branding route sets cfg.games from publicFlag() and nothing else games-related',
     /cfg\.games = gamesLink\.publicFlag\(\);/.test(routeSrc('get', '/api/public/branding')) &&
     !/games_port|games_link_secret_file|linkSecret/.test(routeSrc('get', '/api/public/branding')));
+}
+
+// A form whose submit JavaScript handles still submits NATIVELY whenever that script is missing:
+// a 404 on the page's js/pages/*.js mid-deploy, a network blip, or any top-level throw before the
+// delegated listeners at the END of the file (code-layout F2 — the old onsubmit= attribute did not
+// depend on the rest of the script running). With no method that fallback is a GET, so the admin
+// password lands in the URL: nginx access log, browser history, sync. POST keeps it in the body.
+console.log('\n[forms] a form holding a password field never falls back to GET');
+{
+  const files = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      if (e.name === 'vendor' || e.name === 'node_modules') continue;
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p); else if (e.name.endsWith('.html')) files.push(p);
+    }
+  };
+  walk(path.join(WEB, 'public_html'));
+  walk(path.join(APP, 'admin-panel'));
+  // Markup only: comments, <style> and <script> bodies out first — login.html's own CSS comment
+  // says "these sit inside <form>", which a tag regex would otherwise read as a method-less form.
+  const markup = (f) => fs.readFileSync(f, 'utf8')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<(style|script)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+  const forms = [];
+  for (const f of files) {
+    for (const m of markup(f).matchAll(/<form\b([^>]*)>([\s\S]*?)<\/form>/gi)) {
+      if (/type\s*=\s*["']?password\b/i.test(m[2])) forms.push({ file: path.relative(WEB, f), open: m[1] });
+    }
+  }
+  const getForms = forms.filter((x) => !/\bmethod\s*=\s*["']?post\b/i.test(x.open));
+  ok('the login + register password forms are found (non-vacuity)', forms.length >= 2, `found ${forms.length}`);
+  ok('every form holding a password field declares method="post"', getForms.length === 0,
+    getForms.map((x) => x.file).join(', '));
+  const loginForms = [...markup(path.join(WEB, 'public_html/login.html')).matchAll(/<form\b([^>]*)>/gi)].map((m) => m[1]);
+  ok('all three login.html forms (login, register, 2FA code) are method="post"',
+    loginForms.length === 3 && loginForms.every((a) => /\bmethod="post"/i.test(a)), loginForms.join(' | '));
 }
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);

@@ -16,6 +16,7 @@
 // Never touches the pool DB.
 // Run: node scripts/test-shares-plans.js
 const path = require('path');
+const { routeFilesInOrder } = require('./lib/app-source');
 const fs = require('fs');
 const os = require('os');
 
@@ -69,14 +70,16 @@ function extract(file) {
   return out;
 }
 
-const files = [path.join(APP, 'index.js')].concat(
+// index.js + every routes/**/*.js (none yet): route code is moving out of index.js, and a statement
+// that moved with it must still be planned.
+const files = [path.join(APP, 'index.js')].concat(routeFilesInOrder()).concat(
   fs.readdirSync(path.join(APP, 'lib')).filter((f) => f.endsWith('.js')).map((f) => path.join(APP, 'lib', f)));
 const queries = files.flatMap(extract);
 
 console.log('\n[1] every shares statement in index.js + lib/*.js');
 // Floors, per file, from a `grep -E "(FROM|INTO|UPDATE) shares"` count on 2026-09-27 — so an
 // extractor that silently stops matching (or a file it cannot parse) fails here, not by omission.
-const fromIndex = queries.filter((q) => q.where.startsWith('index.js')).length;
+const fromIndex = queries.filter((q) => /^(index\.js|routes[\\/])/.test(q.where)).length;
 ok(`the extractor found the statements (${queries.length}; index.js ${fromIndex})`,
    queries.length >= 25 && fromIndex >= 7, 'fewer than expected — has the extractor stopped matching?');
 

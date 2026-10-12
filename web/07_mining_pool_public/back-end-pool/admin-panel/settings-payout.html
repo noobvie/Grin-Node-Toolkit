@@ -219,8 +219,8 @@ wss://offchain.pub</textarea>
         </div>
 
         <div class="form-actions">
-          <button class="btn btn-primary" onclick="saveSection('payout')">Save Changes</button>
-          <button class="btn btn-secondary" onclick="restoreSection('payout')">Restore Defaults</button>
+          <button class="btn btn-primary" data-action="save-section" data-section="payout">Save Changes</button>
+          <button class="btn btn-secondary" data-action="restore-section" data-section="payout">Restore Defaults</button>
         </div>
       </div>
     </div>
@@ -231,7 +231,6 @@ wss://offchain.pub</textarea>
   <script src="/js/api.js"></script>
   <script src="/js/stepup.js"></script>
   <script src="/admin/admin-shell.js"></script>
-  <script>window.SETTINGS_SECTION = "payout";</script>
-  <script src="/admin/settings-common.js"></script>
+  <script src="/admin/settings-common.js" data-section="payout"></script>
 </body>
 </html>

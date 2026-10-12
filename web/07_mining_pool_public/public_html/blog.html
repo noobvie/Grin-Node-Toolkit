@@ -98,82 +98,14 @@
       <p class="muted">Loading…</p>
     </div>
     <div id="pager" class="blog-pager" style="display:none;">
-      <button id="prev" onclick="go(-1)">← Newer</button>
-      <button id="next" onclick="go(1)">Older →</button>
+      <button id="prev" data-action="go-prev">← Newer</button>
+      <button id="next" data-action="go-next">Older →</button>
     </div>
   </main>
 
   <!-- footer injected by /js/public-shell.js -->
 
-  <script>
-    (function () {
-      var PAGE_SIZE = 8;
-      var offset = 0, total = 0;
-
-      function esc(s) {
-        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
-          return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-        });
-      }
-      function fmtDate(unix) {
-        if (!unix) return '';
-        try { return new Date(unix * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); }
-        catch (e) { return ''; }
-      }
-
-      function render(data) {
-        var grid = document.getElementById('post-grid');
-        var posts = (data && data.posts) || [];
-        total = (data && data.total) || 0;
-        if (!posts.length) {
-          grid.innerHTML = '<p class="muted">No posts yet. Check back soon.</p>';
-          document.getElementById('pager').style.display = 'none';
-          return;
-        }
-        grid.innerHTML = posts.map(function (p) {
-          var href = '/blog/' + encodeURIComponent(p.slug);
-          var cover = p.cover_image
-            ? '<img class="cover" src="' + esc(p.cover_image) + '" alt="">'
-            : '<div class="no-cover">📝</div>';
-          var tags = (p.tags || []).map(function (t) { return '<span class="tag">' + esc(t) + '</span>'; }).join('');
-          return '<a class="post-card" href="' + href + '">' +
-            cover +
-            '<div class="body">' +
-              '<h2>' + esc(p.title) + '</h2>' +
-              '<div class="meta">' + esc(fmtDate(p.published_at)) + '</div>' +
-              '<div class="excerpt">' + esc(p.excerpt || '') + '</div>' +
-              '<div>' + tags + '</div>' +
-            '</div>' +
-          '</a>';
-        }).join('');
-
-        var pager = document.getElementById('pager');
-        if (total > PAGE_SIZE) {
-          pager.style.display = '';
-          document.getElementById('prev').disabled = offset <= 0;
-          document.getElementById('next').disabled = offset + PAGE_SIZE >= total;
-        } else {
-          pager.style.display = 'none';
-        }
-      }
-
-      function load() {
-        fetch('/api/public/posts?limit=' + PAGE_SIZE + '&offset=' + offset)
-          .then(function (r) { return r.ok ? r.json() : null; })
-          .then(function (j) { render(j && j.data); window.scrollTo({ top: 0 }); })
-          .catch(function () {
-            document.getElementById('post-grid').innerHTML = '<p class="muted">Could not load posts.</p>';
-          });
-      }
-
-      window.go = function (dir) {
-        offset = Math.max(0, offset + dir * PAGE_SIZE);
-        load();
-      };
-
-      load();
-    })();
-  </script>
+  <script src="/js/pages/blog.js"></script>
   <script src="/js/public-shell.js"></script>
   <script src="/js/public-theme.js"></script>
   <script src="/js/branding.js"></script>

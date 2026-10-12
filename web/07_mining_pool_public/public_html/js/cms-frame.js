@@ -1,5 +1,5 @@
 /* cms-frame.js — CMS page and post bodies in a sandboxed frame (audit D22-4; design §19.15
- * Part C7). Loaded by page.html and post.html, before their own inline script.
+ * Part C7). Loaded by page.html and post.html, before their own js/pages/page.js / post.js.
  *
  * WHY. A page body (lib/pages.js `html`) and a post body (lib/posts.js `body_html`) are raw
  * operator HTML. They used to be set with innerHTML on the pool origin, where the page CSP

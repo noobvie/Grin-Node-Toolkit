@@ -36,6 +36,8 @@
 //                  Only valid on a rail with no isEnabled — a fallback that can itself be
 //                  switched off is not a fallback.
 //   onSummary      fn(summary, ctx) — render rail-specific state after each account lookup
+//   onAddressChange fn() — clear the rail's typed inputs and messages; the page calls it when
+//                  a DIFFERENT address is looked up (never on the same address's refresh)
 //   init           fn(host) — wire the rail's own listeners, once, on DOMContentLoaded
 (function () {
   'use strict';
@@ -200,6 +202,12 @@
     sync();
   }
 
+  function addressChanged() {
+    defs.forEach(function (d) {
+      if (typeof d.onAddressChange === 'function') d.onAddressChange();
+    });
+  }
+
   window.PayoutMethods = {
     register: register,
     get: get,
@@ -210,6 +218,7 @@
     selected: selected,
     sync: sync,
     applySummary: applySummary,
+    addressChanged: addressChanged,
     init: init
   };
 })();

@@ -133,6 +133,15 @@ body {
 /* Phones: two tiles a row instead of one tall column. auto-fit alone gives ONE column
    below ~360px (two 170px minimums don't fit), which stacked six tiles into a scroll. An
    odd tile out spans the full row so the strip never ends on a half-empty line. */
+/* .cols-6: an opt-in fixed layout for a SIX-tile strip — one row on desktop, 3+3 on a
+   tablet, 2+2+2 on a phone (the rule below). auto-fit alone breaks six into 5+1 or 4+2 at
+   in-between widths. Other pages keep auto-fit. */
+@media (min-width: 1024px) {
+  .placard.figures.cols-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+}
+@media (min-width: 561px) and (max-width: 1023px) {
+  .placard.figures.cols-6 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 @media (max-width: 560px) {
   .placard.figures { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .placard.figures span:last-child:nth-child(odd) { grid-column: 1 / -1; }

@@ -305,12 +305,13 @@ class BlockManager {
 
   // Durable block-history series for the public blocks.html deck. Blocks are never pruned, so we
   // bucket straight from the blocks table (found_at) and stay accurate at every range. One call
-  // feeds all four charts: time-bucketed counts/reward (bar + cumulative area), a per-block luck
-  // trend, and window status totals (doughnut). Returns { range, bucket_seconds, points, luck,
-  // status }. Synchronous (all sqlite .all/.get). UTC-aligned buckets, mirroring getMetricsHistory.
+  // feeds every chart: time-bucketed counts/reward (bar + cumulative area), a per-block luck
+  // trend, window status totals (doughnut) and the UTC weekday×hour heatmap. Returns { range,
+  // bucket_seconds, points, luck, status, hours }. Synchronous (all sqlite .all/.get).
+  // UTC-aligned buckets, mirroring getMetricsHistory.
   getBlocksHistory(range = 'month') {
     const DAY = 86400;
-    const empty = { range, bucket_seconds: null, points: [], luck: [], status: { confirmed: 0, immature: 0, orphaned: 0 } };
+    const empty = { range, bucket_seconds: null, points: [], luck: [], status: { confirmed: 0, immature: 0, orphaned: 0 }, hours: null };
     try {
       const now = Math.floor(Date.now() / 1000);
       let bucket, cutoff;
@@ -333,7 +334,7 @@ class BlockManager {
       }
 
       // Time-bucketed counts + reward (drives the blocks-per-period columns and cumulative area).
-      const points = this.db.prepare(`
+      const found = this.db.prepare(`
         SELECT CAST(found_at / ? AS INTEGER) * ?              AS t,
                COUNT(*)                                       AS blocks,
                COALESCE(SUM(reward), 0)                       AS reward,
@@ -350,6 +351,34 @@ class BlockManager {
         confirmed: r.confirmed || 0,
         orphaned: r.orphaned || 0
       }));
+
+      // Expected blocks from the pool's hashrate share, per bucket (P-02's comparison line) and
+      // per UTC weekday×hour (the heatmap). The found-blocks query only yields NON-empty buckets,
+      // but a bucket where the pool mined and found nothing is exactly the unlucky one, so every
+      // bucket the hourly rollup covers gets a point — a zero column, not a missing one.
+      const exp = this._expectedBlocks(cutoff, bucket);
+      const byT = new Map(found.map(p => [p.t, p]));
+      exp.byBucket.forEach((_, t) => {
+        if (!byT.has(t)) byT.set(t, { t, blocks: 0, reward: 0, confirmed: 0, orphaned: 0 });
+      });
+      const points = [...byT.values()]
+        .sort((a, b) => a.t - b.t)
+        .map(p => Object.assign(p, { expected: exp.byBucket.has(p.t) ? exp.byBucket.get(p.t) : null }));
+
+      // Found blocks by UTC weekday (0 = Sunday, strftime %w) × hour. Every status counts, as in
+      // `points` — an orphan was still found at that hour, which is what the heatmap asks.
+      const hourFound = Array.from({ length: 7 }, () => new Array(24).fill(0));
+      this.db.prepare(`
+        SELECT CAST(strftime('%w', found_at, 'unixepoch') AS INTEGER) AS wd,
+               CAST(strftime('%H', found_at, 'unixepoch') AS INTEGER) AS hr,
+               COUNT(*) AS n
+        FROM blocks
+        WHERE found_at >= ?
+        GROUP BY wd, hr
+      `).all(cutoff).forEach(r => {
+        if (hourFound[r.wd] && r.hr >= 0 && r.hr < 24) hourFound[r.wd][r.hr] = r.n;
+      });
+      const hours = { found: hourFound, expected: exp.grid, expected_hours: exp.hours };
 
       // Per-block luck % over the window (round shares ÷ network difficulty × 100), oldest→newest,
       // capped for a readable line. Only blocks with both captured stats contribute.
@@ -375,11 +404,59 @@ class BlockManager {
         else status.immature += r.n; // 'immature' (and any legacy/unknown) count as maturing
       });
 
-      return { range, bucket_seconds: bucket, points, luck, status };
+      return { range, bucket_seconds: bucket, points, luck, status, hours };
     } catch (err) {
       console.error(`Error fetching blocks history: ${err.message}`);
       return empty;
     }
+  }
+
+  // Blocks the pool SHOULD have found, from its share of network hashrate, over the hourly
+  // rollup (pool_metrics_hourly). One completed hour at share s expects s × 60 blocks (60 s
+  // target). Returns { byBucket: Map(t → expected|null), grid: 7×24 | null, hours }.
+  //
+  // network_hashrate_gps is NULL on an hour with no node sample (catch-up rows after an outage,
+  // and every hour before the column existed). Network hashrate barely moves within a bucket,
+  // so a missing hour borrows its BUCKET's mean sample; the pool's own GPS — the part that
+  // actually varies — is always the real one. A bucket with no sample of its own reports null
+  // (drawn as a gap), never 0: a borrowed network figure from months away is a guess.
+  // An hour with no rollup row at all contributes nothing — the pool was not running.
+  _expectedBlocks(cutoff, bucket) {
+    const out = { byBucket: new Map(), grid: null, hours: 0 };
+    const rows = this.db.prepare(`
+      SELECT bucket_start AS b, pool_hashrate_gps AS p, network_hashrate_gps AS n
+      FROM pool_metrics_hourly
+      WHERE bucket_start >= ?
+    `).all(cutoff);
+    if (!rows.length) return out;
+
+    const keyOf = b => Math.floor(b / bucket) * bucket;
+    const net = new Map(); // bucket → { sum, n }
+    for (const r of rows) {
+      const k = keyOf(r.b);
+      const s = net.get(k) || { sum: 0, n: 0 };
+      if (r.n > 0) { s.sum += r.n; s.n += 1; }
+      net.set(k, s);
+    }
+
+    const sums = new Map();
+    const grid = Array.from({ length: 7 }, () => new Array(24).fill(0));
+    for (const r of rows) {
+      const k = keyOf(r.b);
+      const s = net.get(k);
+      if (!s.n) { sums.set(k, null); continue; }
+      const n = r.n > 0 ? r.n : s.sum / s.n;
+      const e = r.p > 0 ? (r.p / n) * 60 : 0;
+      sums.set(k, (sums.get(k) || 0) + e);
+      const d = new Date(r.b * 1000);
+      grid[d.getUTCDay()][d.getUTCHours()] += e;
+      out.hours += 1;
+    }
+
+    const round2 = v => Math.round(v * 100) / 100;
+    sums.forEach((v, k) => out.byBucket.set(k, v == null ? null : round2(v)));
+    if (out.hours > 0) out.grid = grid.map(row => row.map(round2));
+    return out;
   }
 
   // Most recently found block (by height), or null. Synchronous.

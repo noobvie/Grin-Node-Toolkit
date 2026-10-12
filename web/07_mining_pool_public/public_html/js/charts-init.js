@@ -258,9 +258,20 @@
     return _charts[canvasId];
   }
 
+  // A theme text token (for neutral reference marks), read from BODY like accent().
+  function textToken(name, fallback) {
+    try {
+      const c = getComputedStyle(document.body || document.documentElement).getPropertyValue(name);
+      return (c && c.trim()) || fallback;
+    } catch (e) { return fallback; }
+  }
+
   // Generic bar chart (e.g. per-worker hashrate). `labels` + `data` are parallel arrays.
   // opts.valueFmt(v) formats the tooltip/value-axis (defaults to fmtGps for hashrate).
   // opts.horizontal=true lays bars horizontally (value on x) — better for long category labels.
+  // opts.line = { label, data, valueFmt? } overlays a dashed neutral REFERENCE line in the SAME unit on the
+  // same axis (e.g. expected vs found blocks) — never a second measure, never a second axis. A
+  // null in line.data is a gap. Vertical bars only. The legend shows only while a line is drawn.
   // Bars always start at zero (a truncated bar baseline misstates the ratio between bars).
   // Returns the Chart instance, or null if Chart.js / the canvas is missing.
   function renderBarChart(canvasId, labels, data, opts) {
@@ -273,16 +284,63 @@
     const valueFmt = typeof opts.valueFmt === 'function' ? opts.valueFmt : fmtGps;
     const horizontal = !!opts.horizontal;
 
-    const valueScale = () => yAxis(data, valueFmt, { zeroBase: true });
+    const line = (!horizontal && opts.line && Array.isArray(opts.line.data)
+                  && opts.line.data.some(v => v != null)) ? opts.line : null;
+    const lineData = line ? line.data.map(v => (v == null || !isFinite(Number(v))) ? null : Number(v)) : [];
+    const scaleData = data.concat(lineData.filter(v => v != null));
+
+    const valueScale = () => yAxis(scaleData, valueFmt, { zeroBase: true });
     const catScale = () => horizontal ? { grid: { display: false } } : xAxis(canvas, labels);
+    const tipLabel = (ctx) => {
+      const v = horizontal ? ctx.parsed.x : ctx.parsed.y;
+      if (v == null) return null;
+      if (!line) return valueFmt(v);
+      const f = (ctx.dataset.type === 'line' && typeof line.valueFmt === 'function') ? line.valueFmt : valueFmt;
+      return ctx.dataset.label + ': ' + f(v);
+    };
+    const barSet = () => ({
+      type: 'bar',
+      label: opts.label || 'Value',
+      data,
+      backgroundColor: col + 'cc',
+      borderColor: col,
+      borderWidth: 1,
+      borderRadius: 4,
+      maxBarThickness: 48,
+      order: 2
+    });
+    const lineSet = () => {
+      const ink = textToken('--text-dim', '#9aa4b2');
+      return {
+        type: 'line',
+        label: line.label || 'Reference',
+        data: lineData,
+        borderColor: ink,
+        backgroundColor: ink,
+        borderWidth: 2,
+        borderDash: [6, 4],
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        tension: 0,
+        spanGaps: false,
+        fill: false,
+        order: 1
+      };
+    };
+    const datasets = () => line ? [barSet(), lineSet()] : [barSet()];
+    // With a reference line, one hover reads both values for the column; without one, keep
+    // Chart.js' default (hover the bar itself) so existing bar charts behave as before.
+    const interaction = () => line ? { intersect: false, mode: 'index' } : { intersect: true, mode: 'nearest' };
 
     if (_charts[canvasId]) {
       const ch = _charts[canvasId];
       ch.data.labels = labels;
-      ch.data.datasets[0].data = data;
+      ch.data.datasets = datasets();
       // Tooltip + value axis must be rebuilt too: a range switch can change both the formatter
       // and the magnitude, and the old closures would keep formatting the previous window.
-      ch.options.plugins.tooltip.callbacks.label = (ctx) => valueFmt(horizontal ? ctx.parsed.x : ctx.parsed.y);
+      ch.options.plugins.tooltip.callbacks.label = tipLabel;
+      ch.options.plugins.legend.display = !!line;
+      ch.options.interaction = interaction();
       ch.options.scales.x = horizontal ? valueScale() : catScale();
       ch.options.scales.y = horizontal ? catScale() : valueScale();
       ch.update('none');
@@ -291,25 +349,15 @@
 
     _charts[canvasId] = new global.Chart(canvas.getContext('2d'), {
       type: 'bar',
-      data: {
-        labels,
-        datasets: [{
-          label: opts.label || 'Value',
-          data,
-          backgroundColor: col + 'cc',
-          borderColor: col,
-          borderWidth: 1,
-          borderRadius: 4,
-          maxBarThickness: 48
-        }]
-      },
+      data: { labels, datasets: datasets() },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         indexAxis: horizontal ? 'y' : 'x',
+        interaction: interaction(),
         plugins: {
-          legend: { display: false },
-          tooltip: { callbacks: { label: (ctx) => valueFmt(horizontal ? ctx.parsed.x : ctx.parsed.y) } }
+          legend: { display: !!line, position: 'bottom', labels: { boxWidth: 12, padding: 12 } },
+          tooltip: { callbacks: { label: tipLabel } }
         },
         scales: horizontal
           ? { x: valueScale(), y: catScale() }

@@ -556,6 +556,7 @@ async function main() {
           classList: { _s: new Set(), add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); }, toggle(c, on) { if (on === undefined ? !this._s.has(c) : on) this._s.add(c); else this._s.delete(c); }, contains(c) { return this._s.has(c); } },
           get textContent() { return this._text; }, set textContent(v) { this._text = String(v); this.children = []; },
           get firstChild() { return this.children[0] || null; },
+          get id() { return this.attributes.id || ''; },   // reflected, as in a browser (field() reads inp.id)
           setAttribute(k, v) { this.attributes[k] = String(v); }, getAttribute(k) { return k in this.attributes ? this.attributes[k] : null; },
           addEventListener(t, fn) { (L[t] = L[t] || []).push(fn); }, _fire(t, ev) { (L[t] || []).forEach((fn) => fn(ev || { type: t, preventDefault() {} })); },
           appendChild(c) { if (c.parentNode) c.parentNode.removeChild(c); c.parentNode = this; this.children.push(c); return c; },
@@ -677,6 +678,23 @@ async function main() {
     const bodyP = row && row.children.find((c) => c.className === 'play-chat-body');
     ok('render: a body with markup is a text node in a <p> (textContent), never parsed',
       !!bodyP && bodyP.textContent === '<img src=x onerror=alert(1)>' && bodyP.children.length === 0);
+
+    // 5b. Every <label for=X> names an element that IS in the bubble. The Miner sign-in's proof
+    // box was once built into a row, moved out by field(), then swapped for that row — detached,
+    // so the Miner tab showed a label and a lone "Show" button and could never sign in.
+    b = await runBubble({});
+    const walk = (n, out = []) => { out.push(n); n.children.forEach((c) => walk(c, out)); return out; };
+    const nodes = walk(b.root);
+    const ids = new Set(nodes.map((n) => n.attributes.id).filter(Boolean));
+    const labels = nodes.filter((n) => n.tagName === 'LABEL' && n.attributes.for);
+    const orphans = labels.map((n) => n.attributes.for).filter((f) => !ids.has(f));
+    ok('dom: every <label for> points at an element in the bubble (non-vacuous: ≥ 5 labels)',
+      labels.length >= 5 && orphans.length === 0, `labels=${labels.length} orphans=${orphans.join(',')}`);
+    const miner = nodes.find((n) => n.attributes.id === 'gcb-pane-miner');
+    const minerIds = miner ? walk(miner).map((n) => n.attributes.id) : [];
+    ok('dom: the Miner pane holds both inputs (address + proof) and the Show toggle',
+      minerIds.includes('gcb-m-address') && minerIds.includes('gcb-m-proof') &&
+      walk(miner).some((n) => n.attributes['aria-controls'] === 'gcb-m-proof'), minerIds.join(','));
 
     // 6. Storage that throws: the bubble still works, as "not set".
     const throwing = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); }, removeItem() { throw new Error('denied'); } };

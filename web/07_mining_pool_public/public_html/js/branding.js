@@ -930,24 +930,28 @@
   }
 
   function loadGa4(id) {
-    // The id is spliced into the init script's TEXT, so the pattern is what keeps it data:
-    // the old `id.replace(/'/g, '')` left a trailing backslash free to escape the closing
-    // quote. Letters, digits and one hyphen cannot break out of a string literal.
+    // The pattern gates the id before it reaches the loader URL or GA's config. (It used to be
+    // spliced into an inline init script's TEXT, where the old `id.replace(/'/g, '')` left a
+    // trailing backslash free to escape the closing quote — keep the check strict anyway.)
     if (typeof id !== 'string' || !GA_ID_RE.test(id)) return;
     var s = document.createElement('script');
     s.async = true;
     s.src = 'https://www.googletagmanager.com/gtag/js?id=' + encodeURIComponent(id);
     head().appendChild(s);
-    var init = document.createElement('script');
+    // GA's init snippet, run here as direct JS rather than injected as an inline <script>: a
+    // strict script-src (no 'unsafe-inline') blocks the inline form, which silently killed GA.
+    // Same globals, same pushes, same order. gtag MUST push its `arguments` object — gtag.js
+    // acts only on Arguments entries, not arrays — so never turn it into an arrow or ...rest.
     // page_location AND page_referrer pinned to scrubbed URLs so the initial page_view (and
     // every event that inherits the config default) never carries a miner's address to GA4 —
     // neither as the page you are on nor as the page you came from.
-    init.textContent =
-      'window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}' +
-      "gtag('js',new Date());gtag('config','" + id +
-      "',{page_location:" + JSON.stringify(scrubbedLocation()) +
-      ",page_referrer:" + JSON.stringify(scrubbedReferrer()) + "});";
-    head().appendChild(init);
+    window.dataLayer = window.dataLayer || [];
+    window.gtag = function gtag() { window.dataLayer.push(arguments); };
+    window.gtag('js', new Date());
+    window.gtag('config', id, {
+      page_location: scrubbedLocation(),
+      page_referrer: scrubbedReferrer(),
+    });
   }
 
   function loadPlausible(a) {

@@ -101,8 +101,8 @@
         </div>
 
         <div class="form-actions">
-          <button class="btn btn-primary" onclick="saveSection('analytics')">Save Changes</button>
-          <button class="btn btn-secondary" onclick="restoreSection('analytics')">Restore Defaults</button>
+          <button class="btn btn-primary" data-action="save-section" data-section="analytics">Save Changes</button>
+          <button class="btn btn-secondary" data-action="restore-section" data-section="analytics">Restore Defaults</button>
         </div>
       </div>
     </div>
@@ -113,7 +113,6 @@
   <script src="/js/api.js"></script>
   <script src="/js/stepup.js"></script>
   <script src="/admin/admin-shell.js"></script>
-  <script>window.SETTINGS_SECTION = "analytics";</script>
-  <script src="/admin/settings-common.js"></script>
+  <script src="/admin/settings-common.js" data-section="analytics"></script>
 </body>
 </html>

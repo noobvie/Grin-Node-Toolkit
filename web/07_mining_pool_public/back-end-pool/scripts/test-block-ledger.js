@@ -385,6 +385,53 @@ const detector = new OrphanDetector(config, node);
      aborted.orphaned === 0 &&
      db.prepare("SELECT COUNT(*) AS c FROM blocks WHERE status='orphaned'").get().c === 0);
 
+  // ═══ 10. blocks.html — expected blocks (P-02) + UTC weekday×hour heatmap ═══
+  console.log('\n[10] getBlocksHistory — expected blocks per period and the UTC hour grid');
+
+  // Earlier sections' blocks carry reward/ledger rows (FK), so move them out of the window
+  // rather than deleting them.
+  db.prepare('UPDATE blocks SET found_at = found_at - 400 * 86400').run();
+  db.prepare('DELETE FROM pool_metrics_hourly').run();
+  const DAY = 86400, HR = 3600;
+  const D = Math.floor((Math.floor(Date.now() / 1000) - 5 * DAY) / DAY) * DAY; // a whole UTC day, in the month window
+  const putHour = db.prepare('INSERT INTO pool_metrics_hourly (bucket_start, pool_hashrate_gps, network_hashrate_gps) VALUES (?, ?, ?)');
+  for (let h = 0; h < 24; h++) {
+    putHour.run(D + h * HR, 10, h === 3 ? null : 1000); // share 1% → 0.6 blocks/hour; hour 3 has no sample
+    putHour.run(D - DAY + h * HR, 10, null);            // a day with NO network sample at all
+    putHour.run(D - 2 * DAY + h * HR, 0, 1000);         // a day the pool had no hashrate
+  }
+  putHour.run(D - 40 * DAY, 10, 1000);                   // outside the month window
+  db.prepare("INSERT INTO miner_accounts (grin_address, balance) VALUES ('grin1heat', 0)").run();
+  const putBlock = db.prepare(`INSERT INTO blocks (height, hash, nonce, reward, status, found_by, found_at)
+                               VALUES (?, ?, '1', 60, ?, 'grin1heat', ?)`);
+  putBlock.run(1001, 'c1'.repeat(32), 'confirmed', D + 14 * HR + 60);
+  putBlock.run(1002, 'c2'.repeat(32), 'orphaned',  D + 14 * HR + 900);
+  putBlock.run(1003, 'c3'.repeat(32), 'immature',  D + 3 * HR + 5);
+
+  const hh = bm.getBlocksHistory('month');
+  const at = (t) => hh.points.find(p => p.t === t);
+  const wd = new Date(D * 1000).getUTCDay();
+  ok('expected sums share × 60 per hour, a missing sample borrowing the bucket mean',
+     at(D) && at(D).blocks === 3 && Math.abs(at(D).expected - 14.4) < 1e-9, JSON.stringify(at(D)));
+  ok('a bucket with no network sample of its own reports expected null, not 0',
+     at(D - DAY) && at(D - DAY).blocks === 0 && at(D - DAY).expected === null, JSON.stringify(at(D - DAY)));
+  ok('a covered bucket with no finds is still a point (a zero column)',
+     at(D - 2 * DAY) && at(D - 2 * DAY).blocks === 0 && at(D - 2 * DAY).expected === 0, JSON.stringify(at(D - 2 * DAY)));
+  ok('rollup rows before the window are ignored', !at(Math.floor((D - 40 * DAY) / DAY) * DAY));
+  ok('points stay oldest → newest', hh.points.every((p, i, a) => i === 0 || a[i - 1].t < p.t));
+  ok('hour grid counts every status by UTC weekday × hour',
+     hh.hours.found[wd][14] === 2 && hh.hours.found[wd][3] === 1 &&
+     hh.hours.found.flat().reduce((a, b) => a + b, 0) === 3, JSON.stringify(hh.hours.found[wd]));
+  ok('hour grid expected uses the same borrowing, and skips sample-less buckets',
+     Math.abs(hh.hours.expected[wd][3] - 0.6) < 1e-9 && hh.hours.expected_hours === 48,
+     JSON.stringify({ e3: hh.hours.expected[wd][3], n: hh.hours.expected_hours }));
+  db.prepare('DELETE FROM pool_metrics_hourly').run();
+  const bare = bm.getBlocksHistory('month');
+  ok('no rollup rows: expected is null everywhere, found blocks still bucketed',
+     bare.hours.expected === null && bare.points.length === 1 && bare.points[0].blocks === 3 &&
+     bare.points[0].expected === null,
+     JSON.stringify(bare.points));
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   cleanup();
   process.exit(fail === 0 ? 0 : 1);

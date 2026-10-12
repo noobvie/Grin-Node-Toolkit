@@ -22,8 +22,8 @@
           <h3 class="section-title">Logo & Icons</h3>
           <div class="form-group">
             <label>Pool Logo</label>
-            <div class="file-upload" onclick="document.getElementById('logo-input').click()">
-              <input type="file" id="logo-input" class="settings-skip" accept="image/*" onchange="uploadAsset('logo')">
+            <div class="file-upload" data-action="pick-file" data-target="logo-input">
+              <input type="file" id="logo-input" class="settings-skip" accept="image/*" data-action="upload-asset" data-asset="logo">
               <p>Click to upload logo (SVG, PNG, or GIF)</p>
               <div class="current-asset" id="logo-current"></div>
             </div>
@@ -32,8 +32,8 @@
 
           <div class="form-group">
             <label>Logo (Light Theme variant)</label>
-            <div class="file-upload" onclick="document.getElementById('logo_dark-input').click()">
-              <input type="file" id="logo_dark-input" class="settings-skip" accept="image/*" onchange="uploadAsset('logo_dark')">
+            <div class="file-upload" data-action="pick-file" data-target="logo_dark-input">
+              <input type="file" id="logo_dark-input" class="settings-skip" accept="image/*" data-action="upload-asset" data-asset="logo_dark">
               <p>Optional alternate logo for light backgrounds</p>
               <div class="current-asset" id="logo_dark-current"></div>
             </div>
@@ -42,8 +42,8 @@
 
           <div class="form-group">
             <label>Favicon</label>
-            <div class="file-upload" onclick="document.getElementById('favicon-input').click()">
-              <input type="file" id="favicon-input" class="settings-skip" accept="image/*" onchange="uploadAsset('favicon')">
+            <div class="file-upload" data-action="pick-file" data-target="favicon-input">
+              <input type="file" id="favicon-input" class="settings-skip" accept="image/*" data-action="upload-asset" data-asset="favicon">
               <p>Click to upload favicon (32x32)</p>
               <div class="current-asset" id="favicon-current"></div>
             </div>
@@ -62,8 +62,8 @@
           <div class="form-row">
             <div class="form-group">
               <label>Icon 192×192 (PNG)</label>
-              <div class="file-upload" onclick="document.getElementById('icon_192-input').click()">
-                <input type="file" id="icon_192-input" class="settings-skip" accept="image/png" onchange="uploadAsset('icon_192')">
+              <div class="file-upload" data-action="pick-file" data-target="icon_192-input">
+                <input type="file" id="icon_192-input" class="settings-skip" accept="image/png" data-action="upload-asset" data-asset="icon_192">
                 <p>Click to upload 192×192</p>
                 <div class="current-asset" id="icon_192-current"></div>
               </div>
@@ -71,8 +71,8 @@
             </div>
             <div class="form-group">
               <label>Icon 512×512 (PNG)</label>
-              <div class="file-upload" onclick="document.getElementById('icon_512-input').click()">
-                <input type="file" id="icon_512-input" class="settings-skip" accept="image/png" onchange="uploadAsset('icon_512')">
+              <div class="file-upload" data-action="pick-file" data-target="icon_512-input">
+                <input type="file" id="icon_512-input" class="settings-skip" accept="image/png" data-action="upload-asset" data-asset="icon_512">
                 <p>Click to upload 512×512</p>
                 <div class="current-asset" id="icon_512-current"></div>
               </div>
@@ -82,8 +82,8 @@
 
           <div class="form-group">
             <label>Apple Touch Icon (180×180 PNG)</label>
-            <div class="file-upload" onclick="document.getElementById('apple_touch_icon-input').click()">
-              <input type="file" id="apple_touch_icon-input" class="settings-skip" accept="image/png" onchange="uploadAsset('apple_touch_icon')">
+            <div class="file-upload" data-action="pick-file" data-target="apple_touch_icon-input">
+              <input type="file" id="apple_touch_icon-input" class="settings-skip" accept="image/png" data-action="upload-asset" data-asset="apple_touch_icon">
               <p>Click to upload Apple touch icon</p>
               <div class="current-asset" id="apple_touch_icon-current"></div>
             </div>
@@ -240,8 +240,8 @@
         </div>
 
         <div class="form-actions">
-          <button class="btn btn-primary" onclick="saveSection('branding')">Save Changes</button>
-          <button class="btn btn-secondary" onclick="restoreSection('branding')">Restore Defaults</button>
+          <button class="btn btn-primary" data-action="save-section" data-section="branding">Save Changes</button>
+          <button class="btn btn-secondary" data-action="restore-section" data-section="branding">Restore Defaults</button>
         </div>
       </div>
     </div>
@@ -252,34 +252,7 @@
   <script src="/js/api.js"></script>
   <script src="/js/stepup.js"></script>
   <script src="/admin/admin-shell.js"></script>
-  <script>window.SETTINGS_SECTION = "branding";</script>
-  <script src="/admin/settings-common.js"></script>
-  <script>
-    // Testnet pools always link to test.grinscan.org (the only explorer with a usable testnet),
-    // so the mainnet choice is greyed out there. Disabling is safe for the Branding save: the
-    // harvester still sends the select, but its value is the stored one (already a valid enum),
-    // or '' when the stored value matches no option — and an empty scalar is dropped, never
-    // saved. The network comes from admin-shell's /api/pool/stats fetch: read the attribute if
-    // it has already landed, otherwise wait for its event.
-    (function () {
-      var sel = document.getElementById('explorer_mainnet');
-      var help = document.getElementById('explorer-help');
-      if (!sel || !help) return;
-      function applyNetwork(net) {
-        if (net !== 'testnet' || sel.disabled) return;
-        sel.disabled = true;
-        sel.style.opacity = '.55';
-        sel.style.cursor = 'not-allowed';
-        help.className = 'warn-msg';
-        help.textContent = '';
-        var b = document.createElement('b');
-        b.textContent = 'Testnet pool:';
-        help.appendChild(b);
-        help.appendChild(document.createTextNode(' every link opens test.grinscan.org — this choice only applies to mainnet pools.'));
-      }
-      applyNetwork(document.documentElement.getAttribute('data-pool-network'));
-      document.addEventListener('admin:pool-network', function (e) { applyNetwork(e.detail && e.detail.network); });
-    })();
-  </script>
+  <script src="/admin/settings-common.js" data-section="branding"></script>
+  <script src="/admin/js/settings-branding.js"></script>
 </body>
 </html>

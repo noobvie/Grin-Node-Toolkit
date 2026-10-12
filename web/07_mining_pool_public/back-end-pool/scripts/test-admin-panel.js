@@ -13,10 +13,26 @@
 // Run: node scripts/test-admin-panel.js
 const fs = require('fs');
 const path = require('path');
+const { readAppSource } = require('./lib/app-source');
+const { readPageSource } = require('./lib/page-source');
 
 const PANEL = path.resolve(__dirname, '../admin-panel');
-const read = (f) => fs.readFileSync(path.join(PANEL, f), 'utf8');
-const panelFiles = () => fs.readdirSync(PANEL).filter((f) => /\.(html|js)$/.test(f));
+// A page is read WITH its extracted page script (readPageSource), so these assertions keep seeing
+// the page's code after it moves out of the inline <script> into admin-panel/js/.
+const read = (f) => (/\.html$/.test(f) ? readPageSource(path.join(PANEL, f)) : fs.readFileSync(path.join(PANEL, f), 'utf8'));
+// Top level first (the NAV-order assertions index into it), then admin-panel/js/** as 'js/x.js'.
+const panelFiles = () => {
+  const top = fs.readdirSync(PANEL).filter((f) => /\.(html|js)$/.test(f));
+  const nested = [];
+  const walk = (d, rel) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      if (e.isDirectory()) walk(path.join(d, e.name), `${rel}${e.name}/`);
+      else if (rel && e.name.endsWith('.js')) nested.push(rel + e.name);
+    }
+  };
+  for (const e of fs.readdirSync(PANEL, { withFileTypes: true })) if (e.isDirectory()) walk(path.join(PANEL, e.name), `${e.name}/`);
+  return top.concat(nested.sort());
+};
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => {
@@ -40,7 +56,7 @@ console.log('\n[1] §J14-1 — blocks.html and the paid state');
   ok('a filter chip exists for it — Confirmed alone hides the pool’s own history',
      /data-filter="paid"/.test(blocks));
 
-  const idx = fs.readFileSync(path.resolve(__dirname, '../index.js'), 'utf8');
+  const idx = readAppSource();
   ok('GET /api/admin/blocks computes blocks_to_maturity = 0 for paid too',
      /blocks_to_maturity = \(b\.status === 'confirmed' \|\| b\.status === 'paid' \|\| b\.status === 'orphaned'\)/.test(idx));
 }
@@ -110,9 +126,12 @@ console.log('\n[3] §J14-3 — the on*="fn(...)" double-decode trap');
   ok('control — the sweep detects the pattern it is looking for',
      new RegExp(RE.source, 'i').test(probe));
   ok('the row buttons pass their value via this.dataset instead',
-     /onclick="banMiner\(this\.dataset\.addr\)"/.test(read('miners.html')) &&
-     /onclick="clearBan\(this\.dataset\.ip\)"/.test(read('users.html')) &&
-     /onclick="showPairing\(this\.dataset\.region\)"/.test(read('regions.html')));
+     /data-addr="\$\{addr\}" data-action="ban-miner"/.test(read('miners.html')) &&
+     /case 'ban-miner':\s+banMiner\(el\.dataset\.addr\)/.test(read('miners.html')) &&
+     /data-ip="\$\{escHtml\([a-z]+\.ip\)\}"\s+data-action="clear-ban"/.test(read('users.html')) &&
+     /case 'clear-ban':\s+clearBan\(el\.dataset\.ip\)/.test(read('users.html')) &&
+     /data-region="\$\{escHtml\(r\.region\)\}" data-action="show-pairing"/.test(read('regions.html')) &&
+     /case 'show-pairing':\s+showPairing\(el\.dataset\.region\)/.test(read('regions.html')));
 }
 
 // ── §J14-6 / §J14-7 — a refused settings save must say why ───────────────────────────────
@@ -181,8 +200,11 @@ console.log('\n[7] §J14-4 — the admin panel gets its own CSP');
      /connect-src 'self';/.test(adminCsp));
   ok('the admin CSP allowlists no third-party origin at all',
      !!adminCsp && !/https:\/\//.test(adminCsp));
-  ok('it still permits inline script (the panel IS inline blocks) and data: images (2FA QR)',
-     /script-src 'self' 'unsafe-inline';/.test(adminCsp) && /img-src 'self' data:/.test(adminCsp));
+  // Code-layout F7 (2026-10-12): every admin page script is an external /admin/js/<page>.js, so
+  // script-src is exactly 'self' — inline script is blocked. data: images stay (2FA QR).
+  ok("it allows no inline script (script-src 'self' only) and keeps data: images (2FA QR)",
+     /script-src 'self';/.test(adminCsp) && !/script-src[^;]*'unsafe-(inline|eval)'/.test(adminCsp) &&
+     /img-src 'self' data:/.test(adminCsp));
   // design §18.11 Part 3 #1: the Donors queue loads banners from a plain same-origin src, so
   // img-src stays exactly 'self' data: — no blob:, which would let a preview escape the image
   // route's sandbox headers.
@@ -273,7 +295,7 @@ console.log('\n[8b] D22 — ads.html offers no code ad; a legacy one is delete-o
   ok('the Type field says why code ads went', /Code-snippet ads were removed for security — design §19\.17 D22/.test(ads));
   ok('a removed row shows "Unsupported (removed)"', /if \(a\.removed\) return \['Unsupported \(removed\)'/.test(ads));
   ok('a removed row renders only Delete (edit/duplicate/toggle are skipped)',
-     /\$\{a\.removed \? '' : `<button class="btn-icon" onclick="editAd/.test(ads) &&
+     /\$\{a\.removed \? '' : `<button class="btn-icon" data-action="edit-ad"/.test(ads) &&
      /if \(!a \|\| a\.removed\) return;[\s\S]*if \(!a \|\| a\.removed\) return;/.test(ads));
 
   const an = read('settings-analytics.html');
@@ -359,10 +381,11 @@ console.log('\n[9] §18.6 — donors.html');
   // helper for step-up-gated writes (adminFetch handles the freshAdmin challenge; a bare
   // Auth.fetch would show "re-authentication required" with no way to complete it).
   ok('queue decisions pass the request id via this.dataset',
-     /onclick="approveRequest\(this\.dataset\.id\)"/.test(donors) && /onclick="rejectRequest\(this\.dataset\.id\)"/.test(donors));
+     /data-id="\$\{id\}" data-action="approve-request"/.test(donors) && /data-id="\$\{id\}" data-action="reject-request"/.test(donors) &&
+     /case 'approve-request':\s+approveRequest\(el\.dataset\.id\)/.test(donors) && /case 'reject-request':\s+rejectRequest\(el\.dataset\.id\)/.test(donors));
   ok('remove / block / unblock pass the address (and kind) via this.dataset',
-     /onclick="removeLive\(this\.dataset\.addr, this\.dataset\.kind\)"/.test(donors) &&
-     /onclick="blockDonor\(this\.dataset\.addr\)"/.test(donors) && /onclick="unblockDonor\(this\.dataset\.addr\)"/.test(donors));
+     /data-kind="name" data-action="remove-live"/.test(donors) && /case 'remove-live':\s+removeLive\(el\.dataset\.addr, el\.dataset\.kind\)/.test(donors) &&
+     /case 'block-donor':\s+blockDonor\(el\.dataset\.addr\)/.test(donors) && /case 'unblock-donor':\s+unblockDonor\(el\.dataset\.addr\)/.test(donors));
   ok('every decision POST and the settings save go through adminFetch (step-up aware)',
      /async function postAction[\s\S]{0,120}adminFetch\(url,/.test(donors) &&
      /postAction\('\/api\/admin\/donors\/requests\/' \+ encodeURIComponent\(id\) \+ '\/approve'/.test(donors) &&
@@ -428,7 +451,7 @@ console.log('\n[9] §18.6 — donors.html');
   ok('C4: ban / unban go through postAction (adminFetch, step-up aware) and pass values via this.dataset',
      /postAction\('\/api\/admin\/donors\/banned-names', \{ name, reason \}/.test(donors) &&
      /postAction\('\/api\/admin\/donors\/banned-names\/' \+ encodeURIComponent\(norm\) \+ '\/unban'/.test(donors) &&
-     /onclick="banName\(this\.dataset\.name\)"/.test(donors) && /onclick="unbanName\(this\.dataset\.norm\)"/.test(donors));
+     /case 'ban-name':\s+banName\(el\.dataset\.name\)/.test(donors) && /case 'unban-name':\s+unbanName\(el\.dataset\.norm\)/.test(donors));
   ok('C4: the page points the operator at Settings → Names for the words', /href="settings-names\.html"/.test(donors));
   ok('C4: the names table headers change by textContent, never innerHTML',
      /document\.getElementById\('names-h' \+ \(i \+ 1\)\)\.textContent = t/.test(donors));
@@ -522,7 +545,7 @@ console.log('\n[11] one-attempt Tor payouts — Held, fail_detail, Re-check / fo
      redeclared.length === 0, '\n      ' + redeclared.join('\n      '));
   ok('control — the drift sweep detects a re-declared list',
      new RegExp(DRIFT.source).test("const inflightStatuses = ['tor_sending'];"));
-  ok('a Held filter chip exists', /data-filter="tor_held"[^>]*onclick="setFilter\('tor_held', this\)"/.test(pay));
+  ok('a Held filter chip exists', /data-filter="tor_held"[^>]*data-action="set-filter"/.test(pay));
   ok('the Retry button and its call are gone (the route answers 410)',
      !/retryWithdrawal/.test(pay) && !/\/retry'/.test(pay));
   const canCancel = (pay.match(/const canCancel = ([^;]+);/) || [])[1] || '';
@@ -556,7 +579,7 @@ console.log('\n[11] one-attempt Tor payouts — Held, fail_detail, Re-check / fo
   ok('…which reads GET /api/admin/miners/:addr', /API\.get\('\/api\/admin\/miners\/' \+ encodeURIComponent\(addr\)\)/.test(miners));
   ok('the pause is cleared through adminFetch (step-up) on POST …/tor-pause/clear',
      /adminFetch\('\/api\/admin\/miners\/' \+ encodeURIComponent\(addr\) \+ '\/tor-pause\/clear', \{ method: 'POST' \}\)/.test(miners) &&
-     /onclick="clearTorPause\(this\.dataset\.addr\)"/.test(miners));
+     /case 'clear-tor-pause':\s+clearTorPause\(el\.dataset\.addr\)/.test(miners));
   ok('the miner view shows paused_until in UTC', /paused_until/.test(miners) && /toISOString\(\)/.test(miners));
 }
 
@@ -564,7 +587,7 @@ console.log('\n[11] one-attempt Tor payouts — Held, fail_detail, Re-check / fo
 console.log('\n[12] miners.html — status + expandable rigs');
 {
   const miners = read('miners.html');
-  const script = (miners.match(/<script>\n([\s\S]*?)<\/script>/) || [])[1] || '';
+  const script = (miners.match(/<script>(?:\/\* ==== FILE:[^\n]*\*\/)?\n([\s\S]*?)<\/script>/) || [])[1] || '';
   const head = (miners.match(/<thead>([\s\S]*?)<\/thead>/) || [])[1] || '';
   ok('the Online column is gone — the status dot rides in the Miner cell',
      !/<th[^>]*>\s*Online\s*<\/th>/.test(head) && /class="mn-dot mn-st-\$\{st\}"/.test(script));
@@ -629,7 +652,7 @@ console.log('\n[13] games-events.html — the admin proxy, step-up and the nav')
   const exists = fs.existsSync(path.join(PANEL, 'games-events.html'));
   ok('games-events.html exists', exists);
   const page = exists ? read('games-events.html') : '';
-  const script = (page.match(/<script>\n([\s\S]*?)<\/script>/) || [])[1] || '';
+  const script = (page.match(/<script>(?:\/\* ==== FILE:[^\n]*\*\/)?\n([\s\S]*?)<\/script>/) || [])[1] || '';
   const code = script.replace(/\/\/[^\n]*/g, '');
   const shell = read('admin-shell.js');
   const navBlock = (shell.match(/var NAV = \[([\s\S]*?)\n  \];/) || [])[1] || '';
@@ -681,7 +704,7 @@ console.log('\n[14] games.html / games-chat.html / games-players.html — proxy,
     !/\b(innerHTML|outerHTML|insertAdjacentHTML)\b|document\.write/.test(helperCode) && /if \(text !== undefined && text !== null\) e\.textContent = String\(text\);/.test(helper));
   for (const p of pages) {
     const page = exist ? read(p) : '';
-    const script = (page.match(/<script>\n([\s\S]*?)<\/script>/) || [])[1] || '';
+    const script = (page.match(/<script>(?:\/\* ==== FILE:[^\n]*\*\/)?\n([\s\S]*?)<\/script>/) || [])[1] || '';
     const code = script.replace(/\/\/[^\n]*/g, '');
     ok(`${p}: loads stepup.js, admin-shell.js, then games-admin.js`,
       /<script src="\/js\/stepup\.js"><\/script>\s*<script src="\/admin\/admin-shell\.js"><\/script>\s*<script src="\/admin\/games-admin\.js"><\/script>/.test(page));
@@ -737,7 +760,7 @@ console.log('[15] games-names.html — the nickname queue: proxy, step-up, text-
   const exists = fs.existsSync(path.join(PANEL, 'games-names.html'));
   ok('games-names.html exists', exists);
   const page = exists ? read('games-names.html') : '';
-  const script = (page.match(/<script>\n([\s\S]*?)<\/script>/) || [])[1] || '';
+  const script = (page.match(/<script>(?:\/\* ==== FILE:[^\n]*\*\/)?\n([\s\S]*?)<\/script>/) || [])[1] || '';
   const code = script.replace(/\/\/[^\n]*/g, '');
   const shell = read('admin-shell.js');
   const navBlock = (shell.match(/var NAV = \[([\s\S]*?)\n  \];/) || [])[1] || '';

@@ -39,8 +39,8 @@ const day = (t) => Math.floor(t / 86400) * 86400;  // UTC-day align
 const H = day(NOW - 30 * 86400);                   // rollup horizon: 30 days back
 const round9 = (v) => parseFloat(Number(v).toFixed(9));
 
-// The 9+4 mask the route passes (index.js maskAddr) — re-derived, index.js cannot be required.
-const mask = (a) => { const s = String(a || ''); return s.length > 16 ? `${s.slice(0, 9)}…${s.slice(-4)}` : s; };
+// The 9+4 mask the route passes — the real one now that it lives in a lib (P10).
+const mask = require('../lib/http-util').maskAddr;
 const MASK_RE = /^grin1[a-z0-9]{4}…[a-z0-9]{4}$/;
 
 // ── fixtures ─────────────────────────────────────────────────────────────────────────────

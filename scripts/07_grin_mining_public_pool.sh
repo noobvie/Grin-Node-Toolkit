@@ -1129,6 +1129,22 @@ pool_setup_nginx() {
         return 1
     fi
 
+    # 1) Install does not install nginx or certbot, and Migrate IN's restore only drops files
+    # into /etc/nginx — so on a fresh/migrated box this step used to write the vhost and then
+    # die on `nginx: command not found`. Install both here, as Scripts 04/06 do.
+    if ! command -v nginx &>/dev/null || ! command -v certbot &>/dev/null; then
+        command -v nginx   &>/dev/null || warn "nginx is not installed."
+        command -v certbot &>/dev/null || warn "certbot is not installed."
+        echo -ne "Install the missing package(s) now? [Y/n]: "
+        local _yn; read -r _yn
+        [[ "${_yn,,}" == "n" ]] && { warn "nginx not configured — install nginx + certbot, then re-run 4) Setup nginx."; return 1; }
+        # A restored pool vhost still enabled from a Migrate IN archive would make the
+        # package's first `nginx` start fail (its cert is not here yet). This step rewrites
+        # and re-enables it below, so dropping the link first costs nothing.
+        rm -f "/etc/nginx/sites-enabled/$(basename "$POOL_NGINX_CONF")"
+        nginx_install_with_certbot || { error "nginx/certbot install failed — resolve the errors above and retry."; return 1; }
+    fi
+
     mkdir -p "$(dirname "$POOL_NGINX_CONF")"
 
     # Migrate a pre-rename install: the vhost was renamed to grin-public-pool-<net>

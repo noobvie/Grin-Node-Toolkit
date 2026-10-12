@@ -819,7 +819,8 @@ costs a wait)*
 *After*
 
 9. Admin → Regions: the new region active; the old one deactivated or re-pointed.
-10. Reconcile clean → **unfreeze in admin → Payouts** (IN never unfreezes) → one small payout per rail.
+10. Reconcile clean → check Tor's SOCKS port listens on the new box (IN's final screen warns if
+    not) → **unfreeze in admin → Payouts** (IN never unfreezes) → one small payout per rail.
 11. Copy the migration archive off-box first — the next `B → 3` daily backup **replaces** today's
     archive of the same name — then `B → 4 → 1` key, `B → 3` daily.
 12. Keep the old box dark ~7 days, then wipe it (seed + WG key). It may be rebuilt as the `nyc`
@@ -896,6 +897,24 @@ screen shows `weekly vacuum: on/off`; the rollback adds `c) Cron schedules → 2
 move completes) and `vacuumrun` (refused before OUT's own stop, cron already gone, frozen) —
 **8 of 10 new checks red on the old code, 17/17 after**, including the 7 original scenarios' call
 logs byte-identical to Part 3's (archive date normalised).
+
+#### Pre-move checks (2026-10-12, uncommitted, NOT VPS-tested)
+
+A pre-move review found five things the move depended on that nothing checked — each would have
+surfaced INSIDE the downtime window. All in `07_lib_pool_migrate.sh`:
+
+| Gap | Now |
+|---|---|
+| The pool script installs no nginx/certbot; IN warned and started a pool with no HTTPS (no admin panel to resume stratum from), and the moved cert never renewed | `_pmg_in_tool_checks` (step 1 + CHECK): nginx, certbot and its nginx plugin (`certbot plugins`) are ✗; no enabled `certbot.timer` / `certbot-renew.timer` / snap timer / `/etc/cron.d/certbot` warns. The final screen no longer claims renewal unless one is scheduled |
+| No Tor daemon → Tor payouts fail after the unfreeze | same function warns when nothing listens on `tor_socks_port` (default 9050); the final screen repeats it before "resume payouts" |
+| `wg-quick` absent → step 5 fails mid-move | warned in step 1; step 1b REFUSES (nothing changed) when the manifest names a WG iface |
+| A new region's connect host (seeded `cqf.<domain>`) may never have been created | CHECK reminds; step 4 resolves the row's host (`_pmg_dns_state`, `getent`) and says create it now; step 8 tags every record ✓ here / now `<ip>` / CREATE |
+| Same toolkit version on both boxes was unprovable (tarball-updated clones have a stale `git log`) | `_PMG_JS_CODE` hashes the deployed backend; OUT's intro and CHECK print the fingerprint, the manifest carries the per-file map, step 1b compares it — changed or only-here files stop it unless `PROCEED`; only-on-the-old-hub files are tarball leftovers and pass |
+
+Tested locally only: a Git-bash harness sourcing the real lib with stubs (fake PATH for
+nginx/certbot/wg, stubbed `getent`/`systemctl`/port probe, real `node:sqlite` for the manifest
+mode) — 23/23, including prototype-named keys in a hostile manifest and an empty app dir;
+`test-stratum-pause-restore.js` 30/30 unchanged. Nothing run on a VPS.
 
 ---
 

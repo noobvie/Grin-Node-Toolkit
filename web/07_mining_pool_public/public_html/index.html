@@ -369,13 +369,17 @@
                                 <li><b>Worker</b> — your Grin address; it <b>is</b> your login, no signup. Optionally
                                     add <code>.rig1</code> to name the machine (letters/digits/<code>-</code>/<code>_</code>, folded to lowercase,
                                     max 32 chars — longer names are trimmed, never rejected).</li>
-                                <li><b>Password</b> — <b>choose a PIN of 8 or more digits</b> you will remember
-                                    (not <code>12345678</code>, not one repeated digit, not the firmware default such as
-                                    <code>x</code> or <code>123</code>). It is your <b>ownership proof</b> on the account
-                                    page, and it stays readable in the rig&rsquo;s own panel, so you can always look it up.
-                                    Each rig under this address may have its own PIN — the pool keeps up to 10 and any of
-                                    them proves ownership, even after your IP changes; one PIN everywhere is just easier to remember. Plain letters work
-                                    too; avoid accented or non-Latin characters, which some firmware cannot send.</li>
+                                <!-- Shortened 2026-10-12 (operator request). The field is the rig's
+                                     "password"; a PIN is our ADVICE for it — the backend takes any 8+
+                                     printable-ASCII value (owner-proof.js PASS_MIN). Cut from here, all still
+                                     true: plain letters work too; avoid accented/non-Latin characters (some
+                                     firmware cannot send them — the account page names that reason when it
+                                     happens); any of the up-to-10 PINs proves ownership even after your IP
+                                     changes; one PIN everywhere is just easier to remember. -->
+                                <li><b>Password</b> — a <b>PIN of 8+ digits</b> (not <code>12345678</code>, one repeated
+                                    digit, or a default like <code>x</code>). It is your <b>ownership proof</b> on the
+                                    account page and stays readable in the rig&rsquo;s panel. Each rig may have its own
+                                    (up to 10).</li>
                             </ol>
                             <!-- Also unnumbered: this happens after the form is filled in. -->
                             <p class="mguide-note mguide-span">Optionally point <b>Pool 2 / Pool 3</b> at other green

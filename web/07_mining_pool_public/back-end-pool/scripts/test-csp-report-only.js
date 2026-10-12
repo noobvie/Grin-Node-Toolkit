@@ -1,26 +1,23 @@
 #!/usr/bin/env node
-// CSP Report-Only twins (code-layout refactor F6, plan tool T6).
+// Strict page CSPs (code-layout refactor: F6 added Report-Only twins, F7 flipped, plan tool T6).
 //
-// Every PAGE policy ships a second header, Content-Security-Policy-Report-Only, that is the
-// enforcing policy with exactly one token removed: 'unsafe-inline' from script-src. Browsers
-// then log to the console whatever the strict policy WOULD block, and block nothing. Three
-// page policies exist — Express (index.js), the nginx public page snippet, the nginx admin
-// snippet — and each twin is a hand-written copy of a long line, so the thing that goes wrong
-// is drift: a host added to one line and not the other turns the Report-Only run into a
-// report about the wrong policy. This test derives the expected twin from the enforcing line
-// and compares directive by directive.
+// Three PAGE policies exist — Express (index.js), the nginx public page snippet, the nginx admin
+// snippet. Since F7 (2026-10-12) each ENFORCES a script-src with no 'unsafe-inline' and no
+// 'unsafe-eval': pages carry no inline <script> and no on*= handler. Until then each shipped a
+// Content-Security-Policy-Report-Only twin (the same policy minus 'unsafe-inline' in script-src)
+// so a browse of every page could show what the strict policy WOULD block; the flip went in only
+// after that browse logged nothing. The twins are gone, and [1]–[4] now fail if one comes back.
 //
-// Also pinned: no report-uri / report-to (the console is the report — no new endpoint), the
-// two /uploads/ + /custom/ sandbox CSPs are untouched and carry no twin, and the enforcing
-// policies still allow inline script — the strict flip (F7) is a separate, reviewed commit
-// that rewrites the last group of assertions.
+// Also pinned: no report-uri / report-to (no reporting endpoint exists), style-src still allows
+// inline style (out of the flip's scope), and the /uploads/ + /custom/ + donor-banner sandbox
+// CSPs are untouched.
 //
-// [5] (R3): the two app-rendered pages (/blog/<slug>, /page.html) must hide the app's own CSP
-// pair at nginx, or the browser enforces both policies there and reports what neither page loads.
+// [5] (R3): the two app-rendered pages (/blog/<slug>, /page.html) must hide the app's own CSP at
+// nginx, or the browser enforces both policies there (the app's has no analytics or font host).
+// The Report-Only hide stays too: harmless now, and it covers an old app behind a new vhost.
 //
-// [6] (R3 L9 C10): the three ENFORCING page policies are pinned as literal strings. [1]–[3]
-// derive each twin from its enforcing line, so a change made to both lines at once passed
-// unseen; now any edit to an enforcing policy — the F7 flip included — is a reviewed test diff.
+// [6] (R3 L9 C10): the three ENFORCING page policies are pinned as literal strings, so any edit
+// to one — a host added, a directive dropped, 'unsafe-inline' put back — is a reviewed test diff.
 // [7] (R3 L9 C4): nginx add_header inheritance, mechanically. Every block of the pool vhost
 // (shell fragments expanded the way bash expands them) that declares an add_header of its own
 // must re-include a header snippet, and every :443 server must include one at server level.
@@ -45,52 +42,38 @@ const vhostSrc = fs.readFileSync(VHOST, 'utf8');
 function directives(policy) {
   return policy.split(';').map((d) => d.trim()).filter(Boolean).map((d) => d.split(/\s+/));
 }
-// The one sanctioned difference: script-src without 'unsafe-inline'. Everything else identical.
-function strictTwin(policy) {
-  return directives(policy).map((d) =>
-    (d[0] === 'script-src' ? d.filter((t) => t !== "'unsafe-inline'") : d));
-}
 const srcOf = (dirs, name) => (dirs.find((d) => d[0] === name) || []).slice(1);
 
-function checkPair(label, enforcing, reportOnly) {
-  ok(`${label}: enforcing policy found`, enforcing.length === 1, `found ${enforcing.length}`);
-  ok(`${label}: exactly one Report-Only twin`, reportOnly.length === 1, `found ${reportOnly.length}`);
-  if (enforcing.length !== 1 || reportOnly.length !== 1) return;
-  const want = strictTwin(enforcing[0]);
-  const got = directives(reportOnly[0]);
-  ok(`${label}: twin == enforcing minus 'unsafe-inline' in script-src, directive by directive`,
-    JSON.stringify(got) === JSON.stringify(want),
-    `\n      want ${JSON.stringify(want)}\n      got  ${JSON.stringify(got)}`);
-  ok(`${label}: twin script-src has no 'unsafe-inline' (and no 'unsafe-eval')`,
-    srcOf(got, 'script-src').length > 0 &&
-    !srcOf(got, 'script-src').some((t) => t === "'unsafe-inline'" || t === "'unsafe-eval'"));
-  ok(`${label}: twin style-src still allows inline style (out of scope — not part of the flip)`,
-    srcOf(got, 'style-src').includes("'unsafe-inline'"));
-  // Non-vacuity: the enforcing side really is the permissive one today.
-  ok(`${label}: enforcing script-src still has 'unsafe-inline' (F7 flips it, not F6)`,
-    srcOf(directives(enforcing[0]), 'script-src').includes("'unsafe-inline'"));
+function checkStrict(label, enforcing, reportOnly) {
+  ok(`${label}: exactly one enforcing policy`, enforcing.length === 1, `found ${enforcing.length}`);
+  ok(`${label}: no Report-Only policy (the F6 twin is gone since the F7 flip)`, reportOnly.length === 0,
+    `found ${reportOnly.length}`);
+  if (enforcing.length !== 1) return;
+  const dirs = directives(enforcing[0]);
+  ok(`${label}: enforcing script-src has neither 'unsafe-inline' nor 'unsafe-eval'`,
+    srcOf(dirs, 'script-src').length > 0 &&
+    !srcOf(dirs, 'script-src').some((t) => t === "'unsafe-inline'" || t === "'unsafe-eval'"),
+    JSON.stringify(srcOf(dirs, 'script-src')));
+  ok(`${label}: style-src still allows inline style (out of scope — not part of the flip)`,
+    srcOf(dirs, 'style-src').includes("'unsafe-inline'"));
 }
 
 console.log('\n[1] Express (index.js) security-header middleware');
 {
   const enf = [...indexSrc.matchAll(/res\.setHeader\('Content-Security-Policy', "([^"]+)"\)/g)].map((m) => m[1]);
   const ro = [...indexSrc.matchAll(/res\.setHeader\('Content-Security-Policy-Report-Only', "([^"]+)"\)/g)].map((m) => m[1]);
-  checkPair('Express', enf, ro);
-  // Both set in the SAME middleware, adjacent, unconditionally — a twin set somewhere else, or
-  // under an `if`, could run on a different set of responses (R3 L9 C8: the old substring check
-  // could not see a condition on the same line or an `if (…) {` wrapping only one of them).
+  checkStrict('Express', enf, ro);
+  // Set in the SAME middleware as X-Frame-Options, unconditionally — a CSP under an `if` could
+  // miss a set of responses (R3 L9 C8: a substring check cannot see a condition on the same
+  // line or an `if (…) {` wrapping only one of them).
   const lines = indexSrc.split('\n');
   const li = lines.findIndex((l) => l.includes("res.setHeader('Content-Security-Policy',"));
-  const lj = lines.findIndex((l) => l.includes("res.setHeader('Content-Security-Policy-Report-Only',"));
   const lx = lines.findIndex((l) => l.includes("res.setHeader('X-Frame-Options',"));
   // The indent of a line that is NOTHING but a setHeader statement; null for anything else.
   const bareIndent = (n) => (n < 0 ? null : (lines[n].match(/^(\s*)res\.setHeader\(.*\);\s*$/) || [null, null])[1]);
-  ok('Express: X-Frame-Options, the enforcing CSP and its twin are bare statements at ONE indent (no condition on any)',
-    li > lx && lx >= 0 && lj > li && bareIndent(lx) !== null &&
-    bareIndent(li) === bareIndent(lx) && bareIndent(lj) === bareIndent(lx),
-    `lines ${lx + 1}/${li + 1}/${lj + 1}`);
-  ok('Express: only comment lines between the enforcing header and its twin',
-    li >= 0 && lj > li && lines.slice(li + 1, lj).every((l) => /^\s*\/\//.test(l)));
+  ok('Express: X-Frame-Options and the enforcing CSP are bare statements at ONE indent (no condition on either)',
+    li > lx && lx >= 0 && bareIndent(lx) !== null && bareIndent(li) === bareIndent(lx),
+    `lines ${lx + 1}/${li + 1}`);
 }
 
 // The nginx snippets are heredocs in pool_setup_nginx; cut each one by its header comment.
@@ -102,29 +85,27 @@ console.log('\n[2] nginx public page snippet ($hdr_page)');
 {
   const page = snippet(/# Common headers \+ the page CSP[\s\S]*?\nHDREOF/);
   ok('page snippet located', page.length > 0);
-  checkPair('nginx page', nginxPolicies(page, 'Content-Security-Policy'),
+  checkStrict('nginx page', nginxPolicies(page, 'Content-Security-Policy'),
     nginxPolicies(page, 'Content-Security-Policy-Report-Only'));
-  // The ${probe_csp} expansion must be in BOTH, or the connect page's gateway pings would
-  // report as violations that the enforcing policy allows.
-  ok('nginx page: both lines carry the ${probe_csp} connect-src expansion',
-    (page.match(/'self'\$\{probe_csp\}/g) || []).length === 2);
+  // The ${probe_csp} expansion: without it the connect page's gateway pings are blocked.
+  ok('nginx page: the policy carries the ${probe_csp} connect-src expansion',
+    (page.match(/'self'\$\{probe_csp\}/g) || []).length === 1);
 }
 
 console.log('\n[3] nginx admin snippet ($hdr_admin)');
 {
   const admin = snippet(/# Common headers \+ the ADMIN CSP[\s\S]*?\nHDREOF/);
   ok('admin snippet located', admin.length > 0);
-  checkPair('nginx admin', nginxPolicies(admin, 'Content-Security-Policy'),
+  checkStrict('nginx admin', nginxPolicies(admin, 'Content-Security-Policy'),
     nginxPolicies(admin, 'Content-Security-Policy-Report-Only'));
 }
 
-console.log('\n[4] scope — where the twin must NOT be');
+console.log('\n[4] scope — no Report-Only anywhere, sandbox CSPs untouched');
 {
-  // Only the two snippets emit it. A location that set its own copy would be a third policy
-  // to keep in sync, and nginx add_header inheritance is handled by the snippet includes.
+  // The F6 twins lived in the two snippets; F7 deleted both. A Report-Only header set anywhere in
+  // the vhost now is a policy nobody reads (no endpoint, and the console is not watched).
   const roLines = vhostSrc.split('\n').filter((l) => /add_header Content-Security-Policy-Report-Only/.test(l));
-  ok('vhost: exactly two Report-Only add_header lines (page + admin snippets)', roLines.length === 2,
-    `found ${roLines.length}`);
+  ok('vhost: zero Report-Only add_header lines', roLines.length === 0, `found ${roLines.length}`);
   for (const loc of ['/uploads/', '/custom/']) {
     const esc = loc.replace(/\//g, '\\/');
     const block = (vhostSrc.match(new RegExp(`location ${esc} \\{[\\s\\S]*?\\n    \\}`)) || [''])[0];
@@ -143,12 +124,12 @@ console.log('\n[4] scope — where the twin must NOT be');
   ok('Express donor banner image: sandbox CSP unchanged (routes/admin/donors.js)', donorsSrc.includes(
     `res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");`));
   ok('Express donor banner image: no Report-Only twin', !/Report-Only/.test(donorsSrc));
-  // Check the policy VALUES, not the files: the comments beside the twins say "no report-uri".
+  // Check the policy VALUES, not the files: a comment may well mention report-uri.
   const allPolicies = [
     ...[...indexSrc.matchAll(/res\.setHeader\('Content-Security-Policy(?:-Report-Only)?', "([^"]+)"\)/g)],
     ...[...vhostSrc.matchAll(/add_header Content-Security-Policy(?:-Report-Only)? "([^"]+)"/g)],
   ].map((m) => m[1]);
-  ok('non-vacuity: every CSP value was read (2 Express + 4 snippet + 2 sandbox)', allPolicies.length === 8,
+  ok('non-vacuity: every CSP value was read (1 Express + 2 snippet + 2 sandbox)', allPolicies.length === 5,
     `found ${allPolicies.length}`);
   ok('no policy carries report-uri / report-to (no new endpoint)',
     allPolicies.length > 0 && !allPolicies.some((p) => /report-uri|report-to/.test(p)));
@@ -157,11 +138,11 @@ console.log('\n[4] scope — where the twin must NOT be');
 console.log('\n[5] Express-rendered pages carry the nginx page policy ONLY (R3)');
 {
   // /blog/<slug> and /page.html are HTML documents the app renders (routes/seo.js sendShell) and
-  // nginx proxies. The app sets its own CSP pair on EVERY response (index.js, [1]); nginx does not
+  // nginx proxies. The app sets its own CSP on EVERY response (index.js, [1]); nginx does not
   // strip upstream headers, and a browser enforces every CSP it receives — so on exactly these two
   // pages the app's narrower policy (no analytics or Google-font host) was intersected with the
-  // page one, and its Report-Only twin logged violations no static page has. Each location hides
-  // both app headers and declares no add_header of its own, so it inherits the server-level page
+  // page one. Each location hides the app's CSP (and the Report-Only header an app from before
+  // F7 still sends) and declares no add_header of its own, so it inherits the server-level page
   // snippet: the same headers the shell gets when served from disk.
   const seo = fs.readFileSync(path.resolve(__dirname, '../routes/seo.js'), 'utf8');
   const shells = [...new Set([...seo.matchAll(/sendShell\(res, '([a-z-]+\.html)'/g)].map((m) => m[1]))].sort();
@@ -182,7 +163,7 @@ console.log('\n[5] Express-rendered pages carry the nginx page policy ONLY (R3)'
     ok(`${label}: location found and proxied to the app`, /proxy_pass\s+http:\/\/127\.0\.0\.1:\$POOL_PORT;/.test(b),
       b.slice(0, 80));
     ok(`${label}: hides the app's enforcing CSP`, /\n\s+proxy_hide_header\s+Content-Security-Policy;/.test(b));
-    ok(`${label}: hides the app's Report-Only twin`, /\n\s+proxy_hide_header\s+Content-Security-Policy-Report-Only;/.test(b));
+    ok(`${label}: hides a pre-F7 app's Report-Only header`, /\n\s+proxy_hide_header\s+Content-Security-Policy-Report-Only;/.test(b));
     ok(`${label}: no add_header of its own (else it drops the inherited page snippet)`,
       b.length > 0 && !/\badd_header\b/.test(b));
   }
@@ -190,15 +171,14 @@ console.log('\n[5] Express-rendered pages carry the nginx page policy ONLY (R3)'
 
 console.log('\n[6] the three ENFORCING page policies, pinned (R3 L9 C10)');
 {
-  // Literal copies, on purpose. Everything above checks the twins AGAINST these lines, so these
-  // lines themselves were pinned by nothing but incidental asserts elsewhere: a host added to
-  // (or a directive dropped from) an enforcing line and its twin together passed this file.
-  // Changing one of these strings is the review step — F7 edits all three ('unsafe-inline' out
-  // of script-src) and deletes the twin checks above in the same commit.
+  // Literal copies, on purpose: [1]–[3] check properties (no inline script, inline style kept),
+  // so a host added to or a directive dropped from an enforcing line passes them. Changing one of
+  // these strings is the review step. F7 (2026-10-12) took 'unsafe-inline' out of all three
+  // script-src lists here, in the same commit that flipped the policies.
   const PINNED = {
-    Express: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'",
-    'nginx page': "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://plausible.io https://cloud.umami.is; connect-src 'self'${probe_csp} https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com https://plausible.io https://cloud.umami.is; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.google-analytics.com https://*.googletagmanager.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';",
-    'nginx admin': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';",
+    Express: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'",
+    'nginx page': "default-src 'self'; script-src 'self' https://www.googletagmanager.com https://plausible.io https://cloud.umami.is; connect-src 'self'${probe_csp} https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com https://plausible.io https://cloud.umami.is; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.google-analytics.com https://*.googletagmanager.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';",
+    'nginx admin': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';",
   };
   const live = {
     Express: [...indexSrc.matchAll(/res\.setHeader\('Content-Security-Policy', "([^"]+)"\)/g)].map((m) => m[1]),

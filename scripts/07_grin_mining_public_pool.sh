@@ -1462,8 +1462,10 @@ HDREOF
 # Common headers + the page CSP. For blocks that serve HTML/JS/CSS. NOT for /uploads/ or
 # /custom/, which need the restrictive sandbox CSP instead.
 #
-# CSP must permit: inline scripts (page bootstraps + branding.js analytics init), the managed
-# analytics providers' script + beacon hosts, and Google Fonts. Self-hosted Plausible/Umami/
+# CSP must permit: the managed analytics providers' script + beacon hosts, and Google Fonts.
+# It does NOT permit inline script (script-src has no 'unsafe-inline' since 2026-10-12, refactor
+# F7): every page script is an external file and branding.js runs GA's init as direct JS, so an
+# injected <script> or on*= handler in operator HTML is blocked, not run. Self-hosted Plausible/Umami/
 # Matomo on a custom domain require adding that domain to script-src and connect-src.
 #
 # https://cdn.jsdelivr.net was removed from script-src on 2026-09-03 (audit §J15-6). It was a
@@ -1493,29 +1495,22 @@ HDREOF
 # declared. It is never computed wider, because a wildcard over a public suffix would give
 # injected script a destination on any host under it. HTTPS only, default port only.
 include $hdr_common;
-add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://plausible.io https://cloud.umami.is; connect-src 'self'${probe_csp} https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com https://plausible.io https://cloud.umami.is; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.google-analytics.com https://*.googletagmanager.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
-#
-# Report-Only twin (added 2026-10-10): the policy above, byte for byte, minus 'unsafe-inline'
-# in script-src (style-src keeps it). The browser console logs whatever the strict policy WOULD
-# block and blocks nothing. No report-uri on purpose: the console is the report, so no new
-# endpoint. Once a full browse of every page logs nothing, the strict flip drops
-# 'unsafe-inline' from the line above and deletes this one.
-add_header Content-Security-Policy-Report-Only "default-src 'self'; script-src 'self' https://www.googletagmanager.com https://plausible.io https://cloud.umami.is; connect-src 'self'${probe_csp} https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com https://plausible.io https://cloud.umami.is; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.google-analytics.com https://*.googletagmanager.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' https://www.googletagmanager.com https://plausible.io https://cloud.umami.is; connect-src 'self'${probe_csp} https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com https://plausible.io https://cloud.umami.is; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.google-analytics.com https://*.googletagmanager.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
 HDREOF
 
     # Third snippet: the ADMIN panel CSP (audit §J14-4). /admin/ is served as STATIC files by
     # nginx, so the Express security-header middleware never runs for an admin HTML page —
     # whatever this vhost sends IS the admin panel's CSP. It used to send $hdr_page, the
     # PUBLIC one, which allowlists four third-party script origins and five connect-src
-    # origins the panel does not use. That matters because XSS in this panel is otherwise
-    # unmitigated ('unsafe-inline' is required — the panel's logic lives in inline <script>
-    # blocks): with connect-src 'self' an injected script has no silent exfiltration
-    # destination for the admin session, the miner ledger or an in-flight TOTP secret.
+    # origins the panel does not use. Two layers now stand against XSS in this panel: script-src
+    # has no 'unsafe-inline' (since 2026-10-12, refactor F7 — every admin page script is an
+    # external /admin/js/<page>.js, so an injected <script> or on*= handler does not run), and
+    # connect-src 'self' leaves a script that does run no silent exfiltration destination for
+    # the admin session, the miner ledger or an in-flight TOTP secret.
     #
-    # Every asset all 21 admin pages load is same-origin (chart.js and quill are vendored
-    # under /js/vendor/), so nothing here needs widening. Two directives are load-bearing:
-    #   'unsafe-inline' in script-src — the panel is inline blocks; removing it blanks it.
-    #   data: in img-src            — the 2FA enrolment QR is generated client-side.
+    # Every asset all admin pages load is same-origin (chart.js and quill are vendored under
+    # /js/vendor/), so nothing here needs widening. One directive is load-bearing:
+    #   data: in img-src — the 2FA enrolment QR is generated client-side.
     # Deliberately NOT blob: — the Donors review queue (design 18.11 Part 3 #1) loads banner
     # previews from a plain same-origin src, which keeps the image route's sandbox headers.
     cat > "$hdr_admin" << HDREOF || { error "could not write $hdr_admin"; return 1; }
@@ -1524,10 +1519,7 @@ HDREOF
 # pages (they legitimately need the analytics + Google Fonts hosts) and do not point /admin/
 # at the page snippet instead — see audit §J14-4.
 include $hdr_common;
-add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
-# Report-Only twin (added 2026-10-10): the line above minus 'unsafe-inline' in script-src. The
-# console logs what the strict policy WOULD block; nothing is blocked; no report-uri.
-add_header Content-Security-Policy-Report-Only "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
 HDREOF
 
     info "Writing nginx vhost (${POOL_NET_LABEL}): $POOL_NGINX_CONF"

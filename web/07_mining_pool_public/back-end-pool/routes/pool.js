@@ -14,12 +14,13 @@ const { cachedGatewayStatus, publicRegionStatus, refreshStratumProbes, stratumRt
 const { getHorizon: getLedgerRollupHorizon } = require('../lib/ledger-rollup');
 const { donorSettings } = require('../lib/donor-names');
 const { donorWall, liveDonations: donorLiveDonations } = require('../lib/donor-ledger');
+const { walletLink, poolUpDays } = require('../lib/service-uptime');
 
 module.exports = function createPoolRoutes(ctx, app) {
   const {
     _peerSensorNets, blockManager, blockMonitor, config, db, dormancyManager,
     hashrateTracker, incentivesManager, minerManager, nodeAvailability, poolSettings,
-    rateLimiter, stratumPause, stratumServer, wallet
+    rateLimiter, stratumPause, stratumServer, wallet, withdrawalScheduler
   } = ctx;
   const router = express.Router();
   const currentExplorerKey = createCurrentExplorerKey(ctx);
@@ -113,10 +114,14 @@ module.exports = function createPoolRoutes(ctx, app) {
   let _poolStatusCache = { at: 0, body: null };
   let _poolStatusInflight = null;
   const buildPoolStatus = async () => {
+    // Every up_days below is the same §20.5 integer-or-null (lib/service-uptime.js for pool and
+    // wallet). payouts.frozen is the kill-switch as a bare boolean — never its reason or who set
+    // it; the account endpoint already returns the same flag as payouts_frozen.
     const out = {
-      pool: { ok: true },
+      pool: { ok: true, up_days: poolUpDays() },
       node: { reachable: false, state: 'offline', synced: false, peers: 0, height: 0, up_days: null },
-      wallet: { reachable: false },
+      wallet: { reachable: false, up_days: null },
+      payouts: { frozen: null },
     };
     try {
       // getStatus() resolves (doesn't throw) with { ok: false } when the node is
@@ -148,6 +153,14 @@ module.exports = function createPoolRoutes(ctx, app) {
         out.wallet.reachable = true;
       }
     } catch (e) { /* wallet down → reachable stays false */ }
+    if (wallet && wallet.getBalance) walletLink.observe(out.wallet.reachable);
+    out.wallet.up_days = walletLink.upDays(out.wallet.reachable);
+
+    try {
+      if (withdrawalScheduler && typeof withdrawalScheduler.isFrozen === 'function') {
+        out.payouts.frozen = withdrawalScheduler.isFrozen() === true;
+      }
+    } catch (e) { /* unknown → frozen stays null */ }
 
     return out;
   };
@@ -180,7 +193,7 @@ module.exports = function createPoolRoutes(ctx, app) {
       const body = await _poolStatusInflight;
       // Last-good on a failed build, so a down node does not turn this back into a per-request
       // prober. `pool.ok` stays true either way — the pool API answered, which is what it means.
-      res.json(body || { pool: { ok: true }, node: { reachable: false, state: 'offline', synced: false, peers: 0, height: 0, up_days: null }, wallet: { reachable: false } });
+      res.json(body || { pool: { ok: true, up_days: poolUpDays() }, node: { reachable: false, state: 'offline', synced: false, peers: 0, height: 0, up_days: null }, wallet: { reachable: false, up_days: null }, payouts: { frozen: null } });
     } catch (err) {
       res.status(500).json({ error: 'status unavailable' });
     }

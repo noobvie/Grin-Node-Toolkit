@@ -200,8 +200,11 @@ console.log('\n[7] §J14-4 — the admin panel gets its own CSP');
      /connect-src 'self';/.test(adminCsp));
   ok('the admin CSP allowlists no third-party origin at all',
      !!adminCsp && !/https:\/\//.test(adminCsp));
-  ok('it still permits inline script (the panel IS inline blocks) and data: images (2FA QR)',
-     /script-src 'self' 'unsafe-inline';/.test(adminCsp) && /img-src 'self' data:/.test(adminCsp));
+  // Code-layout F7 (2026-10-12): every admin page script is an external /admin/js/<page>.js, so
+  // script-src is exactly 'self' — inline script is blocked. data: images stay (2FA QR).
+  ok("it allows no inline script (script-src 'self' only) and keeps data: images (2FA QR)",
+     /script-src 'self';/.test(adminCsp) && !/script-src[^;]*'unsafe-(inline|eval)'/.test(adminCsp) &&
+     /img-src 'self' data:/.test(adminCsp));
   // design §18.11 Part 3 #1: the Donors queue loads banners from a plain same-origin src, so
   // img-src stays exactly 'self' data: — no blob:, which would let a preview escape the image
   // route's sandbox headers.

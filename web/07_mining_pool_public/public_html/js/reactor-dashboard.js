@@ -373,6 +373,51 @@
     };
   }
 
+  // Pool + wallet uptime (/api/pool/status → pool.up_days / wallet.up_days, the same §20.5
+  // integer as the node's, from lib/service-uptime.js). Same short form as fmtUpDays; only the
+  // hover differs, and it names what was measured.
+  function fmtSvcUp(days, subject, note) {
+    var f = fmtUpDays(days);
+    if (!f) return null;
+    return {
+      short: f.short,
+      long: subject + (days === 0 ? ' since yesterday or today'
+        : ' for at least ' + days + (days === 1 ? ' day' : ' days')) +
+        ' (' + (note ? note + '; ' : '') + 'counted in whole UTC days)'
+    };
+  }
+
+  // Third row of a Services lamp (title / state / this): a .lamp-up span, or nothing at all when
+  // unknown — never "up 0 d". Must run AFTER setLamp(), whose textContent write clears the old
+  // row. The title is set or cleared here too, so a stale hover never outlives its row.
+  function setLampRow(id, text, hover) {
+    var el = $(id);
+    if (!el) return;
+    if (text && hover) el.title = hover; else el.removeAttribute('title');
+    var small = text && el.querySelector('small');
+    if (!small) return;
+    var row = document.createElement('span');
+    row.className = 'lamp-up';
+    row.textContent = ' ' + text;   // leading space: same pre-.lamp-up-CSS fallback as the node row
+    small.appendChild(row);
+  }
+
+  // Payouts lamp: row 2 is the kill-switch from /api/pool/status (loadStatus), row 3 the newest
+  // payout from /api/pool/payments (loadPayments). Two pollers, one lamp — each stores its half
+  // and repaints the whole thing, so neither wipes the other's row.
+  var payFrozen;          // true | false | null (status failed / not reported) | undefined (not loaded)
+  var payFeed = null;     // { state, text, hover } | null (not loaded yet)
+  function paintPayouts() {
+    var feed = payFeed || { state: '', text: '', hover: '' };
+    var state = payFrozen === true ? 'warn' : feed.state;
+    setLamp('an-payouts', state, payFrozen === true ? 'frozen' : payFrozen === false ? 'active'
+      : payFrozen === null ? '—' : '…');
+    var hover = payFrozen === true
+      ? 'Payouts paused by the pool operator: payout requests are refused until they resume. Mining and crediting continue.'
+      : feed.hover;
+    setLampRow('an-payouts', feed.text, hover);
+  }
+
   // ── master lamp (composite pool + node + wallet health) ──────────────────
   function setMaster(state, label) {
     var el = $('rx-master');
@@ -571,6 +616,8 @@
       nodeHeight = (nodeOk && s.node.height) || nodeHeight;
 
       setLamp('an-pool', poolOk ? 'ok' : 'alarm', poolOk ? 'online' : 'offline');
+      var poolUp = poolOk ? fmtSvcUp(s.pool.up_days, 'Pool service running', 'since its last restart') : null;
+      setLampRow('an-pool', poolUp && poolUp.short, poolUp && poolUp.long);
       // Uptime only on a synced node: while syncing, "· sync" already takes the lamp's second
       // line. It is its OWN line (.lamp-up, display:block), not an inline " · up 12 d": just
       // above the 900px breakpoint the lamp is ~75px wide, and "123 peers · up 12.3 y" inline
@@ -603,6 +650,11 @@
         setLamp('an-node', 'alarm', 'offline');
       }
       setLamp('an-wallet', walletOk ? 'ok' : 'alarm', walletOk ? 'unlocked' : 'offline');
+      var walletUp = walletOk ? fmtSvcUp(s.wallet.up_days, 'Pool wallet unlocked and reachable',
+        'as seen by the pool, which restarts this count when it restarts') : null;
+      setLampRow('an-wallet', walletUp && walletUp.short, walletUp && walletUp.long);
+      payFrozen = s.payouts && typeof s.payouts.frozen === 'boolean' ? s.payouts.frozen : null;
+      paintPayouts();
 
       if (nodeHeight) setHeightLink('c-height', nodeHeight);
       var nodeVal = $('mi-node');
@@ -615,21 +667,26 @@
 
       if (!poolOk) {
         setMaster('bad', 'Pool unreachable');
-      } else if (nodeOk && nodeSynced && walletOk) {
+      } else if (nodeOk && nodeSynced && walletOk && payFrozen !== true) {
         setMaster('ok', 'All systems nominal');
       } else {
         var issues = [];
         if (!nodeOk) issues.push(nodePending ? 'node ' + nodeState : 'node offline');
         else if (!nodeSynced) issues.push('node syncing');
         if (!walletOk) issues.push('wallet offline');
+        if (payFrozen === true) issues.push('payouts frozen');
         setMaster('warn', 'Degraded · ' + issues.join(', '));
       }
     } catch (e) {
       setLamp('an-pool', 'alarm', 'offline');
+      setLampRow('an-pool', null);
       setLamp('an-node', 'alarm', 'offline');
       var nodeLampErr = $('an-node');
       if (nodeLampErr) nodeLampErr.removeAttribute('title');
       setLamp('an-wallet', 'alarm', 'offline');
+      setLampRow('an-wallet', null);
+      payFrozen = null;
+      paintPayouts();
       setMaster('bad', 'Pool unreachable');
     }
   }
@@ -769,7 +826,8 @@
         var pu = document.createElement('div');
         pu.textContent = 'PAYOUT FEED UNAVAILABLE';
         tty.appendChild(pu);
-        setLamp('an-payouts', 'warn', 'feed down');
+        payFeed = { state: 'warn', text: 'feed\u00a0down', hover: 'Payout history unavailable right now' };
+        paintPayouts();
         return;
       }
       if (!Array.isArray(payments) || payments.length === 0) {
@@ -777,7 +835,8 @@
         d.textContent = 'NO PAYOUTS YET — first payout prints here';
         tty.appendChild(d);
         // A quiet/new pool with no payouts yet is normal — neutral, never an alarm.
-        setLamp('an-payouts', '', 'none yet');
+        payFeed = { state: '', text: 'none\u00a0yet', hover: 'No payouts yet' };
+        paintPayouts();
         return;
       }
       // Payouts lamp: last payout age (green = auto-pay is flowing). Info, not an alarm —
@@ -785,7 +844,12 @@
       var newestPay = payments.reduce(function (m, p) {
         return Math.max(m, p.confirmed_at || p.created_at || 0);
       }, 0);
-      setLamp('an-payouts', newestPay ? 'ok' : '', newestPay ? timeAgo(newestPay) + ' ago' : 'none yet');
+      // Row 3 reads "last 2.3h" — "N ago" beside "active" would be a third line of ~13 characters,
+      // past the lamp's ~75px just above the 900px breakpoint. The words ride on hover.
+      payFeed = newestPay
+        ? { state: 'ok', text: 'last\u00a0' + timeAgo(newestPay), hover: 'Last payout ' + timeAgoWords(newestPay) }
+        : { state: '', text: 'none\u00a0yet', hover: 'No payouts yet' };
+      paintPayouts();
       // Print oldest → newest so the freshest line sits at the bottom (printer style).
       payments.slice().reverse().forEach(function (p) {
         // Elapsed time, not a clock time: the old "HH:MM UTC" carried no date, so a payout
@@ -814,7 +878,8 @@
       var d2 = document.createElement('div');
       d2.textContent = 'PAYMENT DATA UNAVAILABLE';
       tty.appendChild(d2);
-      setLamp('an-payouts', 'warn', 'no data');
+      payFeed = { state: 'warn', text: 'no\u00a0data', hover: 'Payout history unavailable right now' };
+      paintPayouts();
     }
   }
 

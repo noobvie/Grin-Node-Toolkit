@@ -14,6 +14,8 @@
 //       for unknown — and that /api/pool/status can carry no timestamp;
 //   [6] the homepage lamp (public_html/js/reactor-dashboard.js): fmtUpDays run on its own for
 //       0 / 1 / 59 / 60 / 400 / 800 / null and the malformed values, plus the lamp wiring.
+//   [8] the pool + wallet uptime and payouts.frozen beside it (lib/service-uptime.js): the
+//       wallet clock's gap and 2-strike rules, null-not-0, and the Services-lamp wiring.
 //
 // In-process only: listeners bind 127.0.0.1 on ephemeral ports and are closed; the DB is
 // :memory:; the fake /opt/grin/node-events lives in os.tmpdir() and is removed. Nothing is left
@@ -416,7 +418,7 @@ const quiet = () => {};
     const builder = indexSrc.slice(a0, a1);
     ok('buildPoolStatus found', a0 > 0 && a1 > a0);
     const keys = new Set((builder.match(/^\s+([a-z_]+):/gm) || []).map((k) => k.trim().replace(':', '')));
-    const allowed = new Set(['pool', 'ok', 'node', 'reachable', 'state', 'synced', 'peers', 'height', 'up_days', 'wallet']);
+    const allowed = new Set(['pool', 'ok', 'node', 'reachable', 'state', 'synced', 'peers', 'height', 'up_days', 'wallet', 'payouts', 'frozen']);
     ok('the public status builder emits only the allowed keys (no *_at, since, timestamp, class, error)',
       [...keys].every((k) => allowed.has(k)), JSON.stringify([...keys]));
     ok('up_days comes from upDaysPublic and defaults to null in every shape',
@@ -544,6 +546,74 @@ const quiet = () => {};
 
       db.prepare("DELETE FROM node_events WHERE network = 'testnet'").run();
       db.prepare("DELETE FROM node_availability_meta WHERE network = 'testnet'").run();
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────────────────────
+    console.log('\n[8] pool + wallet uptime, payouts.frozen (lib/service-uptime.js)\n');
+    {
+      const { ReachableSince, poolUpDays, MAX_GAP_S } = require(path.join(APP, 'lib/service-uptime.js'));
+      let t8 = D0 + 3600;
+      const w = new ReachableSince(() => t8);
+      ok('wallet: never observed → null', w.upDays(true) === null);
+      w.observe(true);
+      ok('wallet: up since today → 0, and only while reachable now', w.upDays(true) === 0 && w.upDays(false) === null);
+      const tick = (to, okNow) => { while (t8 < to) { t8 = Math.min(to, t8 + 60); w.observe(okNow); } };
+      tick(D0 + 3 * 86400 + 10, true);
+      ok('wallet: up since 01:00 on day 0, just past midnight of day 3 → 2 (understates, never overstates)',
+        w.upDays(true) === 2, String(w.upDays(true)));
+      tick(D0 + 4 * 86400 + 10, true);
+      ok('wallet: …one more midnight → 3', w.upDays(true) === 3, String(w.upDays(true)));
+      t8 += 60; w.observe(false);
+      t8 += 60; w.observe(true);
+      ok('wallet: ONE failed probe (a payout holding the owner lock) keeps the run', w.upDays(true) === 3);
+      t8 += 60; w.observe(false);
+      t8 += 60; w.observe(false);
+      ok('wallet: two strikes clear it', w.upDays(true) === null);
+      t8 += 60; w.observe(true);
+      ok('wallet: the next success restarts at 0', w.upDays(true) === 0);
+      const w2 = new ReachableSince(() => t8);
+      w2.observe(true);
+      t8 += 2 * 86400;
+      ok('wallet: silence past MAX_GAP_S is not vouched for → null', w2.upDays(true) === null);
+      w2.observe(true);
+      ok('wallet: …and the next success restarts the run, not resumes it', w2.upDays(true) === 0);
+      t8 += MAX_GAP_S; w2.observe(true);
+      ok('wallet: a gap of exactly MAX_GAP_S still continues', w2.since === t8 - MAX_GAP_S);
+      ok('pool: an integer ≥ 0 from process start', Number.isSafeInteger(poolUpDays()) && poolUpDays() >= 0);
+
+      const indexSrc8 = readAppSource();
+      const b0 = indexSrc8.indexOf('const buildPoolStatus = async () => {');
+      const builder8 = indexSrc8.slice(b0, indexSrc8.indexOf(routeSource('get', '/api/pool/status')));
+      // Plain substring checks — these are fixed spellings, not patterns.
+      ok('status: pool.up_days from poolUpDays(), wallet.up_days from the shared walletLink',
+        builder8.includes('pool: { ok: true, up_days: poolUpDays() }') &&
+        builder8.includes('out.wallet.up_days = walletLink.upDays(out.wallet.reachable);'));
+      ok('status: payouts.frozen defaults to null and is only ever a boolean',
+        builder8.includes('payouts: { frozen: null }') &&
+        builder8.includes('out.payouts.frozen = withdrawalScheduler.isFrozen() === true;'));
+      ok('status: the cold-boot fallback carries the same shape',
+        indexSrc8.includes('wallet: { reachable: false, up_days: null }, payouts: { frozen: null } });'));
+      const amSrc = fs.readFileSync(path.join(APP, 'lib/alert-monitor.js'), 'utf8');
+      ok('AlertMonitor feeds the same wallet clock on both outcomes',
+        amSrc.includes('walletLink.observe(false);') && amSrc.includes('walletLink.observe(true);'));
+
+      const PAGE8 = path.resolve(APP, '../public_html/js/reactor-dashboard.js');
+      if (!fs.existsSync(PAGE8)) {
+        console.log('  SKIP  homepage wiring — no public_html/ in a deployed app dir');
+      } else {
+        const pg = fs.readFileSync(PAGE8, 'utf8');
+        ok('pool + wallet rows only on a live lamp, via fmtSvcUp (fmtUpDays\'s short form)',
+          pg.includes('var poolUp = poolOk ? fmtSvcUp(s.pool.up_days,') &&
+          pg.includes('var walletUp = walletOk ? fmtSvcUp(s.wallet.up_days,') &&
+          /var f = fmtUpDays\(days\);\s*if \(!f\) return null;/.test(pg));
+        ok('the catch clears the pool and wallet rows',
+          pg.includes("setLampRow('an-pool', null);") && pg.includes("setLampRow('an-wallet', null);"));
+        ok('the Payouts lamp is painted from both halves only (no direct setLamp elsewhere)',
+          pg.split("setLamp('an-payouts'").length - 1 === 1);
+        ok('frozen payouts keep the master lamp off "All systems nominal"',
+          /walletOk && payFrozen !== true\) \{\s*setMaster\('ok'/.test(pg) && pg.includes("issues.push('payouts frozen')"));
+        ok('the extra rows are written with textContent', pg.includes("row.textContent = ' ' + text;"));
+      }
     }
   } finally {
     try { closeDb(); } catch (_) { /* ignore */ }

@@ -73,12 +73,11 @@ app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-XSS-Protection', '1; mode=block');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'");
-  // Report-Only twin: the policy above minus 'unsafe-inline' in script-src (style-src keeps it).
-  // The browser console logs whatever the strict policy WOULD block and nothing is blocked. No
-  // report-uri on purpose — no new endpoint. Kept identical to the line above except for that
-  // one token (test-csp-report-only.js); the strict flip replaces both lines with the strict one.
-  res.setHeader('Content-Security-Policy-Report-Only', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'");
+  // Strict script-src: no 'unsafe-inline' (code-layout refactor F7, 2026-10-12). Pages carry no
+  // inline <script> and no on*= handler — every page script is an external file. A Report-Only
+  // twin ran beside this line until a browse of every public + admin page logged no violation.
+  // style-src keeps 'unsafe-inline' on purpose (out of scope). Pinned in test-csp-report-only.js.
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'");
   // NO includeSubDomains (audit §J1-7 / §I self-review). `subdomain` in pool.json is routinely
   // the operator's APEX domain, and the directive would pin api., testapi. and every other
   // sibling host to HTTPS for a year with no way to cache it away. The generated nginx snippet

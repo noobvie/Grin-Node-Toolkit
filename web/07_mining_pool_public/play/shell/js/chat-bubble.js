@@ -150,11 +150,13 @@
   var mAddr = input('gcb-m-address', 'text', { maxlength: '80', autocomplete: 'off', placeholder: 'grin1…' });
   var mProof = input('gcb-m-proof', 'password', { maxlength: '128', autocomplete: 'off', placeholder: 'a mining IP, or your rig password' });
   var mReveal = attrs(el('button', 'btn sm', 'Show'), { type: 'button', 'aria-pressed': 'false', 'aria-controls': 'gcb-m-proof' });
+  // field() appends the input, so swap the row in where it sits and only THEN fill the row —
+  // filling it first let field() pull the input back out and replaceChild drop it from the DOM.
   var proofRow = el('div', 'gcb-compose');
-  proofRow.appendChild(mProof);
-  proofRow.appendChild(mReveal);
   var proofField = field('A recent mining IP or your rig\'s stratum password', mProof);
   proofField.replaceChild(proofRow, mProof);
+  proofRow.appendChild(mProof);
+  proofRow.appendChild(mReveal);
   var mSubmit = attrs(el('button', 'btn primary sm', 'Sign in'), { type: 'submit' });
   paneMiner.appendChild(field('The GRIN address your rigs mine to', mAddr));
   paneMiner.appendChild(proofField);

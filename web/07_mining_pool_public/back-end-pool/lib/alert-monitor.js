@@ -560,7 +560,7 @@ class AlertMonitor {
       const summary = await this.wallet.getBalance();
       info = Array.isArray(summary) ? summary[1] : summary;
     } catch (err) {
-      walletLink.observe(false);   // the homepage "Wallet link" uptime (lib/service-uptime.js)
+      walletLink.observe(false);   // the homepage "Wallet" lamp uptime (lib/service-uptime.js)
       await this.triggerAlert('wallet_offline', {
         level: 'critical',
         message: `Wallet unreachable: ${err.message}`,

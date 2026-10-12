@@ -1,7 +1,7 @@
 'use strict';
 
 // Coarse public uptime for the pool process and its wallet link — the homepage P-02 "Pool svc"
-// and "Wallet link" lamps, beside the node's `up_days`. Same contract as the node (design §20.5):
+// and "Wallet" lamps, beside the node's `up_days`. Same contract as the node (design §20.5):
 // an integer of WHOLE UTC DAYS via upDaysFrom (flips only at 00:00 UTC, understates by up to a
 // day, never overstates), or null for unknown. Never a timestamp, never seconds, never 0 for
 // unknown — a restart time to the minute is exactly what §20.5 exists to keep private.

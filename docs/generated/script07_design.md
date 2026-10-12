@@ -6723,7 +6723,7 @@ rows: title / state / detail. The node was first; the other three follow it.
 |---|---|---|---|
 | Pool svc | `online` / `offline` | `up N d` | `pool.up_days`, counted from when the pool process started |
 | Node sync | `N peers` | `up N d` | `node.up_days` (above) |
-| Wallet link | `unlocked` / `offline` | `up N d` | `wallet.up_days` |
+| Wallet | `unlocked` / `offline` | `up N d` | `wallet.up_days` |
 | Payouts | `active` / `frozen` | `last 2.3h` / `none yet` | `payouts.frozen` + `/api/pool/payments` |
 
 - *Same contract.* `pool.up_days` and `wallet.up_days` use the same `upDaysFrom` and the same

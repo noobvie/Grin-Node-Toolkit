@@ -240,6 +240,12 @@ const manifest = {
   in_flight_statuses: facts.in_flight_statuses,
   payout_control: { before: before, after: facts.payout_control },
   certs_included: s('PMG_M_CERTS'),
+  code: (() => {  // the deployed backend's per-file hashes (_PMG_JS_CODE json) — null when unknown
+    try {
+      const c = JSON.parse(E.PMG_M_CODE || 'null');
+      return (c && typeof c.fingerprint === 'string' && c.files && typeof c.files === 'object') ? c : null;
+    } catch (e) { return null; }
+  })(),
 };
 const tmp = outPath + '.tmp';
 fs.writeFileSync(tmp, JSON.stringify(manifest, null, 2) + '\n', { mode: 0o600 });
@@ -278,6 +284,88 @@ _pmg_port_listening() {
 }
 _pmg_frozen_by() {  # echoes payout_control.frozen_by when frozen, else nothing
     _pmg_js facts | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{const p=JSON.parse(s).payout_control;if(p&&p.frozen===1)process.stdout.write(String(p.frozen_by||"?"));}catch(e){}})' 2>/dev/null
+}
+
+# ─── Backend code fingerprint (old hub vs new box) ───────────────────────────
+# The archive never carries code (_pbk_code_excludes), so the moved ledger runs on whatever
+# 1) Install / 9) Deploy put on the new box. A box updated by hub 08's tarball copy has no
+# trustworthy `git log`, so the DEPLOYED files are hashed instead: index.js, package*.json,
+# lib/, routes/, admin-panel/ under $POOL_APP_DIR (node_modules and symlinks skipped).
+# argv: <mode> <app_dir> [<manifest>]
+#   json    → {fingerprint, count, files{rel: sha256/16}} (Migrate OUT puts it in the manifest)
+#   print   → "<fingerprint>\t<count>" (the figure both screens show, to compare by eye)
+#   compare → "SUMMARY\t<old fp>\t<this fp>\t<differ>\t<only old>\t<only here>" then up to 10
+#             DIFF / HERE / OLD lines; "NONE" when the manifest carries no code map.
+# "Only on the old hub" alone is not a mismatch: a tarball update (cp -rf) never deletes,
+# so a long-lived hub keeps files its upstream removed, and a fresh install lacks them.
+read -r -d '' _PMG_JS_CODE <<'JS' || true
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const [mode, appDir, manPath] = process.argv.slice(1);
+const ROOTS = ['index.js', 'package.json', 'package-lock.json', 'lib', 'routes', 'admin-panel'];
+const files = Object.create(null);
+const walk = (rel) => {
+  const abs = path.join(appDir, rel);
+  let st;
+  try { st = fs.lstatSync(abs); } catch (e) { return; }
+  if (st.isSymbolicLink()) return;
+  if (st.isDirectory()) {
+    if (path.basename(rel) === 'node_modules') return;
+    for (const n of fs.readdirSync(abs).sort()) walk(rel + '/' + n);
+    return;
+  }
+  if (!st.isFile()) return;
+  files[rel] = crypto.createHash('sha256').update(fs.readFileSync(abs)).digest('hex').slice(0, 16);
+};
+for (const r of ROOTS) walk(r);
+const keys = Object.keys(files).sort();
+const fp = crypto.createHash('sha256').update(keys.map((k) => k + '\t' + files[k] + '\n').join('')).digest('hex').slice(0, 12);
+if (mode === 'json') {
+  process.stdout.write(JSON.stringify({ fingerprint: fp, count: keys.length, files: Object.assign({}, files) }));
+  process.exit(keys.length ? 0 : 3);
+}
+if (mode === 'print') { console.log(fp + '\t' + keys.length); process.exit(keys.length ? 0 : 3); }
+if (mode !== 'compare') process.exit(2);
+let man;
+try { man = JSON.parse(fs.readFileSync(manPath, 'utf8')); } catch (e) { process.exit(2); }
+const code = man && man.code;
+const old = code && code.files;
+if (!old || typeof old !== 'object' || Array.isArray(old)) { console.log('NONE'); process.exit(0); }
+const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+const diff = [], onlyOld = [], onlyHere = [];
+for (const k of Object.keys(old).sort()) {
+  if (!own(files, k)) onlyOld.push(k);
+  else if (files[k] !== old[k]) diff.push(k);
+}
+for (const k of keys) if (!own(old, k)) onlyHere.push(k);
+const clean = (s) => String(s).replace(/[\t\r\n]/g, ' ');
+console.log(['SUMMARY', clean(code.fingerprint || '-'), fp, diff.length, onlyOld.length, onlyHere.length].join('\t'));
+for (const k of diff.slice(0, 10)) console.log('DIFF\t' + clean(k));
+for (const k of onlyHere.slice(0, 10)) console.log('HERE\t' + clean(k));
+for (const k of onlyOld.slice(0, 10)) console.log('OLD\t' + clean(k));
+JS
+
+_pmg_code_fp() {  # "<fingerprint> (<n> files)", or empty when nothing is deployed
+    local fp n
+    IFS=$'\t' read -r fp n < <(node -e "$_PMG_JS_CODE" print "$POOL_APP_DIR" 2>/dev/null)
+    if [[ "$fp" =~ ^[0-9a-f]{12}$ && "$n" =~ ^[1-9][0-9]*$ ]]; then echo "$fp ($n files)"; fi
+}
+
+# ─── DNS: where a name points now (Migrate IN steps 4 and 8) ─────────────────
+# Echoes "here", "none", or "other <ip> [<ip>…]" for <host> against this box's <ip>. Uses
+# the box's own resolver (getent), so a cached old answer can lag the real record by its TTL.
+_pmg_dns_state() {  # <host> <this box ip>
+    local host="$1" me="$2" out ip
+    local -a ips=()
+    [[ "$host" =~ ^[A-Za-z0-9.-]+$ ]] || { echo "none"; return 0; }
+    out=$(timeout 6 getent ahosts "$host" 2>/dev/null | awk '{print $1}' | sort -u)
+    while IFS= read -r ip; do [[ -n "$ip" ]] && ips+=("$ip"); done <<< "$out"
+    if [[ "${#ips[@]}" -eq 0 ]]; then echo "none"; return 0; fi
+    for ip in "${ips[@]}"; do
+        if [[ -n "$me" && "$ip" == "$me" ]]; then echo "here"; return 0; fi
+    done
+    echo "other ${ips[*]}"
 }
 
 # ─── State / rollback screens (every failure path and the final screen) ───────
@@ -532,6 +620,11 @@ _pmg_out_intro() {
     echo -e "  ${YELLOW}Miners disconnect NOW and stay off until DNS points at the new hub.${RESET}"
     echo -e "  ${YELLOW}This box will NOT restart the pool afterwards — not even after a reboot.${RESET}"
     echo ""
+    local cfp; cfp=$(_pmg_code_fp)
+    echo -e "  Backend code here: ${BOLD}${cfp:-unknown}${RESET}"
+    echo -e "  ${DIM}The new box's B → 7 → CHECK prints the same figure — they must match. If not, cancel and${RESET}"
+    echo -e "  ${DIM}update the new box first (hub 08 → same branch, then pool menu 9).${RESET}"
+    echo ""
     echo -ne "  Type ${BOLD}MIGRATE${RESET} to begin (anything else cancels): "
     local go; read -r go || go=""
     [[ "$go" == "MIGRATE" ]] || { info "Cancelled — nothing changed."; return 1; }
@@ -697,6 +790,8 @@ _pmg_out_manifest() {
     [[ -n "$height" ]] || height="$PMG_W_HEIGHT"
     [[ -n "$height" ]] || warn "Node height unknown (get_status failed and no wallet height)."
     local certs="no"; [[ -n "$(_pmg_cert_paths)" ]] && certs="yes"
+    local code; code=$(node -e "$_PMG_JS_CODE" json "$POOL_APP_DIR" 2>/dev/null) || code=""
+    [[ -n "$code" ]] || warn "Could not hash the deployed backend code — Migrate IN will skip the code comparison."
     # The name the step-6 archive is EXPECTED to get; _pmg_out_archive checks it came true.
     PMG_MANIFEST_ARCHIVE="${PBK_PREFIX}$(gbe_date).tar.gz.enc"
     res=$(PMG_M_NET="$POOL_NET" PMG_M_PRODUCT="$PBK_PRODUCT" PMG_M_MODE="${POOL_MODE:-}" \
@@ -706,7 +801,7 @@ _pmg_out_manifest() {
           PMG_M_REGION="$(_pmg_conf region main)" PMG_M_CF_PROXY="$(_pmg_conf cloudflare_proxy "")" \
           PMG_M_WG_IFACE="${WG_IFACE:-}" PMG_M_WG_PORT="${WG_LISTEN_PORT:-}" \
           PMG_M_WG_ENDPOINT_HOST="$(_pmg_conf wg_endpoint_host "")" PMG_M_NODE_HEIGHT="$height" \
-          PMG_M_PAYOUT_BEFORE="${PMG_PAYOUT_BEFORE:-null}" PMG_M_CERTS="$certs" \
+          PMG_M_PAYOUT_BEFORE="${PMG_PAYOUT_BEFORE:-null}" PMG_M_CERTS="$certs" PMG_M_CODE="$code" \
           PMG_W_OK="$PMG_W_OK" PMG_W_ERROR="$PMG_W_ERROR" PMG_W_HEIGHT="$PMG_W_HEIGHT" \
           PMG_W_REFRESHED="$PMG_W_REFRESHED" PMG_W_TOTAL="$PMG_W_TOTAL" PMG_W_AWAIT_CONF="$PMG_W_AWAIT_CONF" \
           PMG_W_AWAIT_FIN="$PMG_W_AWAIT_FIN" PMG_W_IMMATURE="$PMG_W_IMMATURE" PMG_W_LOCKED="$PMG_W_LOCKED" \
@@ -831,12 +926,16 @@ pmg_migrate_out() {
 #      not synced, node stratum not wired) is then fixed while the old hub still
 #      serves, instead of inside the downtime window.
 #   1  box checks (read-only): tools, 1) Install ran, node up + synced, node
-#      stratum wired for the pool.
+#      stratum wired for the pool, nginx + certbot (hard — the pool script
+#      installs neither), Tor SOCKS + wireguard-tools (warnings). CHECK also
+#      prints the backend code fingerprint Migrate OUT's first screen shows.
 #   2  archive: pick → sha256 → decrypt → read ONLY the manifest out of it.
 #      This comes before the manifest checks because they need its figures;
 #      nothing is written to this box's own paths until step 3.
 #   1b manifest checks: right net + product + THIS archive; node height ≥ the
-#      old hub's; the live-ledger clobber guard; firewall (warn); and the OLD HUB
+#      old hub's; wireguard-tools when the old hub had a tunnel; backend code =
+#      the old hub's (typed PROCEED otherwise); the live-ledger clobber guard;
+#      firewall (warn); and the OLD HUB
 #      IS DARK (F4): two live pools on one wallet seed must never happen.
 #   3  restore through _pbk_restore_extract — the same core and the same freeze
 #      as 2) Restore. Payouts come up FROZEN.
@@ -1051,6 +1150,78 @@ _pmg_in_stratum_wiring() {
     success "Node stratum wired + listening on :$sp (coinbase → wallet :$PW_OWNER_PORT)."
 }
 
+# Install hint for the distro this box runs (read-only checks never install anything).
+_pmg_pkg_hint() {  # <pkg>...
+    if [[ -f /etc/debian_version ]]; then echo "apt-get install -y $*"
+    elif [[ -f /etc/redhat-release ]]; then echo "dnf install -y epel-release && dnf install -y $*"
+    else echo "install: $*"
+    fi
+}
+
+# certbot's own renewal schedule: Debian's package enables certbot.timer, the EPEL package
+# ships certbot-renew.timer DISABLED, a snap install has its own timer.
+_pmg_certbot_renew_scheduled() {
+    local t
+    for t in certbot.timer certbot-renew.timer snap.certbot.renew.timer; do
+        [[ "$(systemctl is-enabled "$t" 2>/dev/null)" == "enabled" ]] && return 0
+    done
+    [[ -f /etc/cron.d/certbot ]]
+}
+
+# The pool's Tor-payout pre-flight probe dials a SYSTEM Tor's SOCKS port (lib/config.js
+# tor_socks_port, default 9050), and no pool menu installs Tor. rc 0 = listening.
+_pmg_tor_socks_port() {
+    local p; p=$(_pmg_conf tor_socks_port 9050)
+    [[ "$p" =~ ^[0-9]{1,5}$ ]] || p=9050
+    echo "$p"
+}
+
+# Web, Tor and WireGuard tooling the move relies on but 1) Install does not guarantee.
+# nginx + certbot (with its nginx plugin) are HARD: the pool script installs neither, and
+# without them Migrate IN starts a pool with no HTTPS — no admin panel to resume stratum
+# from — and the old hub's moved certificate never renews (its renewal conf names the
+# nginx authenticator). Tor and wg-quick are warnings here: payouts stay frozen after the
+# move, and whether WireGuard is needed is known only once the manifest is read (step 1b
+# makes it hard then). rc 1 = a hard item is missing.
+_pmg_in_tool_checks() {
+    local bad=0 tp
+    if command -v nginx >/dev/null 2>&1; then
+        success "nginx installed."
+    else
+        error "nginx is not installed — the pool would start with NO HTTPS (and no admin panel to resume stratum from)."
+        error "  fix: $(_pmg_pkg_hint nginx certbot python3-certbot-nginx)"
+        bad=1
+    fi
+    if ! command -v certbot >/dev/null 2>&1; then
+        error "certbot is not installed — the moved TLS certificate would never renew here."
+        error "  fix: $(_pmg_pkg_hint certbot python3-certbot-nginx)"
+        bad=1
+    elif ! timeout 60 certbot plugins 2>/dev/null | grep -qE '^\*[[:space:]]+nginx'; then
+        error "certbot has no nginx plugin — the moved certificate's renewal uses it."
+        error "  fix: $(_pmg_pkg_hint python3-certbot-nginx)"
+        bad=1
+    elif _pmg_certbot_renew_scheduled; then
+        success "certbot + nginx plugin installed, renewal scheduled."
+    else
+        warn "certbot is installed but no renewal timer is enabled — the certificate would expire."
+        warn "  fix: systemctl enable --now certbot-renew.timer   (Debian/Ubuntu: certbot.timer)"
+    fi
+    tp=$(_pmg_tor_socks_port)
+    if _pmg_port_listening "$tp"; then
+        success "Tor SOCKS listening on :$tp (Tor payouts)."
+    else
+        warn "Nothing listens on Tor's SOCKS port :$tp — Tor payouts fail here once payouts resume."
+        warn "  fix (before you resume payouts): $(_pmg_pkg_hint tor) && systemctl enable --now tor"
+    fi
+    if command -v wg >/dev/null 2>&1 && command -v wg-quick >/dev/null 2>&1; then
+        success "wireguard-tools installed (wg, wg-quick)."
+    else
+        warn "wireguard-tools missing — needed if the old hub runs regional gateways (MIGRATE then stops on it)."
+        warn "  fix: $(_pmg_pkg_hint wireguard-tools)"
+    fi
+    return "$bad"
+}
+
 _pmg_in_box_checks() {
     echo ""; echo -e "${BOLD}Step 1 — this box (read-only)${RESET}"
     local t bad=0 miss="" ns h s
@@ -1084,6 +1255,7 @@ _pmg_in_box_checks() {
         success "Node synced at height $h."
     fi
     _pmg_in_stratum_wiring || bad=1
+    _pmg_in_tool_checks || bad=1
     return "$bad"
 }
 
@@ -1095,6 +1267,19 @@ _pmg_in_check_only() {
     while IFS= read -r f; do
         if [[ -f "$f.sha256" ]]; then any="$f"; break; fi
     done < <(ls -t "$PBK_BACKUP_DIR/${PBK_PREFIX}"*.tar.gz.enc 2>/dev/null || true)
+    echo ""; echo -e "${BOLD}Backend code${RESET}"
+    local cfp; cfp=$(_pmg_code_fp)
+    if [[ -n "$cfp" ]]; then
+        echo -e "  This box: ${BOLD}$cfp${RESET}"
+        echo -e "  ${DIM}Migrate OUT's first screen on the old hub prints the same figure (before anything changes)${RESET}"
+        echo -e "  ${DIM}— they must match. If not: hub 08 → update to the same branch → pool menu 9, on whichever is behind.${RESET}"
+    else
+        error "No deployed backend code found under $POOL_APP_DIR."; bad=1
+    fi
+    echo ""; echo -e "${BOLD}DNS${RESET}"
+    echo -e "  ${DIM}If this hub takes a NEW region tag (e.g. cqf), create that region's connect host now —${RESET}"
+    echo -e "  ${DIM}a seeded row names it (cqf → cqf.<domain>): an A record to THIS box, DNS only (no proxy),${RESET}"
+    echo -e "  ${DIM}TTL 60. Nothing uses it until the move. Migrate IN step 4 checks that it resolves.${RESET}"
     echo ""
     if [[ -n "$any" ]]; then info "Migrate OUT archive already here: $(basename "$any")"
     else info "No Migrate OUT archive in $PBK_BACKUP_DIR yet — Migrate OUT step 7 copies it here."; fi
@@ -1278,6 +1463,47 @@ _pmg_in_dark_gate() {
     return 0
 }
 
+# The moved ledger runs on THIS box's code. Content that differs, or files only here, mean a
+# different version — and a ledger written by newer code may not read on older code. Files
+# only on the old hub are tarball leftovers (see _PMG_JS_CODE) and do not count.
+_pmg_in_code_check() {
+    local out rc kind a b c d e f go
+    out=$(node -e "$_PMG_JS_CODE" compare "$POOL_APP_DIR" "$PMG_IN_MANIFEST" 2>/dev/null); rc=$?
+    if [[ "$rc" -ne 0 || -z "$out" ]]; then
+        warn "Could not compare backend code with the manifest — check both boxes run the same toolkit branch."
+        return 0
+    fi
+    if [[ "$out" == "NONE" ]]; then
+        info "The manifest carries no code hashes (an older Migrate OUT) — code not compared."
+        return 0
+    fi
+    IFS=$'\t' read -r kind a b c d e <<< "$(head -n 1 <<< "$out")"
+    if [[ "$kind" != "SUMMARY" || ! "$c$d$e" =~ ^[0-9]+$ ]]; then
+        warn "Unreadable code comparison — check both boxes run the same toolkit branch."
+        return 0
+    fi
+    if [[ "$c" -eq 0 && "$e" -eq 0 ]]; then
+        success "Backend code matches the old hub ($b)."
+        [[ "$d" -eq 0 ]] || info "  $d file(s) exist only on the old hub — leftovers a tarball update never deletes; ignored."
+        return 0
+    fi
+    warn "Backend code DIFFERS from the old hub (old $a, here $b): $c changed, $e only here, $d only there."
+    while IFS=$'\t' read -r kind f; do
+        case "$kind" in
+            DIFF) echo -e "      changed    $f" ;;
+            HERE) echo -e "      only here  $f" ;;
+            OLD)  echo -e "      only there $f" ;;
+        esac
+    done < <(tail -n +2 <<< "$out")
+    warn "  The restored ledger would run on this box's version. Safer: stop here, update this box"
+    warn "  (hub 08 → the old hub's branch → pool menu 9), then B → 7 again. Nothing changed yet."
+    echo -ne "  Type ${BOLD}PROCEED${RESET} to continue on different code (anything else stops): "
+    read -r go || go=""
+    [[ "$go" == "PROCEED" ]] || { info "Stopped — nothing changed."; return 1; }
+    _pmg_log "code differs from the manifest ($a → $b) — operator proceeded"
+    return 0
+}
+
 _pmg_in_manifest_checks() {
     echo ""; echo -e "${BOLD}Step 1b — the manifest${RESET}"
     local base now age go
@@ -1318,6 +1544,13 @@ _pmg_in_manifest_checks() {
         return 1
     fi
     success "Manifest matches this archive and this network; node height ${PMG_IN_NODE_HEIGHT:-?} ≥ ${PMG_MF_HEIGHT:-?}."
+    if [[ -n "$PMG_MF_WG_IFACE" ]] && ! { command -v wg >/dev/null 2>&1 && command -v wg-quick >/dev/null 2>&1; }; then
+        error "The old hub runs a WireGuard tunnel ($PMG_MF_WG_IFACE) for its gateways, and wireguard-tools"
+        error "  is not installed here — step 5 could not bring the tunnel up. fix: $(_pmg_pkg_hint wireguard-tools)"
+        error "  Nothing changed."
+        return 1
+    fi
+    _pmg_in_code_check    || return 1
     _pmg_in_clobber_guard || return 1
     _pmg_in_dark_gate     || return 1
     _pmg_in_fw_check 0
@@ -1441,20 +1674,40 @@ if (!st && oldR) {
   d.prepare("INSERT INTO pool_config (section, key, value, value_type) VALUES ('_state', 'local_region', ?, 'string')").run(oldR);
   stamped = 1;
 }
-const row = d.prepare('SELECT label, country_code, is_active FROM pool_locations WHERE region = ?').get(tag);
+const row = d.prepare('SELECT label, country_code, is_active, stratum_url FROM pool_locations WHERE region = ?').get(tag);
 if (lat !== '' && lng !== '') {
   if (row) d.prepare('UPDATE pool_locations SET lat = ?, lng = ?, updated_at = unixepoch() WHERE region = ?').run(Number(lat), Number(lng), tag);
   else d.prepare('INSERT INTO pool_locations (region, label, country, country_code, is_active, lat, lng) VALUES (?, ?, ?, ?, 0, ?, ?)')
         .run(tag, label || null, country || null, cc || null, Number(lat), Number(lng));
 }
 d.close();
-const v = (x) => (x === null || x === undefined) ? '' : String(x);
-console.log([stamped, row ? 1 : 0, row ? v(row.label) : '', row ? v(row.country_code) : '', row ? v(row.is_active) : ''].join('|'));
+const v = (x) => (x === null || x === undefined) ? '' : String(x).replace(/[|\r\n]/g, ' ');
+console.log([stamped, row ? 1 : 0, row ? v(row.label) : '', row ? v(row.country_code) : '', row ? v(row.is_active) : '', row ? v(row.stratum_url) : ''].join('|'));
 JS
+
+_pmg_url_host() {  # stratum+tcp://host:port/… → host
+    local h="${1#*://}"; h="${h%%/*}"; h="${h%:*}"; echo "$h"
+}
+
+# The row's connect host is what the connect page tells miners once the first start activates
+# it. A seeded row names a host that may never have been created (cqf → cqf.<domain>): say so
+# NOW, so the record propagates while bring-up and continuity run, not after the start.
+_pmg_in_region_host_check() {  # <stratum_url>
+    local host st me="${PMG_IN_PUBLIC_IP:-}"
+    host=$(_pmg_url_host "$1")
+    [[ -n "$host" ]] || return 0
+    st=$(_pmg_dns_state "$host" "$me")
+    case "$st" in
+        here)  success "Connect host $host already points at this box." ;;
+        none)  warn "Connect host $host does NOT resolve — create it now: A record → ${me:-the public IP of this box}, DNS only, TTL 60."
+               warn "  Miners shown this region cannot connect until it exists." ;;
+        *)     info "Connect host $host points at ${st#other } — step 8 lists it to change." ;;
+    esac
+}
 
 _pmg_in_location() {
     echo ""; echo -e "${BOLD}Step 4 — location${RESET}"
-    local role cur ans tag label country cc lat lng res stamped had rlabel rcc ract
+    local role cur ans tag label country cc lat lng res stamped had rlabel rcc ract rurl
     role=$(_pmg_conf role singlebox)
     if [[ "$role" != "singlebox" ]]; then
         info "Role '$role' publishes no local region — nothing to relocate."; return 0
@@ -1506,11 +1759,12 @@ _pmg_in_location() {
     local rc=$?
     _pmg_rechown_db
     [[ "$rc" -eq 0 && -n "$res" ]] || { _pmg_in_fail 4 "could not update pool.db for the new region"; return 1; }
-    IFS='|' read -r stamped had rlabel rcc ract <<< "$res"
+    IFS='|' read -r stamped had rlabel rcc ract rurl <<< "$res"
     [[ "$stamped" == "1" ]] && info "The old hub never stamped its region — wrote '$cur' as the last local region, so the first start sees a move (F3)."
     if [[ "$had" == "1" ]]; then
         info "Row '$tag' already exists (${rlabel:-no label} ${rcc}, $( [[ "$ract" == "1" ]] && echo active || echo inactive )) — the first start activates it."
         echo -e "  ${DIM}Its label, country and connect host are NOT overwritten from here: edit them in admin → Regions.${RESET}"
+        _pmg_in_region_host_check "$rurl"
     else
         info "Row '$tag' is created on the first start."
     fi
@@ -1802,14 +2056,28 @@ _pmg_in_dns() {
     [[ -n "$dom" ]]    && recs+=("$dom|web" "www.$dom|web")
     [[ -n "$sthost" ]] && recs+=("$sthost|stratum")
     [[ -n "$wgh" ]]    && recs+=("$wgh|wg")
+    local st now
     for r in "${recs[@]}"; do
         kind="${r#*|}"; r="${r%|*}"
         [[ "$seen" == *" $r "* ]] && continue
         seen+="$r "
+        # Where it points NOW (this box's resolver — a cached answer can lag by its TTL). A
+        # proxied web name resolves to Cloudflare whatever its origin is, so it is not judged.
+        now=""
+        if [[ "$kind" == "web" && "$cf" == "true" ]]; then
+            now="${DIM}→ set the ORIGIN in Cloudflare${RESET}"
+        else
+            st=$(_pmg_dns_state "$r" "${PMG_IN_PUBLIC_IP:-}")
+            case "$st" in
+                here) now="${GREEN}✓ already here${RESET}" ;;
+                none) now="${YELLOW}does not exist — CREATE it${RESET}" ;;
+                *)    now="${YELLOW}now ${st#other } — change it${RESET}" ;;
+            esac
+        fi
         case "$kind" in
-            web)     if [[ "$cf" == "true" ]]; then echo -e "    ${BOLD}$r${RESET}  ${DIM}(Cloudflare: proxied, as before)${RESET}"; else echo -e "    ${BOLD}$r${RESET}"; fi ;;
-            stratum) echo -e "    ${BOLD}$r${RESET}  ${DIM}(stratum — DNS only: a proxy cannot carry raw TCP :$(_pmg_conf stratum_port 3333))${RESET}" ;;
-            wg)      echo -e "    ${BOLD}$r${RESET}  ${DIM}(WireGuard endpoint — DNS only; gateways re-resolve it)${RESET}" ;;
+            web)     if [[ "$cf" == "true" ]]; then echo -e "    ${BOLD}$r${RESET}  ${DIM}(Cloudflare: proxied, as before)${RESET}  $now"; else echo -e "    ${BOLD}$r${RESET}  $now"; fi ;;
+            stratum) echo -e "    ${BOLD}$r${RESET}  ${DIM}(stratum — DNS only: a proxy cannot carry raw TCP :$(_pmg_conf stratum_port 3333))${RESET}  $now" ;;
+            wg)      echo -e "    ${BOLD}$r${RESET}  ${DIM}(WireGuard endpoint — DNS only; gateways re-resolve it)${RESET}  $now" ;;
         esac
     done
     if [[ -z "$wgh" && -f "${WG_CONF:-/nonexistent}" ]]; then
@@ -1897,13 +2165,20 @@ _pmg_in_final() {
     echo -e "    1. Change the DNS records above, if not done yet. Re-check gateways any time: W → list."
     if [[ "$PMG_IN_CERT_OK" -ne 1 ]]; then
         echo -e "    2. Once DNS points here: ${BOLD}4) Setup nginx${RESET} issues the TLS certificate."
-    else
+    elif command -v certbot >/dev/null 2>&1 && _pmg_certbot_renew_scheduled; then
         echo -e "    2. HTTPS is up with the old hub's cert; certbot renews it here from now on."
+    else
+        echo -e "    2. HTTPS is up with the old hub's cert — but ${BOLD}no certbot renewal is scheduled here${RESET}:"
+        echo -e "       install certbot + python3-certbot-nginx and enable its timer, or it expires."
     fi
     if [[ "${PBK_EXTRACT_PAUSED:-0}" == "1" ]]; then
         echo -e "    ${BOLD}Stratum is PAUSED${RESET} until $(_pbk_utc "$PBK_EXTRACT_PAUSE_UNTIL") — resume it in admin → Announcements →"
         echo -e "       Stratum as soon as the pool checks out; every minute until then is downtime."
         echo -e "       ${DIM}EADDRNOTAVAIL on a region = its WireGuard address is not up yet: tunnel up, then Re-bind.${RESET}"
+    fi
+    local tp; tp=$(_pmg_tor_socks_port)
+    if ! _pmg_port_listening "$tp"; then
+        echo -e "    ${YELLOW}Tor: nothing listens on :$tp — install + start tor BEFORE step 4, or Tor payouts fail.${RESET}"
     fi
     echo -e "    3. Reconcile: admin → Health → Reconciliation must report clean."
     echo -e "    4. THEN resume payouts in admin → Payouts. Nothing here unfreezes them."
@@ -1927,8 +2202,9 @@ _pmg_in_intro() {
     echo -e "  ${DIM}Service $POOL_SERVICE$dom${RESET}"
     echo ""
     echo -e "  In this order:"
-    echo -e "    1. Checks (read-only): 1) Install ran, node synced, the archive and its manifest, and"
-    echo -e "       the OLD hub is dark — it must not answer on its stratum or its pool API."
+    echo -e "    1. Checks (read-only): 1) Install ran, node synced, nginx + certbot, the archive and its"
+    echo -e "       manifest, the same backend code, and the OLD hub is dark — it must not answer on its"
+    echo -e "       stratum or its pool API."
     echo -e "    2. Restore — the same extraction as 2) Restore. Payouts come up FROZEN."
     echo -e "    3. Location: a new region tag if this hub moved (e.g. nyc → cqf)."
     echo -e "    4. Bring-up: node secrets, wallet binary, ownership, web files, WireGuard, nginx."

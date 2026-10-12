@@ -1750,11 +1750,12 @@ $admin_rules
     # Forwards the client IP, unlike the SEO-file proxies above: this one is a real page a
     # visitor loads, and the app rate-limits it per IP — without these headers every visitor
     # would share nginx's single 127.0.0.1 bucket.
-    # CSP: the app sets its own CSP pair on every response, and a browser enforces EVERY CSP
+    # CSP: the app sets its own CSP on every response, and a browser enforces EVERY CSP
     # header it receives - so passed through, the app's narrower policy (no analytics or
     # Google-font host) was intersected with the page policy on this page alone, silently
-    # blocking both, and its Report-Only twin logged violations no static page has. Both are
-    # hidden here, and this block adds no header of its own, so it inherits the server-level
+    # blocking both. It is hidden here, together with any Report-Only header (the app sent a
+    # Report-Only twin until refactor F7; hiding it keeps an older backend behind this vhost
+    # clean), and this block adds no header of its own, so it inherits the server-level
     # page snippet: the same headers the file gets when served from disk. Same for /blog/ below.
     location = /page.html {
         proxy_pass         http://127.0.0.1:$POOL_PORT;

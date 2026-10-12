@@ -1,6 +1,6 @@
 // Every HTTP route the pool serves, registered on `app` in the order Express will match them.
-// This is the former setupRoutes() body from index.js, moved verbatim (code-layout refactor P1);
-// later parts split it into per-area files under routes/ and this file becomes the ordered list.
+// This file is the ORDERED list: the order anchors (/api/account, /uploads), the games-link
+// wiring, one mount per area file under routes/ (admin areas via routes/admin/index.js), the 404.
 //
 // Where identifiers come from: stateless modules are require()d here exactly as index.js does
 // (a lib re-required is the same cached module instance). Everything that is an INSTANCE or
@@ -109,38 +109,11 @@ module.exports = function registerRoutes(app, ctx) {
   // These endpoints are unprotected and allow arbitrary data manipulation.
   // For testing in development, use curl with direct database queries.
 
-
-
-
-
   app.use(noAutoOptions(createAccountRoutes(ctx)));
 
   // Test endpoint removed - manual block crediting disabled for security
 
   registerAdminRoutes(app, ctx, guards);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
   // REMOVED (2026-07-28): GET /api/miners/top — a public, unauthenticated rich-list. It paired a
   // full grin address with balance + balance_locked + share count + online flag + account age,
@@ -149,21 +122,6 @@ module.exports = function registerRoutes(app, ctx) {
   // it duplicated /api/pool/miners (now address-masked). The legitimate public leaderboards are
   // /api/stratum/top-miners and /api/pool/top-block-finders, which rank on hashrate and blocks
   // found — contribution, not how much money is sitting in someone's pool balance.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
   app.use((req, res) => {
     res.status(404).json({ error: 'Not found' });

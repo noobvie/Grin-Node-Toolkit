@@ -89,7 +89,7 @@ class StratumPause {
     this._transition = null;
     this._timer = null;
     this._pendingAlerts = [];
-    // Set by index.js (setupRoutes) to invalidateBranding: every transition — timer-driven ones
+    // Set by routes/index.js to invalidateBranding: every transition — timer-driven ones
     // included — must drop the 60 s branding memo so the overlay and banner follow (§21.8).
     this.onChange = null;
   }

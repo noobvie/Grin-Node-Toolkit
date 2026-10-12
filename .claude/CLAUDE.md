@@ -635,6 +635,8 @@ recall the relevant memory and read its doc:
   multi-region hub + thin stratum gateways, payments) → memory `project_pool_*` + `docs/generated/script07_*.md`.
   The pool lives in THIS repo (`scripts/07_grin_mining_public_pool.sh` + `web/07_mining_pool_public/`);
   the standalone GRINIUM repo is **deprecated — never edit it**.
+  Backend routes live in `back-end-pool/routes/` (one file per area, `index.js` is boot only); pages carry no
+  inline script and `script-src` has no `'unsafe-inline'` — see impl §12 "Code layout".
 - **GrinScan / grin-explorer (06b), pruned vs archive runtime behaviour** → memory `project_grinscan_archive_lazy`.
 - **Solo mining** (block-finder attribution, SQLite collector) → memory `project_testnet_solo_mining`, `project_solo_sqlite_storage`, `project_solo_block_finder`.
 

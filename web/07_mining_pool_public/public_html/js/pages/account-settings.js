@@ -149,13 +149,7 @@
             setMsg(msg, 'Loading…', true);
             try {
                 const a = await getJson('/api/account/' + encodeURIComponent(addr));
-                // A different address must not inherit P-09's proofs, file or pending text.
-                if (addr !== currentAddr || wasDemo) {
-                    dpReset();
-                    // Another address's Tor answer and offer are not this one's.
-                    torNo = null;
-                    setMsg($id('acct-withdraw-msg'), '', true);
-                }
+                if (addr !== currentAddr || wasDemo) forgetPreviousAddress();
                 currentAddr = addr;
                 try { localStorage.setItem(ADDR_KEY, addr); } catch (e) {}
 
@@ -188,6 +182,26 @@
                     ? 'No mining account for this address yet — point a miner at the pool first.'
                     : 'Lookup failed: ' + e.message, false);
             }
+        }
+
+        // Everything the miner TYPED or was TOLD for the previous address. Runs only when the
+        // address changes (a real lookup or the demo) — never on the same address's refresh, which
+        // follows a payout and must keep the proof for the next one. A miner with two addresses
+        // otherwise carried address A's proof (IP or rig password), amount and Goblin entries into
+        // address B's form — and one rig mining to both makes A's IP a VALID proof for B, so a
+        // click paid out an amount typed for the other address.
+        function forgetPreviousAddress() {
+            dpReset();                                   // P-09's proofs, file and pending text
+            torNo = null;                                // another address's Tor answer and offer
+            setMsg($id('acct-withdraw-msg'), '', true);
+            const proof = $id('acct-ip-proof');
+            proof.value = '';
+            proof.type = 'password';                     // back to masked, as on a fresh load
+            const reveal = $id('acct-proof-reveal');
+            if (reveal) { reveal.textContent = 'Show'; reveal.setAttribute('aria-pressed', 'false'); }
+            $id('acct-amount').value = '';
+            renderNetPreview();
+            PayoutMethods.addressChanged();              // each rail's own inputs (Goblin)
         }
 
         function renderSummary(a) {
@@ -2252,7 +2266,7 @@
         })();
 
         function renderDemo() {
-            if (currentAddr !== DEMO_ADDR) { dpReset(); torNo = null; setMsg($id('acct-withdraw-msg'), '', true); }
+            if (currentAddr !== DEMO_ADDR) forgetPreviousAddress();
             isDemo = true;
             currentAddr = DEMO_ADDR;   // demo is never saved to localStorage
             renderSummary(DEMO.summary);

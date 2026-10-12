@@ -215,6 +215,19 @@
       renderState();
     },
 
+    // The username and both registration proofs were typed for the previous address; a
+    // pending "replace?" confirmation was asked about that address's destination.
+    onAddressChange: function () {
+      ['acct-nostr-username', 'acct-nostr-ip-proof', 'acct-nostr-pass-proof'].forEach(function (id) {
+        var el = $(id); if (el) el.value = '';
+      });
+      hideConfirm();
+      var box = $('acct-nostr-confirm'); if (box) delete box.dataset.replacing;
+      ['acct-nostr-reg-msg', 'acct-nostr-send-msg'].forEach(function (id) {
+        var el = $(id); if (el && H) H.setMsg(el, '', true);
+      });
+    },
+
     init: function (pageHost) {
       H = pageHost;
       var reg = $('acct-nostr-register'); if (reg) reg.addEventListener('click', function () { register(null); });

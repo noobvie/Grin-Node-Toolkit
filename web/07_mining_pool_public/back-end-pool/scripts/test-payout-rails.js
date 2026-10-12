@@ -954,8 +954,86 @@ function accountOfferSection() {
   } catch (e) { ok('the watch evaluates', false, e.message); }
 }
 
+// ─── Account page: switching address forgets the previous address's form (2026-10-12) ────────
+// A miner with two addresses looked up A, paid out, looked up B — and B's form still held A's
+// proof, amount and Goblin entries. One rig mining to both makes A's IP a valid proof for B, so
+// the stale amount was one click from being paid out of the wrong account.
+function accountAddressSwitchSection() {
+  section('account page — switching address clears the payout form');
+  const vm = require('vm');
+  const WEB = path.resolve(APP, '..', 'public_html');
+  const page = readPageSource(path.join(WEB, 'account-settings.html'));
+  const script = page.slice(page.indexOf('// Theme switching is handled site-wide'), page.lastIndexOf('</script>'));
+
+  // A fake element: value/type/text/attributes/dataset/style, and listeners swallowed.
+  const els = {};
+  const elem = (id) => els[id] || (els[id] = {
+    id, value: '', type: 'text', textContent: '', className: '', dataset: {}, style: {}, attrs: {},
+    setAttribute(k, v) { this.attrs[k] = String(v); }, addEventListener() {},
+  });
+
+  // ── The page's reset, lifted and run ──
+  const forget = lift(script, 'forgetPreviousAddress');
+  ok('A1. the page defines forgetPreviousAddress', !!forget);
+  const calls = { dpReset: 0, net: 0, rails: 0, msgs: [] };
+  const ctx = {
+    $id: elem, calls, torNo: 'failed',
+    dpReset() { calls.dpReset++; },
+    setMsg(el, text) { calls.msgs.push([el.id, text]); },
+    renderNetPreview() { calls.net++; },
+    PayoutMethods: { addressChanged() { calls.rails++; } },
+  };
+  elem('acct-ip-proof').value = '203.0.113.42'; elem('acct-ip-proof').type = 'text';
+  elem('acct-proof-reveal').textContent = 'Hide'; elem('acct-proof-reveal').attrs['aria-pressed'] = 'true';
+  elem('acct-amount').value = '31.5';
+  try { vm.runInNewContext(forget + '\nforgetPreviousAddress(); this.torNo = torNo;', ctx); }
+  catch (e) { ok('forgetPreviousAddress evaluates', false, e.message); }
+  ok('A2. the ownership proof is emptied and masked again (Show, aria-pressed=false)',
+    els['acct-ip-proof'].value === '' && els['acct-ip-proof'].type === 'password' &&
+    els['acct-proof-reveal'].textContent === 'Show' && els['acct-proof-reveal'].attrs['aria-pressed'] === 'false');
+  ok('A3. the amount is emptied and the net preview redrawn', els['acct-amount'].value === '' && calls.net === 1);
+  ok('A4. the donor proofs, the Tor answer and the payout message are still forgotten',
+    calls.dpReset === 1 && ctx.torNo === null && calls.msgs.some(([id, t]) => id === 'acct-withdraw-msg' && t === ''));
+  ok('A5. every rail is told (PayoutMethods.addressChanged)', calls.rails === 1);
+
+  // ── Where it runs: on a CHANGE of address only ──
+  const lookup = lift(script, 'lookup');
+  const at = lookup.indexOf('if (addr !== currentAddr || wasDemo) forgetPreviousAddress();');
+  ok('A6. lookup() forgets only when the address changed (or the demo was showing), before adopting the new one',
+    at > 0 && at < lookup.indexOf('currentAddr = addr;'));
+  ok('A7. the demo forgets a real address it replaces', /if \(currentAddr !== DEMO_ADDR\) forgetPreviousAddress\(\);/.test(lift(script, 'renderDemo')));
+  ok('A8. nothing else calls it — the same address\'s post-payout refresh keeps the proof',
+    [...script.matchAll(/forgetPreviousAddress\(\)/g)].length === 3);
+
+  // ── The rail half: registry fan-out and Goblin's own fields ──
+  const win = {};
+  const dctx = { window: win, document: { getElementById: elem } };
+  try {
+    vm.runInNewContext(fs.readFileSync(path.join(WEB, 'js/payout-methods.js'), 'utf8'), dctx);
+    vm.runInNewContext(fs.readFileSync(path.join(WEB, 'js/payout-goblin.js'), 'utf8'), dctx);
+  } catch (e) { ok('the rail files evaluate', false, e.message); }
+  const PM = win.PayoutMethods;
+  const goblin = PM && PM.get('nostr');
+  ok('A9. the Goblin rail declares onAddressChange', !!goblin && typeof goblin.onAddressChange === 'function');
+  let other = 0;
+  if (PM) PM.register({ key: 'probe', onAddressChange() { other++; } });
+  const msgs = [];
+  if (goblin) goblin.init({ setMsg(el, t) { msgs.push([el.id, t]); } });
+  ['acct-nostr-username', 'acct-nostr-ip-proof', 'acct-nostr-pass-proof'].forEach((id) => { elem(id).value = 'typed-for-A'; });
+  elem('acct-nostr-confirm').style.display = ''; elem('acct-nostr-confirm').dataset.replacing = 'alice@goblin.st';
+  try { if (PM) PM.addressChanged(); } catch (e) { ok('addressChanged runs', false, e.message); }
+  ok('A10. addressChanged reaches every rail that declares the hook', other === 1);
+  ok('A11. Goblin clears its username and both registration proofs',
+    ['acct-nostr-username', 'acct-nostr-ip-proof', 'acct-nostr-pass-proof'].every((id) => els[id].value === ''));
+  ok('A12. …closes a pending "replace?" and forgets which destination it was about',
+    els['acct-nostr-confirm'].style.display === 'none' && !('replacing' in els['acct-nostr-confirm'].dataset));
+  ok('A13. …and blanks its two messages',
+    ['acct-nostr-reg-msg', 'acct-nostr-send-msg'].every((id) => msgs.some(([m, t]) => m === id && t === '')));
+}
+
 (async () => {
   accountOfferSection();
+  accountAddressSwitchSection();
 
   // ─── Slatepack rail (and Goblin/Nostr, same wallet call) ──────────────────
   section('Slatepack rail — create_slatepack_message wire shape');

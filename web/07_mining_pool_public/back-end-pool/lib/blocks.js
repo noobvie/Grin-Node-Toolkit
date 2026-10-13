@@ -33,8 +33,8 @@ class BlockManager {
 
   // Transaction fees carried by this block, in GRIN. Grin pays the finder
   // REWARD + sum(kernel fees) — 60 is the EMISSION, not the payment — so crediting the flat
-  // constant quietly kept every block's fees for the pool on top of pool_fee_percent, and
-  // biased reconciliation's coverage gap positive (masking a real shortfall of the same
+  // constant quietly keeps every block's fees for the pool on top of pool_fee_percent, and
+  // biases reconciliation's coverage gap positive (masking a real shortfall of the same
   // size). Audit §J5-10.
   //
   // Read at FOUND time on purpose: get_block returns the block BODY, which a pruned node
@@ -92,8 +92,7 @@ class BlockManager {
       const roundShares = this._roundShareDiff(prev ? prev.found_at : 0);
       // In PARALLEL, not in sequence: creditBlock is awaited before the miner's submit ack is
       // written, and each of these carries the node client's 10s timeout. Serially that is up
-      // to 20s of dead air on an unreachable node; concurrently it is 10s, which is also
-      // better than the pre-§J5-10 code managed with the difficulty fetch alone.
+      // to 20s of dead air on an unreachable node; concurrently it is 10s.
       const [networkDiff, fees] = await Promise.all([
         this._fetchNetworkDifficulty(height),
         this._fetchBlockFees(height, hash),
@@ -226,7 +225,7 @@ class BlockManager {
   }
 
   // Synchronous: all queries are synchronous sqlite .get() (no awaits). It must NOT be async —
-  // every caller uses it without await, so an async version returned a Promise they spread
+  // every caller uses it without await, so an async version would return a Promise they spread
   // into {} (empty stats on /api/pool/stats, /api/admin/metrics, dashboard, poolstats).
   getPoolStats() {
     try {
@@ -239,10 +238,10 @@ class BlockManager {
       ).get();
 
       // 'paid' is the TERMINAL success state — rewards.js flips confirmed→paid the moment it
-      // distributes, ~30s after maturity. Counting only 'confirmed' therefore reported a pool
-      // that has confirmed 0 blocks and earned 0 confirmed reward in steady state, and rolled
-      // every paid block into `immature_blocks` below. This feeds /api/pool/stats and the
-      // external poolstats reporter, so it was wrong in public. See audit §J5-4.
+      // distributes, ~30s after maturity. Counting only 'confirmed' would report a pool that
+      // has confirmed 0 blocks and earned 0 confirmed reward in steady state, and roll every
+      // paid block into `immature_blocks` below. This feeds /api/pool/stats and the external
+      // poolstats reporter, so the error would be public. See audit §J5-4.
       const confirmedBlocks = this.db.prepare(
         "SELECT COUNT(*) as count FROM blocks WHERE status IN ('confirmed', 'paid')"
       ).get();
@@ -269,8 +268,8 @@ class BlockManager {
         "SELECT COUNT(*) as count FROM blocks WHERE status != 'orphaned' AND created_at > unixepoch() - 7 * 86400"
       ).get();
       // Orphans FOUND in the last 24h — the homepage Integrity lamp's window. Same predicate as
-      // AlertMonitor.checkOrphanedBlocks, so the lamp and the operator alert agree. The lamp
-      // used to scan only the newest 8 blocks, which on a slow pool kept one orphan lit for weeks.
+      // AlertMonitor.checkOrphanedBlocks, so the lamp and the operator alert agree. Never "the
+      // newest N blocks": on a slow pool that keeps one orphan lit for weeks.
       const orphans24h = this.db.prepare(
         "SELECT COUNT(*) as count FROM blocks WHERE status = 'orphaned' AND found_at > unixepoch() - 86400"
       ).get();

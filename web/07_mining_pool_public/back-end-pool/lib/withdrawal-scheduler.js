@@ -6,7 +6,7 @@ const IncentivesManager = require('./incentives');
 // (Tor, slatepack, and any future method that reuses these states, e.g. the designed Nostr
 // rail, which parks in slatepack_pending). Both create paths MUST share this list: a
 // rail-specific subset re-opens the hole where a miner with a pending slatepack could start
-// a Tor payout in parallel (found + fixed 2026-07-17).
+// a Tor payout in parallel.
 //
 // 'finalizing' is the short-lived claim a finalize holds while it talks to the wallet (see
 // _claimForFinalize). Its coins are mid-broadcast, so it is emphatically in-flight — every
@@ -14,9 +14,9 @@ const IncentivesManager = require('./incentives');
 // sum, AlertMonitor's inFlight (a missing row there reads as an unexplained wallet drain),
 // the account-summary pending display and the admin payments view.
 //
-// 'tor_held' (2026-09-26) is a Tor payout whose one send attempt has an UNKNOWN outcome: the
+// 'tor_held' is a Tor payout whose one send attempt has an UNKNOWN outcome: the
 // amount stays locked and the row is never re-sent, so it holds the slot like any pending row.
-// 'retry_scheduled' stays listed for LEGACY rows only: nothing writes it any more, and
+// 'retry_scheduled' stays listed for LEGACY rows only: nothing writes it, and
 // migrateLegacyTorRetries moves every such row out at startup — until then it is still pending.
 const PENDING_SQL = "status IN ('tor_checking','tor_sending','tor_held','retry_scheduled','slatepack_pending','finalizing')";
 
@@ -25,7 +25,7 @@ const PENDING_SQL = "status IN ('tor_checking','tor_sending','tor_held','retry_s
 // restart mid-finalize). Reclaim is NOT a blind revert: see reclaimStaleFinalizing.
 const FINALIZING_STALE_S = 600;
 
-// ─── One Tor attempt, then an answer (plan 2026-09-26) ─────────────────────────────────────────
+// ─── One Tor attempt, then an answer ─────────────────────────────────────────────────────────
 // A Tor payout is sent ONCE. It ends confirmed (paid), tor_failed (balance returned — only on
 // wallet proof that nothing was sent) or tor_held (outcome unknown: locked, never re-sent). There
 // is no retry ladder, no shortfall retry and no automatic re-send of a payout, ever.
@@ -41,7 +41,7 @@ const HELD_ALERT_S = 86400;
 // that address, until the TOR_FAIL_MAX-th most recent counted failure + TOR_PAUSE_S (by then the
 // older ones have left the window, so the pause ends cleanly). Only TOR_COUNTED_CODE counts — the
 // miner's own onion not answering a fresh probe after the send failed. Pool-side and "could not
-// tell" codes never count. Constants on purpose, not settings (operator decision 2026-09-26).
+// tell" codes never count. Constants on purpose, not settings (operator decision).
 const TOR_FAIL_MAX = 5;
 const TOR_FAIL_WINDOW_S = 86400;
 const TOR_PAUSE_S = 86400;
@@ -91,7 +91,7 @@ const SLATE_CANCEL_ALERT_TICKS = 5;
 // pool fee lands in, so both show up as one fee-income line on the transparency page.
 const POOL_FEE_ADDRESS = IncentivesManager.POOL_FEE;
 
-// Miner-facing wording for the two "not now" refusals (2026-09-24, operator decision). Payouts
+// Miner-facing wording for the two "not now" refusals (operator decision). Payouts
 // are miner-initiated with ONE pending per address, never an automatic mass run, so both states
 // clear on their own as other payouts settle — telling the miner to come back in an hour is the
 // whole remedy. The pool-wide cap is deliberately NOT split per rail (a slatepack sub-cap was
@@ -101,7 +101,7 @@ const POOL_BUSY_MSG =
   'the pool is processing a lot of payouts right now — nothing was deducted from your balance; ' +
   'please try again in about an hour';
 // grin-wallet's NotEnoughFunds carries the wallet's available + needed amounts. Passing it through
-// told any miner with an ownership proof how much the POOL wallet can spend, as raw JSON. The
+// would tell any miner with an ownership proof how much the POOL wallet can spend, as raw JSON. The
 // miner gets this line; the operator log keeps the real error. The usual cause is outputs locked
 // by other payouts still settling (an unanswered slatepack holds its inputs + change) — so it is
 // temporary — but a pool wallet that is simply underfunded looks identical, hence the last clause.
@@ -128,8 +128,7 @@ class WithdrawalScheduler {
     this.checkInterval = 60000;
     // How long an unfinalized slatepack payout stays pending before it's cancelled and the
     // locked balance is returned (the miner never imported/returned the slate). Minutes, 30 by
-    // default (config.slatepack_ttl_minutes). The old `slatepack_ttl_hours` was never set by
-    // config.js or the settings table, so every pool ran the `|| 24` fallback. A non-number or a
+    // default (config.slatepack_ttl_minutes). A non-number or a
     // value below the validator's floor falls back to 30 rather than to "expire at once".
     const spTtl = Number(config.slatepack_ttl_minutes);
     this.slatepackTtlSeconds = (Number.isFinite(spTtl) && spTtl >= 10 ? spTtl : 30) * 60;
@@ -147,15 +146,14 @@ class WithdrawalScheduler {
     // True while a Tor CLI send waits for or holds the wallet send lock (sendWithdrawal) — the
     // Slatepack / Goblin creates refuse at once while it is set (_assertNoTorSend).
     this._torSendBusy = false;
-    // (The Tor retry ladder, config.withdrawal_retry_delays, was removed 2026-09-26: one attempt.)
     // Pool-wide cap on concurrent withdrawals (DoS bound), enforced inside every create*
     // path's transaction. MAX_USER_PENDING is NOT the per-address rule — that is the hard
     // one-pending-per-address check next to it; this constant is only read by the unused
     // canInitiateWithdrawal() below.
     //
     // Read from config, which PoolSettings.applyToConfig() populates from
-    // payout.max_pending_withdrawals / payout.max_user_pending. These were hardcoded until
-    // 2026-08-22, so the two fields in admin → Payout wrote to the DB and changed nothing.
+    // payout.max_pending_withdrawals / payout.max_user_pending. Never hardcode them: the two
+    // fields in admin → Payout would write to the DB and change nothing.
     // Coerced and floored at 1: a 0 or a non-numeric string reaching the cap would make the
     // guard reject every withdrawal, which looks exactly like a stuck payout queue.
     this.MAX_PENDING_WITHDRAWALS = Math.max(1, parseInt(config.max_pending_withdrawals, 10) || 100);
@@ -176,9 +174,9 @@ class WithdrawalScheduler {
   }
 
   async schedulerLoop() {
-    // Once per process, before the first pass can send anything: settle every LEGACY Tor row the
-    // old retry ladder left in retry_scheduled (confirmed / refunded on proof / held). Nothing
-    // re-queues those rows any more, so without this they would hold their slot forever.
+    // Once per process, before the first pass can send anything: settle every LEGACY Tor row
+    // left in retry_scheduled (confirmed / refunded on proof / held). Nothing
+    // re-queues those rows, so without this they would hold their slot forever.
     try { await this.migrateLegacyTorRetries(); }
     catch (err) { console.error(`[ERROR] legacy Tor retry migration: ${err.message}`); }
 
@@ -188,14 +186,14 @@ class WithdrawalScheduler {
         // is either confirmed or handed back to the pending pool rather than sitting invisible to
         // both. Runs while frozen too: it only resolves rows to the truth already on-chain.
         await this.reclaimStaleFinalizing();
-        // Same job for the Tor rail, whose send window is wider and which had no sweep at all
-        // until §J4-3. Also freeze-safe: it resolves rows against the wallet, it never sends.
+        // Same job for the Tor rail, whose send window is wider (audit §J4-3). Also
+        // freeze-safe: it resolves rows against the wallet, it never sends.
         await this.reclaimStaleTorSending();
         // Held Tor payouts: confirm on proof, refund on proof of absence, otherwise keep waiting.
         // Deliberately BEFORE the freeze branch: while frozen it still CONFIRMS (the chain's own
         // evidence) and still cancels a never-finalized fallback lock, but it neither refunds nor
         // re-broadcasts — a freeze (restore, Migrate IN, wallet switch) may mean the tx log it would
-        // refund on is not the one the send was made from (review 2026-09-26, #1).
+        // refund on is not the one the send was made from.
         await this.resolveHeldTor();
 
         if (this.isFrozen()) {
@@ -252,7 +250,7 @@ class WithdrawalScheduler {
   // A Tor CLI send holds the wallet send lock for its whole run (sendWithdrawal), up to
   // wallet_send_timeout_ms. A Slatepack / Goblin create is an HTTP request, so it is refused at once
   // instead of waiting that out — and BEFORE its balance lock: a refusal after the lock would be a
-  // reversal, and a reversal starts the miner's cooldown. Nothing is deducted (review 2026-09-26, #2).
+  // reversal, and a reversal starts the miner's cooldown. Nothing is deducted.
   _assertNoTorSend() {
     if (this._torSendBusy) {
       const e = new Error('the pool wallet is sending another payout right now — nothing was deducted; please try again in a minute');
@@ -261,14 +259,14 @@ class WithdrawalScheduler {
     }
   }
 
-  // ─── Change splitting (2026-10-05) ──────────────────────────────────────────────
+  // ─── Change splitting ───────────────────────────────────────────────────────────
   // A payout locks whole inputs, so a wallet holding ONE big output can serve one payout at a
   // time: everyone behind it gets "another payment is ahead". While the wallet holds fewer than
   // `payout_target_outputs` (default 8; 0 = off) spendable outputs, a payout's change is split
   // into 2–3 equal outputs, so the next payouts find coins of their own. Each extra output adds
   // ~0.002 GRIN of network fee (weight), well inside the flat withdrawal fee. Counted at the rail's
-  // min_conf (`minConf`: 10 for the Tor CLI, 1 for the Owner-API rails). Any failure → 1, i.e.
-  // exactly the old behaviour: this is an optimisation and must never block or fail a payout.
+  // min_conf (`minConf`: 10 for the Tor CLI, 1 for the Owner-API rails). Any failure → 1 (no
+  // split): this is an optimisation and must never block or fail a payout.
   async _changeOutputCount(minConf) {
     const raw = this.config.payout_target_outputs;
     let target = raw === undefined || raw === null || raw === '' ? 8 : Number(raw);
@@ -280,7 +278,7 @@ class WithdrawalScheduler {
     return Math.min(3, Math.max(2, target - have));
   }
 
-  // ─── "Another payment is ahead" (2026-10-05) ────────────────────────────────────
+  // ─── "Another payment is ahead" ─────────────────────────────────────────────────
   // A Grin wallet spends whole outputs: a payout locks its inputs, and their change cannot be
   // spent again until it is mined (Owner-API rails, min_conf 1) or 10 blocks deep (the Tor rail's
   // CLI send, --min_conf 10). So a second miner withdrawing right after the first is refused for
@@ -424,8 +422,7 @@ class WithdrawalScheduler {
   // not wallets: a payout "to" one would hand grin-wallet a destination it cannot send to, and a
   // pool_fee row created this way would skip everything createRevenueWithdrawal enforces (the
   // saved address, the 24 h hold, booking network fees first). Revenue leaves ONLY through
-  // createRevenueWithdrawal; prize money leaves through an award to a miner. Review 2026-10-05:
-  // the admin below-minimum payout route reached createWithdrawal('pool_fee', …) unguarded.
+  // createRevenueWithdrawal; prize money leaves through an award to a miner.
   _assertMinerAddress(grinAddress) {
     if (IncentivesManager.RESERVED_ADDRESSES.includes(grinAddress)) {
       const e = new Error(`${grinAddress} is a pool ledger bucket, not a miner wallet — it cannot be paid out here`);
@@ -434,12 +431,12 @@ class WithdrawalScheduler {
     }
   }
 
-  // ─── Network fees → the pool_fee bucket (2026-10-05) ────────────────────────────
-  // The pool wallet pays every payout's REAL chain fee (withdrawals.fee), but the ledger never
-  // debited it from anyone: the bucket grew by the full flat fee while ~0.023 of it was already
-  // spent on chain, so `pool_fee.balance` overstated what the operator can take out by Σ fees.
-  // Draining it would have left the wallet short of what miners are owed by exactly that sum —
-  // and reconciliation adds the sum back to its coverage gaps, so nothing would have said so.
+  // ─── Network fees → the pool_fee bucket ─────────────────────────────────────────
+  // The pool wallet pays every payout's REAL chain fee (withdrawals.fee), but no per-payout
+  // ledger row debits it: the bucket grows by the full flat fee while ~0.023 of it is already
+  // spent on chain, so `pool_fee.balance` overstates what the operator can take out by Σ fees.
+  // Draining it unbooked would leave the wallet short of what miners are owed by exactly that
+  // sum — and reconciliation adds the sum back to its coverage gaps, so nothing would say so.
   //
   // Booked in ONE batch, inside the operator's revenue withdrawal (createRevenueWithdrawal),
   // rather than per payout: no rail has to know its fee before confirm, no migration is needed
@@ -505,7 +502,7 @@ class WithdrawalScheduler {
     };
   }
 
-  // Cross-rail cooldown after a reversed payout (operator decision 2026-07-17, default 30 min).
+  // Cross-rail cooldown after a reversed payout (operator decision, default 30 min).
   // When a payout's lock is reversed back to balance — slatepack expiry or creation failure, a
   // Goblin/Nostr failure, admin cancel — the miner must wait before requesting ANOTHER payout on
   // ANY rail. Two jobs: (1) safety margin for the known theoretical double-pay window (a Tor
@@ -514,10 +511,10 @@ class WithdrawalScheduler {
   // failures. Configured via payout.withdrawal_cooldown_minutes (applied at startup, like
   // min_withdrawal); 0 disables.
   //
-  // A failed TOR payout (method 'tor', status 'tor_failed') no longer starts it (2026-09-26): a
-  // Tor refund now happens only on wallet proof that nothing was sent — the job (1) was a stand-in
-  // for — and the account page offers "Send as Slatepack instead" right after a Tor "no", which a
-  // cooldown would turn into a guaranteed 429. Rapid Tor retries are bounded by the Tor pause
+  // A failed TOR payout (method 'tor', status 'tor_failed') does NOT start it: a Tor refund
+  // happens only on wallet proof that nothing was sent — the job (1) is a stand-in for — and
+  // the account page offers "Send as Slatepack instead" right after a Tor "no", which a
+  // cooldown would turn into a guaranteed 429. Rapid Tor re-requests are bounded by the Tor pause
   // (torPauseStatus) instead. The join is LEFT and COALESCEd so a reversal whose withdrawal row
   // is missing still counts (a NULL must never switch the guard off).
   _assertNoRecentReversal(grinAddress) {
@@ -545,8 +542,8 @@ class WithdrawalScheduler {
   // which must not promise a retry sooner than this guard allows.
   _cooldownSecs() {
     // `0` disabling the cooldown is a documented operator choice. A NON-NUMBER disabling it is a
-    // broken config, and used to do so silently: `'thirty' * 60` is NaN and `if (!cooldown)`
-    // returned (audit §J4-6, same family as memory project_config_loader_type_traps). Fall back to
+    // broken config, and would do so silently: `'thirty' * 60` is NaN and `if (!cooldown)`
+    // returns (audit §J4-6, same family as memory project_config_loader_type_traps). Fall back to
     // the default and say so once — a money guard must never switch itself off without a trace.
     const raw = this.config.withdrawal_cooldown_minutes;
     let mins = (raw === undefined || raw === null) ? 30 : Number(raw);
@@ -591,8 +588,7 @@ class WithdrawalScheduler {
     } catch (e) { console.error(`resume() failed: ${e.message}`); return false; }
   }
 
-  // (processRetryQueue + initiateWithdrawal — the retry ladder's pickup — were removed 2026-09-26.
-  // A Tor payout is sent once; nothing re-queues it. Legacy retry_scheduled rows are settled by
+  // (A Tor payout is sent once; nothing re-queues it. Legacy retry_scheduled rows are settled by
   // migrateLegacyTorRetries at startup.)
 
   async processTorChecks() {
@@ -632,7 +628,7 @@ class WithdrawalScheduler {
   }
 
   // A payout must not inherit a STEPWISE attempt's slate id. The step-by-step sender (F5,
-  // tor_send_mode = 'stepwise') was DELETED 2026-09-26, but a row it touched before then may still
+  // tor_send_mode = 'stepwise') is DELETED, but a legacy row it touched may still
   // carry the slate id it wrote before its lock — this guard stays for exactly those rows. Every
   // wallet-log question on this rail (_priorSendLanded: the Held check, the stale sweep, the
   // legacy migration) reads a non-null slate_id as THIS payout's send and looks up that one slate
@@ -678,7 +674,7 @@ class WithdrawalScheduler {
     return withdrawal.dest_address || withdrawal.grin_address;
   }
 
-  // THE one Tor send of a payout (plan 2026-09-26: one attempt, then an answer).
+  // THE one Tor send of a payout (one attempt, then an answer).
   //
   //   A  "Tx sent successfully"                      → confirmed (F1/F2 then watch it mine)
   //   B  fell back to a slatepack, its slate id read, cancel_tx of that slate succeeded
@@ -691,7 +687,7 @@ class WithdrawalScheduler {
   //
   // A row with ANY earlier attempt on record is never handed to the wallet again: it goes straight
   // to tor_held and resolveHeldTor settles it from the tx log. "Earlier attempt" is read from the
-  // append-only event log (audit §J4-2 — retry_count was zeroed by the old admin Retry button), with
+  // append-only event log (audit §J4-2 — retry_count is a mutable column, not a record), with
   // retry_count and slate_id kept as belt and braces. This is what makes "no automatic re-send,
   // ever" hold by construction rather than by a guard that has to read the wallet right.
   async sendWithdrawal(withdrawalId) {
@@ -713,12 +709,12 @@ class WithdrawalScheduler {
         return;
       }
 
-      // The wallet send lock, held for the CLI's WHOLE run (review 2026-09-26, #2). `grin-wallet
+      // The wallet send lock, held for the CLI's WHOLE run. `grin-wallet
       // send` selects its coins at start but locks them only after the Tor round trip, and
       // lock_output never checks an existing lock (v5.5.0 selection.rs; selection takes the
-      // SMALLEST coins first) — so a Slatepack / Goblin create running meanwhile picked the same
-      // coins, and the chain could accept only one of the two transactions: the other payout then
-      // stuck in finalizing or Held. The CLI is this process's own child, so this process's lock
+      // SMALLEST coins first) — so a Slatepack / Goblin create running meanwhile would pick the same
+      // coins, and the chain can accept only one of the two transactions: the other payout then
+      // sticks in finalizing or Held. The CLI is this process's own child, so this process's lock
       // covers it. While it is held the creates refuse at once (_assertNoTorSend).
       // Read before the lock: a wallet call must never sit between the claim and the send.
       const changeOutputs = await this._changeOutputCount(10);
@@ -906,7 +902,7 @@ class WithdrawalScheduler {
   // wallet_send_timeout_ms (360 s default), and the Tor round-trip + finalize + broadcast can all
   // have completed while the pipe was still open — the kill tells us the process died, not that
   // the money stayed. Refunding it, or sending it again, pays the miner twice while the ledger
-  // debits once, which is unrecoverable. Since 2026-09-26 nothing re-sends a Tor payout at all;
+  // debits once, which is unrecoverable. Nothing re-sends a Tor payout at all;
   // this matcher decides whether a Held / failed / abandoned payout is CONFIRMED (settle it), proven
   // ABSENT (the only answer that may refund) or UNKNOWN (keep it locked). Callers: the Held check
   // (resolveHeldTor), outcome C of the one attempt, the stale tor_sending sweep, the legacy
@@ -918,20 +914,21 @@ class WithdrawalScheduler {
   //     inside one of THIS row's send attempts (_torAttemptWindows), not held by a Slatepack /
   //     Goblin row. Two miners withdrawing the same amount must never collide: a match that another
   //     Tor row also holds or also fits (a crash overlap) is `ambiguous` — it neither confirms nor
-  //     counts as absent, so the row stays held (Session 4 review 2026-09-26, R1: with only a
-  //     lower time bound, a row that never locked was confirmed by the next miner's tx, and that
-  //     miner — their tx now "claimed" — read absent twice and was refunded on top of it).
+  //     counts as absent, so the row stays held (with only a lower time bound, a row that never
+  //     locked would be confirmed by the next miner's tx, and that miner — their tx now
+  //     "claimed" — would read absent twice and be refunded on top of it).
   // 'TxSentCancelled' is excluded — a cancelled tx never reached the chain. Note this is stricter
   // than _captureTorSlateId's /Sent/ regex, which matches the cancelled form too; that one only
   // decorates a proof link, this one decides whether to spend.
   //
   // ── THREE outcomes, not two (audit §J4-10) ──────────────────────────────────
-  // This used to return "did a matching TxSent exist", and treat yes as "it landed". By §J4-1's
+  // Never reduce this to "did a matching TxSent exist", with yes = "it landed". By §J4-1's
   // premise that is wrong: a bare 'TxSent' entry is written at tx_lock_outputs, so it says the
   // outputs were RESERVED and nothing about whether the transaction was broadcast. But the fix
   // here is NOT reclaimStaleFinalizing's — there, requiring `confirmed` is strictly safer, while
   // here it flips the risk the other way: a payout genuinely broadcast but not yet mined would
-  // stop matching, the retry would proceed, and that is §H1's double-pay. So the answer has to
+  // stop matching, a refund would proceed, and that is the double-pay of audit archive §H1. So
+  // the answer has to
   // carry all three states and let the caller act differently on each:
   //
   //   outcome              meaning                                   caller does
@@ -964,7 +961,7 @@ class WithdrawalScheduler {
 
       const sent = txs.filter((t) => t && t.tx_slate_id && String(t.tx_type) === 'TxSent');
 
-      // `confirmed` is the chain evidence — the same field lib/reconciliation.js:278 and
+      // `confirmed` is the chain evidence — the same field lib/reconciliation.js auditWalletSends and
       // reclaimStaleFinalizing both test on this exact log. kernel_excess is deliberately not
       // used as a second signal: grin-wallet writes it at lock and at finalize, i.e. before
       // post_tx (see backfillKernelProofs).
@@ -984,8 +981,8 @@ class WithdrawalScheduler {
       // slate → the method of the OTHER row holding it. A Slatepack / Goblin row's slate id comes
       // from its own init_send_tx, so its tx is provably not this payout's. A Tor row's slate id may
       // have been INFERRED by this same amount match (capture, an earlier confirm) — so a tx another
-      // Tor row holds is contended, never silently dropped: dropping it is how a landed send read
-      // "absent" and was refunded (Session 4 review, R1b).
+      // Tor row holds is contended, never silently dropped: dropping it lets a landed send read
+      // "absent" and be refunded.
       const claimedBy = new Map(
         this.db.prepare('SELECT slate_id, method FROM withdrawals WHERE slate_id IS NOT NULL AND id != ?')
           .all(withdrawal.id).map((r) => [String(r.slate_id), String(r.method || 'tor')])
@@ -994,7 +991,7 @@ class WithdrawalScheduler {
       const wantNano = Math.round(Number(netSend) * 1e9);
       const createdAt = Number(withdrawal.created_at) || 0;
       // The row's own send attempts. Only a row never handed to the wallet (no claim event) falls
-      // back to the old open-ended bound — and such a row has no send to find.
+      // back to an open-ended bound — and such a row has no send to find.
       const wins = this._torAttemptWindows(withdrawal.id);
       const inOwn = (when) => (wins.length
         ? wins.some((w) => when >= w.from - ATTEMPT_WINDOW_SLACK_S && when <= w.to + ATTEMPT_WINDOW_SLACK_S)
@@ -1017,12 +1014,12 @@ class WithdrawalScheduler {
         const holder = claimedBy.get(String(t.tx_slate_id));
         if (holder && holder !== 'tor') return false;
         // An unparseable timestamp is a MISSING OBSERVATION, not a passing test. Treating it as
-        // "no opinion" removed the only age bound and let a year-old send of the same amount be
+        // "no opinion" removes the only age bound and lets a year-old send of the same amount be
         // accepted as this payout (audit §J4-4).
         const when = this._txCreatedAt(t);
         if (when === null) return false;
-        // Locked outside every attempt of this row → it is some other send (R1a: a lower bound
-        // alone let a row that never locked be confirmed by the NEXT miner's same-amount tx).
+        // Locked outside every attempt of this row → it is some other send (a lower bound alone
+        // would let a row that never locked be confirmed by the NEXT miner's same-amount tx).
         if (!inOwn(when)) return false;
         return Math.abs(this._txRecipientNano(t) - wantNano) <= 1000; // 1 µGRIN tolerance
       });
@@ -1048,8 +1045,8 @@ class WithdrawalScheduler {
   }
 
   // grin-wallet serialises TxLogEntry timestamps as RFC3339 strings; tolerate a numeric form
-  // (seconds or millis) in case a wallet build differs. null when unparseable, which the caller
-  // treats as "no opinion" rather than as a mismatch.
+  // (seconds or millis) in case a wallet build differs. null when unparseable, which no caller
+  // may treat as a pass (see _priorSendLanded, audit §J4-4).
   _txCreatedAt(t) {
     const v = t && (t.creation_ts !== undefined ? t.creation_ts : t.creation_time);
     if (v === undefined || v === null) return null;
@@ -1114,8 +1111,6 @@ class WithdrawalScheduler {
     });
   }
 
-  // (_deferSend — "park it on the retry ladder without a rung" — was removed 2026-09-26: an
-  // unknown outcome is tor_held now, and resolveHeldTor re-asks the wallet instead.)
 
   // A Tor send that fell back to a slatepack (lib/wallet-tor.js classifySendOutput) left a
   // TxSent entry with the outputs LOCKED and nothing finalized. Left alone, that entry is exactly
@@ -1209,8 +1204,6 @@ class WithdrawalScheduler {
     }
   }
 
-  // (scheduleRetry — the 6/12/24/48 h ladder, the 1 h shortfall retry and their caps — was removed
-  // 2026-09-26. A Tor payout is sent once; see sendWithdrawal and _settleFailedTorSend.)
 
   // ─── On-chain kernel proof (payment-proof deep-link surface) ────────────────
   // Fill in the kernel excess of each confirmed payout so the account page can deep-link it to a
@@ -1287,7 +1280,7 @@ class WithdrawalScheduler {
 
   // ─── "Marked paid but not mined" watchdog (F2) ──────────────────────────────
   // A payout turns 'confirmed' when the send COMMAND succeeds (Tor: the CLI returned; slatepack /
-  // Goblin: finalize + post_tx returned). Nothing checked that the tx then MINED, and a Grin node
+  // Goblin: finalize + post_tx returned). The send path does not check that the tx then MINED, and a Grin node
   // drops its mempool on restart — so a posted payout can vanish while the miner reads "paid",
   // and the wallet keeps its inputs locked in an unconfirmed TxSent (which can itself cause the
   // NotEnoughFunds shortfall). lib/reconciliation.js checks only the opposite direction (a
@@ -1609,11 +1602,11 @@ class WithdrawalScheduler {
   // link) and never touches the payout itself. Runs right after send when the newest sent tx in
   // the wallet log is ours (sends are serialized through the scheduler).
   // ⚠ This is best-effort PROOF METADATA, but the value it writes is not inert, which is why
-  // its matching rules must be the guard's and not a second, looser copy (audit §J4-11). The
-  // old version matched `/Sent/` (which also matches TxSentCancelled — a transaction that never
+  // its matching rules must be the guard's and not a second, looser copy (audit §J4-11). A
+  // looser copy — `/Sent/` (which also matches TxSentCancelled, a transaction that never
   // reached the chain), `>= wantNano` rather than the exact net, no time bound at all, and
-  // "newest by id" as the tie-break. Observed directly: after a re-send it attached `OLD`, a
-  // year-old unrelated transaction. What the wrong value then does:
+  // "newest by id" as the tie-break — was observed attaching `OLD`, a year-old unrelated
+  // transaction, after a re-send. What the wrong value then does:
   //   · it becomes the account page's kernel deep-link, so a miner is shown a STRANGER's
   //     transaction as proof of their own payment;
   //   · _priorSendLanded builds its `claimed` set from withdrawals.slate_id, so a wrong value
@@ -1634,10 +1627,10 @@ class WithdrawalScheduler {
         this.db.prepare('SELECT slate_id FROM withdrawals WHERE slate_id IS NOT NULL AND id != ?')
           .all(withdrawalId).map((r) => String(r.slate_id))
       );
-      // The same attempt-window rule as _priorSendLanded (2026-09-26, review finding (c)): this is
-      // called right after the send, while the row's attempt is still open. The old bound
-      // (created_at − 60 s, no upper bound) could take another payout's same-amount tx and put its
-      // kernel link on this one. Only a row never claimed keeps the old bound.
+      // The same attempt-window rule as _priorSendLanded: this is called right after the send,
+      // while the row's attempt is still open. A bound of created_at − 60 s with no upper bound
+      // can take another payout's same-amount tx and put its kernel link on this one; only a row
+      // never claimed falls back to it.
       const wins = this._torAttemptWindows(withdrawalId);
       const inOwn = (when) => (wins.length
         ? wins.some((w) => when >= w.from - ATTEMPT_WINDOW_SLACK_S && when <= w.to + ATTEMPT_WINDOW_SLACK_S)
@@ -1673,8 +1666,7 @@ class WithdrawalScheduler {
     return this._creditConfirm(withdrawalId, 'tor_sending', note || 'Successfully sent');
   }
 
-  // (markFailed — the ladder's terminal refund and its last-rung guard — was removed 2026-09-26.
-  // A refund now needs proof of absence on every path: _settleFailedTorSend (B, C),
+  // (A refund needs proof of absence on every path: _settleFailedTorSend (B, C),
   // resolveHeldTor (two absent reads), migrateLegacyTorRetries, forceRefundHeld.)
 
   // Create a miner-initiated withdrawal with a compare-and-swap balance lock.
@@ -1695,8 +1687,8 @@ class WithdrawalScheduler {
   //
   // Exists so a caller that must do EXPENSIVE work before creating a withdrawal can find out
   // first whether the request is going to be refused anyway. The Tor rail's pre-flight probe
-  // is the case: it built up to two fresh Tor circuits (≤6 s) BEFORE any of these checks ran,
-  // so a miner holding one valid ownership proof could force 20 circuit builds a minute at the
+  // is the case: it builds up to two fresh Tor circuits BEFORE any of these checks run, so
+  // without this a miner holding one valid ownership proof could force 20 circuit builds a minute at the
   // `withdraw` bucket even while every withdrawal they asked for would 429 on the
   // one-pending-per-address rule.
   //
@@ -1767,8 +1759,7 @@ class WithdrawalScheduler {
     if (isNaN(amt) || amt <= 0) fail('invalid amount', 400);
     amt = parseFloat(amt.toFixed(9));
 
-    // Withdrawals are manual with an explicit amount, so only the pool-wide floor applies
-    // (the per-account min_payout override was retired 2026-07-17).
+    // Withdrawals are manual with an explicit amount, so only the pool-wide floor applies.
     const minW = this.config.min_withdrawal || 25.0;
     if (!adminOverride && amt < minW) fail(`amount below minimum withdrawal (${minW} GRIN)`, 400);
 
@@ -1832,7 +1823,7 @@ class WithdrawalScheduler {
     };
   }
 
-  // ─── Operator revenue withdrawal (2026-10-05) ───────────────────────────────
+  // ─── Operator revenue withdrawal ────────────────────────────────────────────
   // Sends part of the pool_fee bucket to the operator's saved revenue address, through the SAME
   // locked Tor flow as a miner payout — so it is claimed once, sent once, Held on an unknown
   // outcome, captured with a kernel + signed payment proof, and listed in the queue. The only
@@ -1904,7 +1895,7 @@ class WithdrawalScheduler {
   }
 
   // ─── Slatepack payout (interactive, encrypted, no-Tor) ──────────────────────
-  // Reinstated rail: emits a slatepack ENCRYPTED to the miner's own address so only that wallet
+  // Emits a slatepack ENCRYPTED to the miner's own address so only that wallet
   // can decrypt + receive (no theft even if the IP gate is passed by a NAT co-tenant). The IP
   // gate (verified in the route) just throttles who can trigger this. Two steps:
   //   createSlatepackWithdrawal → returns the armored slate to hand to the miner (status pending)
@@ -1930,7 +1921,7 @@ class WithdrawalScheduler {
     if (isNaN(amt) || amt <= 0) fail('invalid amount', 400);
     amt = parseFloat(amt.toFixed(9));
 
-    // Pool-wide floor only (per-account min_payout retired 2026-07-17 — manual withdrawals).
+    // Pool-wide floor only (withdrawals are manual; there is no per-account min_payout).
     const minW = this.config.min_withdrawal || 25.0;
     if (amt < minW) fail(`amount below minimum withdrawal (${minW} GRIN)`, 400);
 
@@ -2044,9 +2035,9 @@ class WithdrawalScheduler {
     if (w.status !== 'slatepack_pending') fail(`withdrawal is not awaiting a slatepack (status: ${w.status})`, 409);
     // No slate id = the create is still inside its wallet calls, so nobody holds an S1 for THIS
     // row yet, and the binding below would have nothing to compare with. Refuse before the claim,
-    // so the create still attaches normally. Accepting here finalized whatever slate the reply
-    // belonged to: an expired row's, refunded while its wallet cancel was still owed, paid twice
-    // (audit roll-up note "Slatepack finalize binding").
+    // so the create still attaches normally. Accepting here would finalize whatever slate the
+    // reply belonged to: an expired row's, refunded while its wallet cancel was still owed, would
+    // be paid twice (audit roll-up note "Slatepack finalize binding").
     if (!w.slate_id) fail('this payout has no slate on record yet, so a reply cannot be matched to it', 409);
 
     // Take the row out of the pending pool BEFORE the first await. The status check above is a
@@ -2221,7 +2212,7 @@ class WithdrawalScheduler {
       // Same fail-closed rule as the manual rail: the create attaches the slate id BEFORE it
       // publishes, so a row without one has sent nothing a genuine reply could answer. The bridge
       // routes a DM to the sender's oldest pending row, not by slate id, so without this check a
-      // reply sent during the create landed on the new row.
+      // reply sent during the create would land on the new row.
       if (!w.slate_id) {
         console.warn(`[nostr-payout] finalize ${withdrawalId} rejected — the row has no slate on record yet`);
         return;
@@ -2274,16 +2265,16 @@ class WithdrawalScheduler {
   }
 
   // Miner-initiated cancel: frees the one-pending-per-address slot and returns the locked
-  // amount to spendable balance. NOTE: the public cancel route was removed 2026-07-17 (parked
-  // states self-recover; a late cancel after a send that actually posted would double-pay), and
+  // amount to spendable balance. NOTE: there is no public cancel route (parked states
+  // self-recover; a late cancel after a send that actually posted would double-pay), and
   // NOTHING CALLS THIS TODAY — the admin cancel (/api/admin/withdrawals/:id/cancel) carries its
-  // own inline implementation in index.js. Kept as the reference implementation of a safe
+  // own inline implementation in routes/admin/payouts.js. Kept as the reference implementation of a safe
   // cancel; if a support route ever needs one, call this rather than writing a third copy.
   // Only slatepack_pending is cancellable (the miner never returned the slate; only the pool can
-  // finalize, so nothing was broadcast). The Tor rail has NO cancellable state since 2026-09-26:
+  // finalize, so nothing was broadcast). The Tor rail has NO cancellable state:
   // tor_checking/tor_sending are being sent, and tor_held is exactly the payout whose outcome is
   // unknown — refunding it needs wallet proof (resolveHeldTor / forceRefundHeld), never a cancel.
-  // (retry_scheduled was cancellable here; that refunded a Tor payout with no wallet check.)
+  // (Never make retry_scheduled cancellable: that refunds a Tor payout with no wallet check.)
   // The status transition is a guarded UPDATE inside a transaction, so it can never race a
   // finalize claim into a double-reverse.
   async cancelWithdrawal(grinAddress, withdrawalId) {
@@ -2337,26 +2328,26 @@ class WithdrawalScheduler {
   //
   // REFUND FIRST, CANCEL SECOND. The refund is the guarded claim (slatepack_pending →
   // slatepack_expired), so it is also the decision: only a row this sweep actually won gets its
-  // slate cancelled. The old order cancelled first and claimed after. This batch is selected once
-  // and then walked with an await per row, so a miner finalizing row 3 while rows 1–2 were being
-  // cancelled won the claim and BROADCAST — and the sweep then cancelled that posted transaction
-  // anyway, unlocking inputs that were already spent in the mempool (the refund itself was
-  // correctly skipped, so the ledger stayed right; the pool wallet's view did not).
+  // slate cancelled. Never cancel first and claim after: this batch is selected once and then
+  // walked with an await per row, so a miner finalizing row 3 while rows 1–2 are being cancelled
+  // wins the claim and BROADCASTS — and a cancel-first sweep then cancels that posted transaction
+  // anyway, unlocking inputs that are already spent in the mempool (the refund itself is
+  // correctly skipped, so the ledger stays right; the pool wallet's view does not).
   //
-  // A cancel that fails (grin-wallet refuses without a reachable node) no longer vanishes into a
-  // log line: the refund transaction set slate_cancel_pending, and retryExpiredSlateCancels keeps
+  // A cancel that fails (grin-wallet refuses without a reachable node) does not vanish into a
+  // log line: the refund transaction sets slate_cancel_pending, and retryExpiredSlateCancels keeps
   // asking until the wallet's inputs are free.
   //
-  // ASK THE WALLET BEFORE REFUNDING (expiry gate, 2026-09-27). The pool is not the only thing that
+  // ASK THE WALLET BEFORE REFUNDING (expiry gate). The pool is not the only thing that
   // can finalize a slate it issued. Every S1 carries the pool wallet's address (sender_index 0), and
   // `grin-wallet receive` sends its reply straight back to that address over Tor, calling the
   // pool wallet's Foreign API finalize_tx, which finalizes AND posts (foreign_rpc.rs finalize_tx →
   // post_automatically = true; grin-wallet v5.5.0, source-read). That never reaches this backend:
-  // the row stays slatepack_pending, and the old sweep then refunded a payout the chain had
-  // already paid. It cannot happen as the toolkit ships the wallet — `owner_api` never publishes an
+  // the row stays slatepack_pending, and a sweep that did not ask would refund a payout the chain
+  // had already paid. It cannot happen as the toolkit ships the wallet — `owner_api` never publishes an
   // onion, only `listen` does — but one `grin-wallet listen` on the pool wallet dir, or a torrc
   // line pointing at its port, would open it, and so would an operator's hand `grin-wallet
-  // finalize`. So the refund now waits for the wallet's own record of the slate:
+  // finalize`. So the refund waits for the wallet's own record of the slate:
   //
   //   tx log entry for the row's slate_id        decision
   //   ─────────────────────────────────────────  ─────────────────────────────────────────────────
@@ -2370,7 +2361,7 @@ class WithdrawalScheduler {
   //                                              re-read every tick — settles itself once mined
   //   TxSent, state not recorded                 refund + warning: a wallet build that does not
   //                                              record the state cannot be checked (operator
-  //                                              decision 2026-09-27: keep payouts flowing)
+  //                                              decision: keep payouts flowing)
   //   tx log unreadable                          wait: never refund blind
   //
   // Standard1 → Standard3 is grin-wallet's own bookkeeping: lock_tx_context writes the slate's state
@@ -2385,7 +2376,7 @@ class WithdrawalScheduler {
       const cutoff = now - this.slatepackTtlSeconds;             // manual slatepack rail (30 min default)
       const nostrCutoff = now - this.nostrPendingTtlSeconds;     // Goblin/Nostr rail (10 min default)
       // Nostr rows expire on the shorter clock; every other pending rail uses the long TTL.
-      // The batch is generous ON PURPOSE (it was LIMIT 10): a row the gate holds stays
+      // The batch is generous ON PURPOSE (never a small LIMIT like 10): a row the gate holds stays
       // slatepack_pending and is re-selected every tick, so ten held rows would starve every newer
       // expiry behind them — the trap reclaimStaleFinalizing documents. One wallet read serves the
       // whole batch, and no more rows than the pool-wide pending cap can exist.
@@ -2590,8 +2581,8 @@ class WithdrawalScheduler {
   }
 
   // Retry the pool-wallet cancel for expired slatepacks whose first cancel failed (see
-  // processSlatepackExpiry). Without this, one node blip at expiry left the slate's inputs AND its
-  // change locked in the pool wallet until someone ran `grin-wallet cancel` by hand, which shrinks
+  // processSlatepackExpiry). Without this, one node blip at expiry leaves the slate's inputs AND its
+  // change locked in the pool wallet until someone runs `grin-wallet cancel` by hand, which shrinks
   // what every later payout can spend and surfaces as "pool wallet short".
   //
   // The wallet's own tx log (local read, no node round-trip) decides each row, so a row whose
@@ -2742,7 +2733,7 @@ class WithdrawalScheduler {
       ).get(withdrawal.grin_address);
       const lockedBefore = acct ? acct.balance_locked : 0;
       // The settlement drains locked only, so spendable is unchanged — but record its REAL value
-      // (these rows used to carry a literal 0/0, which the ledger rendered as "balance after 0").
+      // (never a literal 0/0, which the ledger renders as "balance after 0").
       const spendable = acct ? acct.balance : 0;
       const released = Math.min(lockedBefore, withdrawal.amount);
       if (released < withdrawal.amount) {
@@ -2960,11 +2951,11 @@ class WithdrawalScheduler {
   //   · TxSentCancelled, or absent   → never sent   → back to slatepack_pending (TTL/miner resume)
   //   · TxSent, not yet confirmed    → UNKNOWN      → leave it claimed and re-ask next tick
   //   · wallet unreachable           → UNKNOWN      → leave it and re-ask next tick
-  // The third line is the one this used to get wrong: a bare 'TxSent' entry is written at
+  // The third line is the trap: a bare 'TxSent' entry is written at
   // tx_lock_outputs, i.e. at payout CREATION on this rail, so it says the outputs were reserved
   // and nothing about whether the transaction was ever broadcast. Reading it as "it posted"
-  // confirmed every stale claim — including the postTx-threw case that is deliberately ROUTED
-  // here — and debited miners for coins that never left.
+  // confirms every stale claim — including the postTx-threw case that is deliberately ROUTED
+  // here — and debits miners for coins that never left.
   // "Unknown" deliberately parks rather than guessing: both guesses lose real money, and a
   // stalled payout is recoverable while a double-pay (or a wrongly-debited balance) is not.
   async reclaimStaleFinalizing() {
@@ -2978,9 +2969,9 @@ class WithdrawalScheduler {
       // COALESCE to 0 means "claim event missing" is treated as stale — that cannot happen on a
       // fresh claim (both writes are one transaction), so only a genuinely odd row lands there,
       // and resolving it is safe: the wallet log decides, this sweep never guesses.
-      // The batch bound is generous ON PURPOSE. It used to be LIMIT 10, which was safe only
-      // while every selected row resolved on the tick it was selected. Since §J4-1 a row whose
-      // outcome is UNKNOWN stays 'finalizing' and is re-selected every tick — so ten parked rows
+      // The batch bound is generous ON PURPOSE. A small LIMIT (10) is safe only while every
+      // selected row resolves on the tick it is selected, and a row whose outcome is UNKNOWN
+      // (§J4-1) stays 'finalizing' and is re-selected every tick — so ten parked rows
       // would permanently fill the batch and starve every newer stale claim behind them,
       // including ones that ARE resolvable. That turns one node outage into a spreading stall.
       // The limit costs almost nothing to raise: the expensive part is the single
@@ -3016,10 +3007,10 @@ class WithdrawalScheduler {
       // THREE states, not two (audit §J4-1). A 'TxSent' entry means grin-wallet LOCKED the
       // outputs: it is written at tx_lock_outputs, which this rail runs at payout CREATION
       // (createSlatepackWithdrawal / createNostrWithdrawal), long before finalize and whether or
-      // not post_tx ever ran. So "is it in the TxSent set" was true for every slate this pool has
-      // ever issued and not cancelled — the sweep confirmed every stale claim, released the lock
-      // and debited miners for coins that never left. The chain evidence is `confirmed`, which is
-      // the same field lib/reconciliation.js:278 already tests on this exact log.
+      // not post_tx ever ran. So "is it in the TxSent set" is true for every slate this pool has
+      // ever issued and not cancelled — a sweep testing that confirms every stale claim, releases
+      // the lock and debits miners for coins that never left. The chain evidence is `confirmed`,
+      // the same field lib/reconciliation.js auditWalletSends tests on this exact log.
       //
       // kernel_excess is deliberately NOT used as a second signal: grin-wallet v5.4.1 writes it
       // at tx_lock_outputs and again at finalize, i.e. BEFORE post_tx, which is precisely the
@@ -3079,7 +3070,7 @@ class WithdrawalScheduler {
   // in 'tor_sending'. Nothing else selects that status, and it is inside PENDING_SQL, so the row
   // would hold the address's one-pending slot and its locked balance forever.
   //
-  // A crash mid-send is outcome D of the one attempt (plan 2026-09-26):
+  // A crash mid-send is outcome D of the one attempt:
   //   · confirmed in the tx log  → on chain → confirm (release lock, debit, fee)
   //   · anything else            → tor_held — absent, unconfirmed, unreadable, or no Owner API
   // An abandoned send is NEVER put back on a queue that would send it again, and never refunded
@@ -3138,7 +3129,7 @@ class WithdrawalScheduler {
     }
   }
 
-  // ─── Held Tor payouts (plan 2026-09-26) ─────────────────────────────────────
+  // ─── Held Tor payouts ───────────────────────────────────────────────────────
   // A tor_held payout's one send has an unknown outcome. Every scheduler tick asks the wallet tx
   // log — ONE refreshed read serves every held row:
   //   · confirmed                                   → confirmed (Paid) — frozen or not
@@ -3154,7 +3145,7 @@ class WithdrawalScheduler {
   // send orphaned by a restart can outlive the backend), and a refund on top of a send that then
   // lands is the one outcome that cannot be undone.
   //
-  // Why not while frozen, and why the history mark (review 2026-09-26, #1): "absent" is only proof
+  // Why not while frozen, and why the history mark: "absent" is only proof
   // if the log is the history the send was made against. Restore, Migrate IN, the wallet-switch
   // wizard and an identity mismatch all FREEZE — and a seed recovery, an older wallet backup or a
   // different wallet each read "absent" for a send that landed. So while frozen an absence is not
@@ -3163,7 +3154,7 @@ class WithdrawalScheduler {
   // that exact entry (same id, same creation time) its absences prove nothing and the row waits for
   // the operator ('history_changed').
   //
-  // Two remedies run here too, neither able to pay twice (review #4):
+  // Two remedies run here too, neither able to pay twice:
   //   · the row's OWN fallback slate, still a bare lock (tx_slate_state Standard1 — nothing ever
   //     finalizes it), is cancelled again: its cancel at send time needs a live node and may have
   //     failed; the next reads then decide the refund;
@@ -3313,7 +3304,7 @@ class WithdrawalScheduler {
   // created_at of the first absent read of the CURRENT streak, or null. A streak ends at an
   // unconfirmed read, starts over at every (re-)entry into tor_held, and never reaches back past
   // the last resume of payouts: a read from before it may have come from the wallet the freeze was
-  // about (review 2026-09-26, #1).
+  // about.
   _heldAbsentSince(withdrawalId) {
     const r = this.db.prepare(`
       SELECT created_at FROM withdrawal_events
@@ -3337,7 +3328,7 @@ class WithdrawalScheduler {
     } catch (e) { return 0; }
   }
 
-  // ── The wallet history mark (review 2026-09-26, #1) ──
+  // ── The wallet history mark ──
   // The newest entry of a tx log as { id, ts }: its TxLogEntry id and creation time, the two fields
   // grin-wallet never rewrites (cancel changes the type, a refresh the confirmation). A wallet
   // rebuilt from its seed, an older backup or another wallet cannot carry that exact entry — so a
@@ -3436,7 +3427,7 @@ class WithdrawalScheduler {
   // payout, and refunding it pays twice. An UNCONFIRMED match is allowed only as a bare lock
   // (tx_slate_state Standard1: the CLI's slatepack fallback, which nothing finalizes); one that got
   // past its Tor round trip (Standard2) may have been posted and can still be mined after a refund,
-  // so it is refused, and so is one whose state the wallet does not record (review 2026-09-26, #4).
+  // so it is refused, and so is one whose state the wallet does not record.
   // The row's OWN fallback slate is cancelled before the refund. A changed wallet history does not
   // block this override — the operator is the authority here — but it is reported and journaled.
   // Never a re-send. Throws coded errors.
@@ -3499,7 +3490,7 @@ class WithdrawalScheduler {
   }
 
   // ─── Legacy retry_scheduled rows (startup, once, idempotent) ────────────────
-  // Tor rows the old retry ladder parked. Nothing re-queues them any more, so each is settled from
+  // Tor rows left in retry_scheduled by the deleted ladder. Nothing re-queues them, so each is settled from
   // ONE refreshed tx-log read: confirmed → confirmed; absent → tor_failed + refund (fail_code
   // 'unknown': not counted, no cooldown); anything else, or no readable log → tor_held. One read is
   // enough HERE, unlike the Held check: a retry_scheduled row was parked AFTER its last send
@@ -3507,7 +3498,7 @@ class WithdrawalScheduler {
   // ours can still be running for it. Idempotent by construction: every branch moves the row out
   // of retry_scheduled with a guarded write, so a second run finds nothing. While payouts are
   // FROZEN (a restore or Migrate IN just ran — both freeze) an absent row is held, not refunded:
-  // the log it would be refunded on may not be the one its send was made from (review #1). The Held
+  // the log it would be refunded on may not be the one its send was made from. The Held
   // check then decides it after the resume.
   async migrateLegacyTorRetries() {
     const res = { confirmed: 0, refunded: 0, held: 0 };
@@ -3636,9 +3627,9 @@ class WithdrawalScheduler {
 
   getStatus() {
     try {
-      // Use PENDING_SQL, never a hand-written list. This one had drifted: it predated both the
-      // slatepack and Goblin rails, so the admin scheduler view's "pending" count silently
-      // excluded every payout parked in slatepack_pending — and would have excluded finalizing too.
+      // Use PENDING_SQL, never a hand-written list: a list that predates a rail silently drops
+      // that rail's parked payouts (slatepack_pending, finalizing) from the admin scheduler
+      // view's "pending" count.
       const pending = this.db.prepare(
         `SELECT COUNT(*) as count FROM withdrawals WHERE ${PENDING_SQL}`
       ).get();

@@ -1,17 +1,15 @@
 'use strict';
 
 // Donor settings + the v1 starter word list — what is left of §16's name model after §18 (names
-// pre-moderated, 2026-09-24) and §19.17.6 / Part C4 (names auto-checked, 2026-10-04). Here:
+// pre-moderated) and script07_design_games.md §19.17.6 (names auto-checked). Here:
 // calendar-month arithmetic for expiry, the one bounded reader of every donor setting, and the
 // old starter list.
 //
-// Since Part C4 a donor NAME is checked by lib/name-rule.js (the shared rule, donor shape) and
-// goes live at once (lib/donor-profiles.js). The matching form, the reserved words, the
-// review-queue flags and the `donor_name_blocklist` setting that lived here are gone: the rule
-// owns the first two, the queue holds banners only, and the list was retired into
+// A donor NAME is checked by lib/name-rule.js (the shared rule, donor shape) and goes live at
+// once (lib/donor-profiles.js). The rule owns the matching form and the reserved words, the
+// review queue holds banners only, and the old `donor_name_blocklist` setting is retired into
 // `names.blocked_words` (pool-settings.js retireDonorNameBlocklist carries the operator's own
-// entries over once). v1's capture-from-login, auto-censor and the censored marker were deleted
-// in §18 Part 3; the six v1 donor_* columns on miner_incentives stay in the schema, unread.
+// entries over once). The six v1 donor_* columns on miner_incentives stay in the schema, unread.
 //
 // No dependency on index.js or pool-settings.js on purpose: pool-settings.js imports
 // STARTER_BLOCKLIST from here, so a require the other way would be a cycle.

@@ -10,7 +10,7 @@
 // (c) delivers an incoming response slatepack back to the scheduler to finalize.
 //
 // Wire format is SOURCE-VERIFIED against goblin src/nostr/*.rs — see
-// docs/reference/script05_design_goblin.md and design §15. Key facts encoded here:
+// script07_design.md §15 and docs/reference/script05_design_goblin.md. Key facts encoded here:
 //   • kind-14 rumor, content = preamble + blank line + PLAIN-armor slatepack,
 //     tags [["p",recipient],["goblin","1"],["subject",note]]
 //   • standard NIP-44 v2 + NIP-59 gift wrap (goblin "v3" is an opt-in extension we
@@ -309,8 +309,8 @@ class NostrPayoutBridge {
     // NIP-05 fetch: abort it, and cap what it will read (audit §J13-10).
     //
     // withTimeout() only stops US WAITING — the underlying request keeps running, so a slow or
-    // deliberately-slow allowlisted domain left a live socket and an uncapped response behind
-    // for every attempt, and nothing ever closed them. nostr-tools' nip05 has no signal
+    // deliberately-slow allowlisted domain would leave a live socket and an uncapped response
+    // behind for every attempt, and nothing would ever close them. nostr-tools' nip05 has no signal
     // parameter, but it does let us replace the fetch it uses, which is the only seam there is.
     //
     // The domain is allowlist-checked before we get here, so this is not an SSRF control — it
@@ -405,7 +405,7 @@ class NostrPayoutBridge {
 
   // A relay URL advertised by SOMEONE ELSE (a recipient's kind-10050) is untrusted input that
   // becomes an outbound connection, so it gets more than a `wss://` prefix test. `^wss://`
-  // matched `wss://127.0.0.1:3413/`, `wss://169.254.169.254/` and `wss://[::1]/` alike, and
+  // matches `wss://127.0.0.1:3413/`, `wss://169.254.169.254/` and `wss://[::1]/` alike, and
   // SimplePool would dial every one of them. Require a parseable wss: URL with a real public
   // hostname: no IP literals (v4 or bracketed v6), no single-label hosts (localhost, an
   // internal short name, a container/service name), no credentials in the authority.

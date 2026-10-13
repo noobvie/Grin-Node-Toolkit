@@ -1,25 +1,25 @@
 'use strict';
 
-// Donor profiles — design §18.4–§18.6 (2026-09-24), names changed by §19.17.6 (Part C4,
-// 2026-10-04). A donor's public NICKNAME and BANNER, set from the account page. Everything that
+// Donor profiles — script07_design.md §18.4–§18.6; names are auto-checked per script07_design_games.md
+// §19.17.6. A donor's public NICKNAME and BANNER, set from the account page. Everything that
 // decides what a profile IS lives here: the name check, the banner byte sniff + header-parsed
 // dimensions, the request state machine, the approved-file writes, and the two read shapes (the
 // donor's own view for /api/account/:addr, the public view for the wall).
 //
-// NAMES are AUTO-CHECKED and live at once (D29): lib/name-rule.js with the donor shape (§18.5's
+// NAMES are AUTO-CHECKED and live at once (games design D29): lib/name-rule.js with the donor shape (§18.5's
 // character set, §16.4's reserved words, the code seed + the operator's `names.blocked_words`),
 // then banned_donor_names, then "taken" (another address's approved name with the same matching
 // form), then a 7-day change limit. BANNERS stay PRE-moderated — a word list can check text,
-// never an image — and their path below is unchanged by C4.
+// never an image.
 //
 // No dependency on index.js (it starts a server on require) and none on donor-ledger.js:
-// §18 Part 4 makes donorWall() read publicProfiles() from here, so the require must only ever go
+// donorWall() reads publicProfiles() from here, so the require must only ever go
 // ledger → profiles. Whatever needs the ledger (has this address donated? its league rank?) is
 // passed in by the caller as a plain value.
 //
 // State machine, per (address × kind), each transition ONE transaction:
 //   name     submit   → approved at once (the previous approved → replaced), or refused with
-//                       nothing stored; `pending` is never written for a name since C4
+//                       nothing stored; `pending` is never written for a name
 //   banner   submit   → pending     an existing pending → replaced (its blob NULLed)
 //            approve  → approved    the previous approved → replaced, its file deleted
 //            reject   → rejected    (reason shown to the donor)
@@ -30,13 +30,13 @@
 // The partial unique indexes (lib/db.js) make "one pending + one approved per kind" a database
 // fact; a constraint hit comes back as { ok:false, code:'conflict' }, never as a throw.
 //
-// Admin transitions write their admin_audit_log row INSIDE the transaction (fail-closed, as
-// v1's adminCensor did): no admin decision lands without its audit row.
+// Admin transitions write their admin_audit_log row INSIDE the transaction (fail-closed): no
+// admin decision lands without its audit row.
 //
 // ⚠ The pending name text and the pending image never leave this file through profileFor() or
 // publicProfiles(): /api/account/:addr is public to anyone holding the address, and the wall is
-// public to everyone. Only the admin reads at the bottom (adminQueue, requestImage), which §18
-// Part 3 wired to secureAdmin routes, return them.
+// public to everyone. Only the admin reads at the bottom (adminQueue, requestImage), served by
+// secureAdmin routes only, return them.
 //
 // Like a toolkit lib run without errexit (memory project_lib_errexit_suppression), every fs
 // call's outcome is checked: a failed write aborts the approval and leaves the request pending;
@@ -51,7 +51,7 @@ const NameRule = require('./name-rule');
 
 const KINDS = Object.freeze(['name', 'banner']);
 
-// ── Name (§18.5 shape, §19.17.6 check) ──────────────────────────────────────────────────────
+// ── Name (script07_design.md §18.5 shape, script07_design_games.md §19.17.6 check) ──────────
 // The shape is the name rule's `donor` shape (one definition, in lib/name-rule.js): trim,
 // collapse ASCII whitespace runs to one space, 2–32 of A–Z a–z 0–9 space - _ . & ', at least
 // one letter or digit, case kept (brands are cased). ASCII only: a homoglyph, a bidi override,
@@ -60,7 +60,8 @@ const NAME_MIN = NameRule.DONOR_MIN;
 const NAME_MAX = NameRule.DONOR_MAX;
 const NAME_RULE = NameRule.DONOR_RULE;
 // One change per 7 days, counted from the donor's own last change (an admin removal does not
-// reset it). A code constant on purpose — §19.17.6: a form field for a knob nobody turns.
+// reset it). A code constant on purpose (script07_design_games.md §19.17.6): a form field for a
+// knob nobody turns.
 const NAME_CHANGE_DAYS = 7;
 const NAME_CHANGE_SECS = NAME_CHANGE_DAYS * 86400;
 
@@ -211,7 +212,7 @@ function cleanReason(r) {
 const isConstraint = (e) => !!e && /constraint failed/i.test(String(e.message || ''));
 
 // target_type 'donor' + the address, or 'donor_name' + a matching form (a ban is about a NAME,
-// whoever holds it). adminId null = the system (the C4 migration).
+// whoever holds it). adminId null = the system (migratePendingNames).
 function audit(db, adminId, action, targetId, details, ip, targetType = 'donor') {
   db.prepare(`
     INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
@@ -290,7 +291,7 @@ function submit(db, address, kind, fields, opts) {
   }
 }
 
-// ── name: auto-checked, live at once (§19.17.6, Part C4) ─────────────────────────────────────
+// ── name: auto-checked, live at once (script07_design_games.md §19.17.6) ─────────────────────
 const liveNameRow = (db, address) => db.prepare(
   "SELECT id, name, submitted_at FROM donor_requests WHERE grin_address = ? AND kind = 'name' AND status = 'approved'"
 ).get(address);
@@ -365,14 +366,14 @@ function submitName(db, address, rawName, opts = {}) {
       if (isBannedNorm(db, r.norm)) return { ok: false, code: 'name_unavailable', error: NAME_TEXT.name_unavailable, hit: { why: 'banned' } };
       if (nameHolders(db, r.norm, address).length) return { ok: false, code: 'name_unavailable', error: NAME_TEXT.name_unavailable, hit: { why: 'taken' } };
 
-      // A pre-C4 pending name cannot survive the startup migration, but never leave two rows
+      // A legacy pending name cannot survive the startup migration, but never leave two rows
       // the unique indexes would have to arbitrate: any pending name goes too.
       db.prepare(`UPDATE donor_requests SET status = 'replaced', decided_at = ?
                   WHERE grin_address = ? AND kind = 'name' AND status = 'pending'`).run(now, address);
       const prev = liveNameRow(db, address);
       if (prev) db.prepare("UPDATE donor_requests SET status = 'replaced', decided_at = ? WHERE id = ?").run(now, prev.id);
       // decided_by NULL = the automatic check approved it (an admin id here means a human did,
-      // which since C4 only the pre-C4 history can say).
+      // which only rows from before the automatic check can say).
       const info = db.prepare(`
         INSERT INTO donor_requests (grin_address, kind, status, name, submitted_at, decided_at)
         VALUES (?, 'name', 'approved', ?, ?, ?)
@@ -386,9 +387,9 @@ function submitName(db, address, rawName, opts = {}) {
 }
 
 // ── name bans (admin) ───────────────────────────────────────────────────────────────────────
-// Why a pool table of its own and not one banned-names table with a scope column (§19.17.6 left
-// the choice to C4): the pool has exactly ONE name namespace — donor names. Game nicknames are
-// banned in the games' own database (D5: the services share no table), so a scope column here
+// Why a pool table of its own and not one banned-names table with a scope column (script07_design_games.md
+// §19.17.6 left the choice open): the pool has exactly ONE name namespace — donor names. Game nicknames are
+// banned in the games' own database (games design D5: the services share no table), so a scope column here
 // would hold one value forever and invite a second namespace nobody designed.
 
 // Ban a matching form: no spelling of it can be taken again, and every address that holds it
@@ -440,8 +441,8 @@ function bannedNames(db) {
   return db.prepare('SELECT norm, name, banned_at, banned_by, reason FROM banned_donor_names ORDER BY banned_at DESC, norm').all();
 }
 
-// ── the C4 migration: pending names → the automatic check ─────────────────────────────────
-// Run at every start (index.js), after the blocked-word carry-over. Idempotent: since C4 nothing
+// ── migration: legacy pending names → the automatic check ─────────────────────────────────
+// Run at every start (index.js), after the blocked-word carry-over. Idempotent: nothing else
 // writes a pending name, so after the first run it finds none. Each pending name, oldest first,
 // goes through the same check a submit does, minus the 7-day limit (the request predates it):
 // pass and available → approved (the address's previous approved → replaced), else → rejected
@@ -535,7 +536,7 @@ function removeLive(db, address, kind, opts = {}) {
   return u.ok ? { ok: true, id: res.id, file_deleted: !!res.file } : { ok: true, id: res.id, file_deleted: false, warning: u.error };
 }
 
-// ── admin transitions (wired by §18 Part 3) ────────────────────────────────────────────────
+// ── admin transitions ──────────────────────────────────────────────────────────────────────
 // opts: { adminId, ip, now, reason, uploadsDir }.
 
 const parseId = (id) => {
@@ -752,11 +753,11 @@ function profileFor(db, address, opts = {}) {
     name: {
       live: nameState === 'shown' ? nameAp.live_name : null,
       state: nameState,
-      // Always null since C4 (names go live at once); kept so the shape does not move.
+      // Always null (names go live at once); kept so the shape does not move.
       pending_at: namePend ? namePend.submitted_at : null,
       rejected: nameWord.rejected,
       removed: nameWord.removed,
-      // C4: when the 7-day change limit lets this address set a name again; null = now.
+      // When the 7-day change limit lets this address set a name again; null = now.
       change_available_at: nameChangeAvailableAt(db, address, now)
     },
     banner: {
@@ -774,7 +775,7 @@ function profileFor(db, address, opts = {}) {
   };
 }
 
-// The public view for the wall (§18.7, wired by §18 Part 4): Map<address, { name, name_state,
+// The public view for the wall (§18.7): Map<address, { name, name_state,
 // banner }> for the given addresses. APPROVED + UNEXPIRED only — a pending, rejected, withdrawn,
 // replaced or removed row can never contribute, because only status = 'approved' is selected.
 //   name_state  shown · masked (no approved name) · expired
@@ -814,7 +815,7 @@ function publicProfiles(db, addresses, opts = {}) {
   return out;
 }
 
-// ── admin reads (wired by §18 Part 3) ──────────────────────────────────────────────────────
+// ── admin reads ────────────────────────────────────────────────────────────────────────────
 // Everything below is for secureAdmin routes only: FULL addresses, the pending name text, who
 // decided. None of it may be called from a public route (scripts/test-public-leakage.js §9).
 
@@ -825,14 +826,14 @@ const QUEUE_MAX = 500;
 // The review queue (§18.6): rows of one status, oldest first for `pending` (first come, first
 // reviewed) and newest decision first for the rest. Never selects `image` — a banner row says
 // whether its bytes can be fetched (`has_image`), and the admin page asks the image route.
-// Since C4 the queue is BANNERS: names are checked automatically and listed by adminNames().
+// The queue is BANNERS: names are checked automatically and listed by adminNames().
 // `kind` narrows the rows (the admin page asks for banners); absent = both, for the history.
 //   opts: { status = 'pending', kind, limit }
 // → { ok:true, status, total, rows } | { ok:false, code:'bad_status'|'bad_kind' }
 // Each row: id, address, kind, status, name (name rows), mime/width/height/bytes/sha256 (banner
 // rows), has_image, submitted_at, decided_at, decided_by, reason, current (the address's
 // approved item of the same kind: its name, or its banner URL — so a reviewer sees a
-// replacement as one), blocked. (The C3-era `flags` hints went with the name queue.)
+// replacement as one), blocked.
 function adminQueue(db, opts = {}) {
   const status = opts.status === undefined || opts.status === null || opts.status === '' ? 'pending' : opts.status;
   if (!STATUSES.includes(status)) return { ok: false, code: 'bad_status' };
@@ -951,16 +952,17 @@ function adminProfiles(db, opts = {}) {
   return out;
 }
 
-// The donor-names admin list (§19.17.6 "Live names"), FULL addresses — secureAdmin only.
+// The donor-names admin list (script07_design_games.md §19.17.6 "Live names"), FULL addresses —
+// secureAdmin only.
 //   opts: { state: 'live' (default) | 'removed', q, rule: nameRuleContext(), limit }
 // live rows:    id, address, name, set_at, approved_by (admin id; null = the automatic check),
 //               hit (what the rule answers TODAY: null, or { code, list, entry } — a word added
 //               after the name went live is HINTED here, never applied by itself: taking a live
 //               name down is a human decision), banned (its form is on the ban list), same_as
 //               (other addresses whose approved name has the same matching form — only names
-//               approved before C4 can collide), blocked.
+//               approved before the automatic check can collide), blocked.
 // removed rows: id, address, name, set_at, removed_at, removed_by (admin id; null = the donor
-//               took it down, or a pre-C4 row), reason.
+//               took it down, or a legacy row), reason.
 // q: an address start, or a name fragment compared on the matching form (so `sh1t` finds Shit).
 // → { ok:true, state, total, rows } | { ok:false, code:'bad_state' }
 function adminNames(db, opts = {}) {

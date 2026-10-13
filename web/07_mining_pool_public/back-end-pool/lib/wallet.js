@@ -93,7 +93,7 @@ class WalletAPI {
 
   // --- Slatepack send flow (Owner API v3) -----------------------------------
   //
-  // Reinstates the interactive (no-Tor) payout, secured by ENCRYPTION rather than transport:
+  // The interactive (no-Tor) payout, secured by ENCRYPTION rather than transport:
   // the slate is armored as a slatepack *encrypted to the miner's grin address* (an ed25519
   // SlatepackAddress — the same key used as the Tor .onion). Only the wallet holding that
   // address's private key can decrypt + `receive`, so a non-owner who triggers the payout gets
@@ -116,8 +116,8 @@ class WalletAPI {
   //     private context; it writes NO lock and NO tx-log entry (tx_lock_outputs does both).
   //
   //     payment_proof_recipient_address stays null: the slatepack/Goblin rails request no payment
-  //     proof (their anti-theft control is encryption, design §8). The `paymentProofRecipient`
-  //     option existed only for the step-by-step Tor send, deleted 2026-09-26.
+  //     proof (their anti-theft control is encryption, design §8). There is no option to request
+  //     one: a stray `paymentProofRecipient` is ignored, never forwarded (test-payout-rails.js).
   //
   //     ttl_blocks stays null ON PURPOSE (design §8.1.2): on every refresh the wallet cancels any
   //     unconfirmed tx whose ttl_cutoff_height has passed — posted-but-not-mined ones included
@@ -198,11 +198,11 @@ class WalletAPI {
   //     a non-empty recipients list is what triggers age-encryption to those keys; [] gives plain
   //     armor (the Goblin/Nostr rail). Returns the `BEGINSLATEPACK…ENDSLATEPACK` string.
   //     Owner v3 signature: create_slatepack_message(token, slate, sender_index: Option<u32>,
-  //     recipients: Vec<SlatepackAddress>). This call used to go out POSITIONAL as
-  //     [token, sender_index, recipients, slate] — the wallet read the number 0 as the slate and
-  //     every slatepack and Goblin payout failed with `InvalidArgStructure "slate" at position 1`.
-  //     It now sends NAMED params (as 051 Fidelius and the 053 bridge do), which cannot be
-  //     misordered. The key names must match the Rust parameter names exactly.
+  //     recipients: Vec<SlatepackAddress>). It sends NAMED params (as 051 Fidelius and the 053
+  //     bridge do), which cannot be misordered: POSITIONAL [token, sender_index, recipients, slate]
+  //     makes the wallet read the number 0 as the slate, and every slatepack and Goblin payout
+  //     fails with `InvalidArgStructure "slate" at position 1`. The key names must match the Rust
+  //     parameter names exactly.
   //     sender_index stays 0, not null: the miner's response slatepack is then encrypted back to
   //     the pool's index-0 address, which finalize decodes with secret_indices [0].
   async createSlatepackMessage(slate, recipients, senderIndex = 0) {
@@ -261,9 +261,9 @@ class WalletAPI {
 
     // 3. AES-256 key = the ECDH shared secret AS-IS. grin-wallet uses the shared point's
     //    32-byte X-coordinate directly as the key (NO extra hash); Node's computeSecret()
-    //    already returns exactly that X-coordinate. An earlier sha256() over it corrupted
-    //    the key, so the wallet rejected every encrypted call with "EncryptedBody:
-    //    decryption failed" (balance + payouts never worked). Matches the known-good
+    //    already returns exactly that X-coordinate. A sha256() over it corrupts the key,
+    //    and the wallet then rejects every encrypted call with "EncryptedBody: decryption
+    //    failed" (no balance, no payouts). Matches the known-good
     //    051_fidelius/server.js ownerApiSession() implementation.
     this.aesKey = ecdh.computeSecret(Buffer.from(serverPubkey, 'hex'));
 
@@ -285,8 +285,8 @@ class WalletAPI {
   // The keychain mask is always the `token` param in Owner API v3 — filled with the live
   // open_wallet token here (and re-filled on retry, since re-init rotates it). Two param
   // shapes are accepted: a positional array (token is params[0]) or a named object (token is
-  // params.token). Named params are order-proof; create_slatepack_message uses them because
-  // its positional order was wrong once and broke every slatepack payout.
+  // params.token). Named params are order-proof; every send-path call uses them (see the
+  // Slatepack send flow above).
   // `timeoutMs` is the HTTP timeout of this one call (default 10 s, _plainCall's); only a call
   // that is known to be slow (init_send_tx's node refresh) raises it.
   async _call(method, params, { timeoutMs } = {}) {

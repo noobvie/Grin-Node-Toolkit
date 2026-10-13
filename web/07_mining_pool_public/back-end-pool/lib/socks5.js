@@ -3,18 +3,18 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // socks5.js — a SOCKS5 CONNECT client (RFC 1928 + RFC 1929), zero dependencies.
 //
-// PORTED 2026-09-23 from web/06d_tiny_explorer/lib/socks5.js (itself a port of
+// PORTED from web/06d_tiny_explorer/lib/socks5.js (itself a port of
 // web/052_accio/gateway/socks5.js). It is a COPY, not a require across products:
 // 06d and the pool deploy separately, to different directories on different
 // boxes, so a relative require into another product's tree would break the day
 // either one is installed alone.
 //
-// Why it is here at all: the pool's Tor reachability probe used the `socks` npm
-// lib, which reports a proxy timeout as the bare string 'Proxy connection timed
-// out' — no reply byte, no "did tor say anything" — so the probe could not tell
-// OUR tor being slow from THEIR wallet being down, and read a timeout as a
-// confident "offline". That confident offline is also the withdraw pre-flight
-// gate's refusal. 06d's copy stamps every rejection with `proxyResponded`:
+// Why not the `socks` npm lib: it reports a proxy timeout as the bare string
+// 'Proxy connection timed out' — no reply byte, no "did tor say anything" — so a
+// probe built on it cannot tell OUR tor being slow from THEIR wallet being down,
+// and reads a timeout as a confident "offline". That confident offline is also
+// the withdraw pre-flight gate's refusal. This copy stamps every rejection with
+// `proxyResponded`:
 //
 //   proxyResponded true  → tor greeted us and then the stream failed, so the
 //                          failure belongs to the hidden service (→ offline)

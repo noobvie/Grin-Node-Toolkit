@@ -4,9 +4,8 @@
 // surface uses (design §16.3: lifetime totals, first/last dates and active months are all
 // DERIVED from the ledger at read time; there is no column for them). One definition here,
 // so the account page, the wall and the admin list can never disagree on what "last donated"
-// or "active months" means. Part 2 added the per-address last debit; Part 3 added the
-// per-address aggregate + the §16.6 score helpers; Part 4 added donorWall(), the public
-// response built from those same rows.
+// or "active months" means. Here: the per-address last debit, the per-address aggregate +
+// the §16.6 score helpers, and donorWall(), the public response built from those same rows.
 //
 // Horizon contract (lib/ledger-rollup.js): rolled days live in balance_log_daily with
 // day < H, raw rows in balance_log with created_at >= H. A rolled day's timestamp is its
@@ -46,7 +45,7 @@ function lastDonatedAt(db, address, H = null) {
 //   in_window_donated  GRIN with t >= now - windowDays × 86400 (windowDays 0 → lifetime)
 //   first/last_donated_at, donation_count
 //   active_months      distinct UTC calendar months with a debit, lifetime (§16.1 #8)
-// One GROUP BY over the same UNION /api/pool/donors has always scanned — no per-row query.
+// One GROUP BY over the same UNION /api/pool/donors scans — no per-row query.
 //
 // Window boundary, stated once: a rolled day is one row stamped at its UTC midnight, so it is
 // in the window WHOLE when that midnight is >= the cutoff and out WHOLE otherwise — a debit
@@ -226,25 +225,23 @@ const NO_LIVE = Object.freeze({ rigs_online: 0, rigs_donating: 0, pct_min: 0, pc
 //   live        liveDonations(sessions) — Map<address, reading>. Display only, never ranked
 //               (§16.1 #10). Absent = nobody online.
 //
-// Card, per §18.3: rigs_online (ungated), rigs_donating, pct_min, pct_max. (The v1
-// current_percent went in §18 Part 4 — it duplicated pct_max, and donate.html was its last
-// reader.)
+// Card, per §18.3: rigs_online (ungated), rigs_donating, pct_min, pct_max. (No v1
+// current_percent: it would duplicate pct_max.)
 //
-// Names (design §18.7, since §18 Part 3): the APPROVED, unexpired name from
+// Names (design §18.7): the APPROVED, unexpired name from
 // lib/donor-profiles.js publicProfiles() — the same expiry rule the donor's own account page
 // reads through profileFor(). `name` is null for every name_state but `shown` (masked = no
 // approved name, expired). A pending, rejected or removed name can never reach a card, and the
-// v1 donor_name column on miner_incentives is not read at all: v1 names were never reviewed,
-// so pre-moderation starts clean.
+// v1 donor_name column on miner_incentives is not read at all: v1 names were never checked.
 //
-// Banners (design §18.7, §18 Part 4): `banner` is { url, width, height } ONLY on a league card
+// Banners (design §18.7): `banner` is { url, width, height } ONLY on a league card
 // whose rank ≤ donor_banner_slots and whose address has an approved, unexpired banner — else
 // null. Past cards are always null: a banner is a place in the top N, not a thank-you. The
 // URL is publicProfiles' publicUrl() (`/uploads/donors/<16 hex>.<png|jpg|gif>` or nothing),
 // and a row whose stored dims are not positive integers shows no banner rather than one the
 // page cannot reserve space for. The key is on every card so both arrays share one shape.
 //
-// Cost: the ONE composite ledger scan this route has always done (now via donorLedger) and one
+// Cost: the ONE composite ledger scan (via donorLedger) and one
 // IN-list read of approved donor_requests for the ≤ 120 cards shown; active_donors comes from
 // `live`.
 function donorWall(db, opts = {}) {
@@ -266,9 +263,9 @@ function donorWall(db, opts = {}) {
     r.score = donorScore(r.in_window_donated, r.active_months, ds);
   }
 
-  // Totals over EVERY donor (fixed 2026-09-21 — they were once summed after the LIMIT).
-  // active_donors: addresses with a tagged rig mining now. It read the stored v1 % column
-  // until design §18.3; that column is dead, so a live tag is the only honest source.
+  // Totals over EVERY donor — summed before the LIMIT, never after it.
+  // active_donors: addresses with a tagged rig mining now. The stored v1 % column is dead
+  // (design §18.3), so a live tag is the only honest source.
   let activeDonors = 0;
   if (active) for (const v of live.values()) if (count(v && v.rigs_donating) > 0) activeDonors++;
   const totals = {

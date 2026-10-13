@@ -4,10 +4,10 @@ const { compareBlockToHeader } = require('./block-identity');
 const { parseDonateToken } = require('./stratum-protocol');
 
 class RewardDistributor {
-  // grinNode: a GrinNodeAPI. REQUIRED for the pre-credit chain re-verification below — it was
-  // omitted at the only construction site for a long time, which silently turned that check
-  // into dead code (audit §I3). Left optional so a unit test can construct without a node,
-  // but index.js must pass BlockMonitor's instance.
+  // grinNode: a GrinNodeAPI. REQUIRED for the pre-credit chain re-verification below — omitting
+  // it at the construction site silently turns that check into dead code (audit archive §I3).
+  // Left optional so a unit test can construct without a node, but index.js must pass
+  // BlockMonitor's instance.
   constructor(config, grinNode = null) {
     this.config = config;
     this.db = getDb();
@@ -37,13 +37,12 @@ class RewardDistributor {
       // get_HEADER, not get_block: a pruned node keeps the full header chain at every height
       // but serves block BODIES only inside the pruning horizon, so get_block is the call that
       // breaks on the standard mainnet-prune deployment. get_header also returns `hash` at the
-      // top level — get_block nests it under `.header`, which is why the previous (unreachable)
-      // version of this check would have thrown a false "hash mismatch" on every block had it
-      // ever run. See audit §I3.
+      // top level — get_block nests it under `.header`, so reading `.hash` off a get_block
+      // reply throws a false "hash mismatch" on every block. See audit archive §I3.
       //
       // The comparison itself lives in lib/block-identity.js and is SHARED with
-      // orphan-detector.js — the two had drifted into different comparisons, and only the
-      // other one was destructive on a false mismatch (audit §J5-3).
+      // orphan-detector.js — two separate comparisons drift apart, and only the other one is
+      // destructive on a false mismatch (audit §J5-3).
       if (this.grinNode) {
         try {
           const nodeHeader = await this.grinNode.getHeader(block.height);
@@ -128,9 +127,9 @@ class RewardDistributor {
       }
 
       // ONE transaction covering the CAS status flip, the miner credits, the pool fee and the
-      // incentive rebalance. Previously these were four separate write units with the flip
-      // last, so a crash after the credits committed left the block in 'confirmed' — and the
-      // monitor's next 30s tick re-credited every miner. See audit §I4.
+      // incentive rebalance. As four separate write units with the flip last, a crash after the
+      // credits commit leaves the block in 'confirmed' — and the monitor's next 30s tick
+      // re-credits every miner. See audit archive §I4.
       //
       // The flip goes FIRST inside the transaction: it is the claim. A replay (or a second
       // caller) finds 0 changed rows and throws, rolling the whole thing back before a single
@@ -229,14 +228,14 @@ class RewardDistributor {
       for (const [grinAddress, amount] of minerMap) {
         // Mirror the pool-fee path's INSERT OR IGNORE. balance_log.grin_address is a FK and
         // foreign_keys is ON, so a missing account row would otherwise abort the whole
-        // distribution and leave the block retrying every 30s forever. See audit §I6.
+        // distribution and leave the block retrying every 30s forever. See audit archive §I6.
         this.db.prepare(
           'INSERT OR IGNORE INTO miner_accounts (grin_address, balance) VALUES (?, 0)'
         ).run(grinAddress);
 
-        // Real before/after snapshots, not the 0 placeholders this used to write. balance_log
-        // is the ledger the miner sees at /api/account/:addr/balance/log and the one a
-        // disputed payout is reconstructed from; zeros made it unauditable. See audit §I5.
+        // Real before/after snapshots, never 0 placeholders. balance_log is the ledger the
+        // miner sees at /api/account/:addr/balance/log and the one a disputed payout is
+        // reconstructed from; zeros make it unauditable. See audit archive §I5.
         const before = this.db.prepare(
           'SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?'
         ).get(grinAddress);

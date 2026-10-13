@@ -119,7 +119,7 @@ resolver, the allowlist rules, and what is still open.
 | Doc | What it covers |
 |---|---|
 | [script00_report_deferred_work.md](script00_report_deferred_work.md) | Scripts 01/03/04/08 still carry private copies of the shared node libs — deferred DRY migration |
-| [script00_report_manual_findings.md](script00_report_manual_findings.md) | Where the code disagrees with the README, CLAUDE.md, menu hints and `docs/generated/` — ~100 findings logged while writing the grinnode.org manual, 14 flagged to fix first |
+| [script00_report_manual_findings.md](script00_report_manual_findings.md) | Where the code disagrees with the README, CLAUDE.md, menu hints and `docs/reference/` — ~100 findings logged while writing the grinnode.org manual, 14 flagged to fix first |
 
 ---
 

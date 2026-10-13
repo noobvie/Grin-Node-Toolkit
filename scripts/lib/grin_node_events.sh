@@ -1,7 +1,7 @@
 # =============================================================================
 # lib/grin_node_events.sh — node event recorder (READ-ONLY observer)
 # =============================================================================
-# Design: docs/generated/script086_design.md §8. Operator UI: 086 Diagnostics
+# Design: docs/reference/script086_design.md §8. Operator UI: 086 Diagnostics
 # (hub 08 key 6). Records each down/up transition per network, keeps planned
 # stops, boots and node starts out of the outage count, and keeps a ledger and
 # a status file that the pool (as grinpool) can read.

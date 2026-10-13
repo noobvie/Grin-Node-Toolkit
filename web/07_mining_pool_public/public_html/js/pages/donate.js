@@ -188,7 +188,7 @@
                 // N of the Top-N spotlight: the operator's donor_banner_slots, 0–10, 0 = off.
                 var slots = Number(ranking.banner_slots);
                 slots = isFinite(slots) && slots > 0 ? Math.min(10, Math.floor(slots)) : 0;
-                // D-01b follows the same two settings, so it never promises what the wall won't do.
+                // D-02b follows the same two settings, so it never promises what the wall won't do.
                 var bannerLi = document.getElementById('dn-banner-li');
                 if (bannerLi) {
                     if (slots > 0) set('dn-banner-top', 'the top ' + slots + ' ' + plural(slots, 'donor', 'donors') + ' in the league');

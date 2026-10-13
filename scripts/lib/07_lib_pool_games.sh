@@ -1,7 +1,7 @@
 # =============================================================================
 # 07_lib_pool_games.sh — /play/ games service for the PUBLIC POOL (menu P)
 # =============================================================================
-# Design: docs/generated/script07_design.md §19 (the contract; §19.12 = this lib).
+# Design: docs/reference/script07_design.md §19 (the contract; §19.12 = this lib).
 # Installs, deploys, fronts and removes grin-games[-testnet]: a SEPARATE Node process,
 # OS user (grinplay) and SQLite DB (grinium-games.db) beside the pool, so nothing the
 # games do can slow, restart or endanger mining (§19.2).

@@ -114,7 +114,7 @@ DETECTED_NODE_TYPES=""   # populated by run_nginx_setup, e.g. "mainnet:pruned te
 #            every single transfer. Keep the ratio, take the parallel speedup.
 #
 # PROVISIONAL: 1 is chosen on the reasoning above, not on measurement. Confirm
-# with the ratio test in docs/generated/script03_design.md section 4 (0a) and
+# with the ratio test in docs/reference/script03_design.md section 4 (0a) and
 # raise this if the gap between levels 1 and 6 turns out to be material.
 # Both are env-overridable so a host can be tuned without editing this file.
 COMPRESS_LEVEL_FULL="${COMPRESS_LEVEL_FULL:-1}"
@@ -2487,7 +2487,7 @@ get_nginx_conf_badge() {
 }
 
 ################################################################################
-# Remote copy (option C/D) — see docs/generated/script03_design.md section 15
+# Remote copy (option C/D) — see docs/reference/script03_design.md section 15
 ################################################################################
 
 # site_key -> the local nginx web dir the archive was published into. Lives here

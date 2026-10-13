@@ -2785,7 +2785,7 @@ _pool_menu_status_line() {
 # real miner IP) to a per-region INTERNAL port here, bound to the tunnel interface
 # only (never public). This menu sets up the wg server and adds gateway peers,
 # assigning each a tunnel IP + a region listener port (written into region_ports).
-# See docs/generated/script07_implementation.md §8 (Multi-region — as built).
+# See docs/reference/script07_implementation.md §8 (Multi-region — as built).
 # Per-network so a testnet pool's tunnel never collides with a mainnet one on the same box
 # (iface kept ≤15 chars for Linux IFNAMSIZ — "wg-grinpool-tn").
 if [[ "$POOL_NET" == "testnet" ]]; then
@@ -3631,7 +3631,7 @@ pool_cleanup() {
 # ═══════════════════════════════════════════════════════════════════════════════
 # DEPLOYMENT MODE SELECTOR (multi-region split)
 # ═══════════════════════════════════════════════════════════════════════════════
-# Two deployment directions (Model C) — see docs/generated/script07_design.md §3:
+# Two deployment directions (Model C) — see docs/reference/script07_design.md §3:
 #   singlebox — the pool: brain (API/DB/web/admin/wallet) + a co-located local stratum.
 #               Already a full hub, so it accepts regional gateways later with no rebuild.
 #   hub       — Central Hub only (brain, no local stratum); all mining is via gateways.

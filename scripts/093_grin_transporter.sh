@@ -26,7 +26,7 @@
 #    placeholder on 2026-08-13 and ships Tor + Slatepack only, so 093 is a
 #    standalone product, not a half-wired rail waiting on the pool.
 #
-#  Design: docs/generated/script09_design.md  (PART B — 093)
+#  Design: docs/reference/script09_design.md  (PART B — 093)
 #
 #  ─── Network submenu ────────────────────────────────────────────────────────
 #   1) Install server       (Node.js v24 + app + systemd)

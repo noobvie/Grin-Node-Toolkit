@@ -4,7 +4,7 @@
 // One-shot: no server, no listener, in-memory DB only — run via `npm run test:unit`.
 //
 // Each block names the finding it guards. If one of these fails, re-read
-// docs/generated/script07_security_audit.md §J3 before "fixing" the test: several of these
+// docs/reference/script07_security_audit.md §J3 before "fixing" the test: several of these
 // assert that something is DENIED, and loosening them re-opens a money path.
 
 const assert = require('assert');

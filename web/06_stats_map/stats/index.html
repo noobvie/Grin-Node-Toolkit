@@ -1110,7 +1110,7 @@ let basemapLayer = null;
 // So the geometry ships with us: assets/countries-110m.json (Natural Earth via
 // world-atlas — public domain / ISC), drawn client-side. Zero third-party requests,
 // and it is ~150 KB LIGHTER at first paint than the retina tiles it replaces.
-// Rationale: docs/generated/script06_design.md, "Peer map — self-hosted basemap".
+// Rationale: docs/reference/script06_design.md, "Peer map — self-hosted basemap".
 //
 // ⚠ noWrap / bounds were tileLayer options and do NOT transfer to L.geoJSON — but
 // they are also no longer needed. Tiles repeated because the layer requested wrapped

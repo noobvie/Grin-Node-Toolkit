@@ -404,7 +404,7 @@ quoted below has moved.
 ### Phase 1+2 — Grin Drop `052 → 059` (one atomic change)
 
 10 logical items `git mv`d so history follows — **39 tracked files** in total: `052_grin_drop.sh`,
-five `lib/052_lib_*.sh`, three `docs/generated/script052_*.md` (9 named files), plus the whole
+five `lib/052_lib_*.sh`, three `docs/reference/script052_*.md` (9 named files), plus the whole
 `web/052_drop/` tree (30 files). Deployed-state migration as in §1.6.
 
 Reference sweep reached **outside** the 05 family — the four easily missed:

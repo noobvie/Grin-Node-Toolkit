@@ -1259,7 +1259,7 @@ other direction.
 # interim (now): key 2 is live, dispatches to a one-screen notice, installs nothing
 echo -e "  ${GREEN}2${RESET}) CoinSwap Mixer          ${YELLOW}⏳ reserved — not built yet${RESET}"
 2) _slot_notice "092) GRIN COINSWAP MIXER — NOT BUILT YET" "…" \
-       "docs/generated/script09_design.md (PART D)" || true ;;
+       "docs/reference/script09_design.md (PART D)" || true ;;
 ```
 `_slot_notice()` was **ported from hub 05** into 09 (identical body). Hub 09 keeps **positional**
 keys — this is not a move to fixed slots; only the notice helper crossed over.

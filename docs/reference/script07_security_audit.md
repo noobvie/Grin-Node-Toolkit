@@ -14447,7 +14447,7 @@ them described. Listed so §J17 does not have to go looking.
 | [`scripts/07_grin_mining_public_pool.sh`](../../scripts/07_grin_mining_public_pool.sh) | J16-1 admin password off argv on both hops (stdin + `--data-binary @-`); J16-5 vhost enabled only after `nginx -t`, `ln` no longer swallowed, both write paths; J16-8 `_pool_db_scalar` opens `readOnly`, and the region-card helper `chmod 600`s the WAL sidecars beside its existing `chown` (§J8-1 item 3); J16-9 `include $hdr_common` in the www→apex server + the four snippet-path `local`s hoisted above their first use; J16-10 `server_tokens off` + `limit_req_status 429`; J16-11 four directives added to `$hdr_page`; §J8-1 shell half — new `pool_ensure_served_dirs()` narrows `/opt/grin` and the app dir from `o+rx` to `o+x`, keeps `o+rx` on the two served subdirectories, and is called from **both** `pool_install` and `pool_setup_nginx` so a re-run of Install no longer 404s every logo (§J8-7b) |
 | [`scripts/lib/07_lib_gateway.sh`](../../scripts/lib/07_lib_gateway.sh) | J16-3 `user`/`group` in the haproxy `global` section (resolved to an account that exists) + eight sandbox directives on the unit; J16-6 per-field validation of the `GRINGW1\|` pairing string; J16-7 `-s` not `-f` on the keypair check, non-empty assertion after `genkey`, the hub's public-half repair branch, and guards on the forwarder write, the wg config write and its `chmod` |
 | [`back-end-pool/scripts/test-admin-panel.js`](../../web/07_mining_pool_public/back-end-pool/scripts/test-admin-panel.js) | +2 assertions in §7: `$hdr_page` carries the four directives (J16-11) and a control that it still allowlists the analytics + font origins; the neighbouring assertion's label corrected — it said "the four directives the page CSP omits", which stopped being true in this session |
-| [`docs/generated/script07_security_audit.md`](script07_security_audit.md) | this section |
+| [`docs/reference/script07_security_audit.md`](script07_security_audit.md) | this section |
 
 **Left open at the end of this session:** **J16-2** (structural — four dispositions written, the
 choice is the operator's, and it must be made before a third-party gateway is paired) and
@@ -14969,8 +14969,8 @@ written. It does not say the gate passed. It cannot.
 | [`back-end-pool/package.json`](../../web/07_mining_pool_public/back-end-pool/package.json) | **J17-6** — `test-auth-hardening.js` added to `test:unit` (397 → 445 reported assertions) |
 | [`public_html/login.html`](../../web/07_mining_pool_public/public_html/login.html) | **J17-1** — the standing *"New admin? Register here"* link replaced with an on-box notice; the form kept (its ids are live in the JS) but unreachable, and marked as such |
 | [`scripts/lib/07_lib_pool_backup.sh`](../../scripts/lib/07_lib_pool_backup.sh) | **J17-2** — `pbk_restore` sets `payout_control.frozen = 1` on the restored DB before `pool_deroot`, with a hard-failure branch telling the operator not to start the service, and a new "reconcile before resuming" step in the post-restore checklist |
-| `docs/generated/script07_reference_audit_session_plan.md` *(deleted 2026-09-06; tracker folded into the Status roll-up above)* | progress tracker corrected (J1–J11, J13 were shown as not started) and J17's row filled in |
-| [`docs/generated/script07_security_audit.md`](script07_security_audit.md) | this section |
+| `docs/reference/script07_reference_audit_session_plan.md` *(deleted 2026-09-06; tracker folded into the Status roll-up above)* | progress tracker corrected (J1–J11, J13 were shown as not started) and J17's row filled in |
+| [`docs/reference/script07_security_audit.md`](script07_security_audit.md) | this section |
 
 **Left open at the end of this session:** **J17-4** (handed to §J6 — small fix, non-local
 consequences) and **J17-5** (procedure, not code — the runbook in J17-7 is the deliverable).

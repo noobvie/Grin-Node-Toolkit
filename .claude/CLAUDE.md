@@ -9,7 +9,7 @@ Run as root/sudo on a remote VPS — **not executed locally on this machine.**
 CLAUDE.md holds **general Grin architecture + toolkit-wide conventions only.**
 Product-specific implementation detail (Script 07 pool internals, GrinScan, solo
 mining, admin panel, CMS, etc.) lives in **local memory** (`memory/` dir, indexed in
-`MEMORY.md`) and in committed **`docs/generated/script##_*.md`**. The user runs a single
+`MEMORY.md`) and in committed **`docs/reference/script##_*.md`**. The user runs a single
 Windows + VSCode machine, so local memory is durable — write reusable product facts there,
 keep this file lean. (The full pre-2026-06 product detail is recoverable from git history.)
 
@@ -106,7 +106,7 @@ scripts/
        052_lib_vendor.sh verifying vendor/ against vendor/SHA256SUMS (no bypass) —
        an edited or added byte there stops the build; the fix is a re-vendor in this
        repo, NEVER regenerating the manifest on the VPS.
-       Design → docs/generated/script052_design.md;
+       Design → docs/reference/script052_design.md;
        the build handoff is script052_implementation.md's session log, never the chat.
   053_ WooCommerce payment gateway
   054–058 FREE — assign a number when a build STARTS, not to an idea. Pick one that
@@ -122,7 +122,7 @@ scripts/
        single-member Giveaways category parks at the end of the band and leaves a
        contiguous run for the two categories that grow (wallets, payments). At 054
        it would have cost a second migration (WooCommerce → 055). Full reasoning is
-       in the 05_grin_wallet_service.sh header + docs/generated/script05_implementation.md.
+       in the 05_grin_wallet_service.sh header + docs/reference/script05_implementation.md.
   06_  Global health + price collector (06b = GrinScan explorer)
   07_  Mining services hub → 07_grin_mining_solo.sh (solo private, has a `lan` arg) and
        07_grin_mining_public_pool.sh (GRINIUM public pool; libs 07_lib_hub.sh central hub /
@@ -151,7 +151,7 @@ scripts/
        been VPS-deployed AND its runtime identifiers are name-keyed, not number-keyed
        (grin-transporter-*, /opt/grin/transporter-*, grin_transporter.conf, ports 7456/7466) —
        so there was no Drop-style matched-key migration. Do not renumber a deployed product.
-       Design → docs/generated/script09_design.md, memory project_comms_hub_09. Menu grouping is
+       Design → docs/reference/script09_design.md, memory project_comms_hub_09. Menu grouping is
        display-only; the number stays the label.
   lib/ Sourced libraries — always prefixed with parent script number
        e.g. 059_lib_wallet.sh, 059_lib_nginx.sh
@@ -542,12 +542,12 @@ value in the lib actually reaches an installed box; `nginx_ensure_grin_api_zone`
    the file exists; never put shell syntax (`2>/dev/null`) inside an nginx config.
 
 ## Generated & Temporary Files
-ALL generated docs go to `docs/generated/` — never scatter into `web/` etc. The old
-`flowcharts/` dir was merged into `docs/generated/` (2026-07-09); don't recreate it.
-**`docs/generated/README.md` is the index** — read it to find a doc, and add a row to it when
+ALL generated docs go to `docs/reference/` — never scatter into `web/` etc. The old
+`flowcharts/` dir was merged into `docs/reference/` (2026-07-09); don't recreate it.
+**`docs/reference/README.md` is the index** — read it to find a doc, and add a row to it when
 you add a file. (The folder name is historical: nothing in it is machine-generated.)
 
-**Every doc in `docs/generated/` carries a freshness header** directly under its title — a
+**Every doc in `docs/reference/` carries a freshness header** directly under its title — a
 blockquote naming three things: **Covers code as of** (when the doc was last written against
 the code), **Last verified** (when someone actually checked the doc *against* the code and
 said so), and **Product code last changed** (the last real commit to that product's own files).
@@ -566,19 +566,19 @@ the page. Two rules keep it honest:
   exactly how 15 docs came to look uniformly fresh in 2026-08. Read the commit, don't trust the
   timestamp.
 
-**⚠ `docs/generated/` is the DURABLE REFERENCE LIBRARY — design, architecture, flows — for
+**⚠ `docs/reference/` is the DURABLE REFERENCE LIBRARY — design, architecture, flows — for
 other people to read. Session scaffolding does NOT go in it and is NOT committed.** A
 per-session build plan, prompt series, review checklist or batch tracker is a handoff between
 chat sessions: it dies once every part has been run. Write it to **`D:/tmp/grin-toolkit-plans/`**
 (outside the repo, not version-controlled — see that dir's `README.md`), never to
-`docs/generated/`, and never to a scratchpad that is wiped between sessions.
+`docs/reference/`, and never to a scratchpad that is wiped between sessions.
 - **Cross-link ONE way.** The design doc may say "broken into nine sessions, plan kept outside
   the repo"; it must never link a `D:/tmp/...` path — that is a dead link for anyone who clones.
   The plan links *into* the repo docs freely.
 - **On completion: fold, then delete.** The durable outcome (what was decided, what shipped,
   what is still open) goes into that product's `script##_design.md` or
   `script##_implementation.md`; the plan file is deleted. A finished plan is not reference.
-- **Why:** on 2026-09-06 five such files held ~164 KB in `docs/generated/`, three of them long
+- **Why:** on 2026-09-06 five such files held ~164 KB in `docs/reference/`, three of them long
   finished, and they were the single biggest reason the folder read as a dump. One of them
   (`script07_reference_audit_session_plan.md`) had also become the *only* home of live state —
   the §J open-findings tracker — which is now the **Status roll-up** at the top of
@@ -632,7 +632,7 @@ because the box hadn't rebooted. A reboot clears them — that is luck, not a cl
 Deep implementation facts live in local memory + committed docs. When working on a product,
 recall the relevant memory and read its doc:
 - **Script 07 public mining pool** (architecture, locked design decisions, admin panel, CMS,
-  multi-region hub + thin stratum gateways, payments) → memory `project_pool_*` + `docs/generated/script07_*.md`.
+  multi-region hub + thin stratum gateways, payments) → memory `project_pool_*` + `docs/reference/script07_*.md`.
   The pool lives in THIS repo (`scripts/07_grin_mining_public_pool.sh` + `web/07_mining_pool_public/`);
   the standalone GRINIUM repo is **deprecated — never edit it**.
   Backend routes live in `back-end-pool/routes/` (one file per area, `index.js` is boot only); pages carry no

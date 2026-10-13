@@ -443,7 +443,7 @@ class DormancyManager {
 
     const now = Math.floor(Date.now() / 1000);
 
-    // Double-submit / double-record guard (review finding #1, docs/generated/script07_design.md).
+    // Double-submit / double-record guard (review finding #1, docs/reference/script07_design.md).
     // A resubmit (double-click, slow-response
     // retry) would otherwise write a second confirmed withdrawal + debit for one real send —
     // over-debiting the miner AND making the wallet-send audit see an unmatched payout. A given

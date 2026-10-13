@@ -569,7 +569,7 @@ install_stats() {
     #     which otherwise show the bare ISO letters
     #   · the self-hosted basemap: Natural Earth TopoJSON tiers, the city-label
     #     list and the topojson-client decoder, so the peer map needs no
-    #     third-party tile host (docs/generated/script06_design.md).
+    #     third-party tile host (docs/reference/script06_design.md).
     #     countries-10m.json ships but is NOT mounted — it is deployed so the
     #     tier is in place if viewport culling ever lands; nothing fetches it.
     # ⚠ Load-bearing since the basemap swap: with assets/ missing the peer map

@@ -66,8 +66,8 @@ What a good split looks like:
 
 **Write the plan OUTSIDE the repo**, to `D:/tmp/grin-toolkit-plans/script<XX>_<service>_plan.md`.
 A session plan is scaffolding that dies once every part is run — it is not documentation, and
-committing it is what turned `docs/generated/` into a dump (five such files, ~164 KB, three of
-them long finished, cleared 2026-09-06). `docs/generated/` is the durable reference library:
+committing it is what turned `docs/reference/` into a dump (five such files, ~164 KB, three of
+them long finished, cleared 2026-09-06). `docs/reference/` is the durable reference library:
 design, architecture, flows.
 
 Cross-link **one way only**: the design doc may say the work is "broken into nine sessions" and

@@ -8,7 +8,7 @@
 # from a producer's local nginx web dir to one or more mirrors. It never touches
 # chain_data and never stops the grin node — the node runs throughout. Do not
 # confuse this with the "rsync raw chain_data" proposal in
-# docs/generated/script03_design.md section 14.4, which is a different thing and
+# docs/reference/script03_design.md section 14.4, which is a different thing and
 # is the only one that involves node downtime.
 #
 # ERREXIT: per CLAUDE.md `project_lib_errexit_suppression`, every caller reaches

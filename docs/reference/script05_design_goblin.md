@@ -35,7 +35,7 @@ Drop's `web/059_drop/server/` already implements **every wallet-side step** of b
 **What does NOT exist anywhere in the repo:** any Nostr client code (grep for `nostr|nip44|1059`
 comes up empty outside docs). The bridge is genuinely new — but it is transport only.
 
-Related planning: `docs/generated/script09_design.md` — 093 Transporter is **not** usable here
+Related planning: `docs/reference/script09_design.md` — 093 Transporter is **not** usable here
 (Goblin doesn't speak it); 091 (Floonet relay deployer) is **optional** infrastructure for this
 feature, not a dependency (§4.4). *(09x numbers swapped 2026-07-10: Floonet relay = 091.)*
 

@@ -6,7 +6,7 @@
  * ship: it carries no LICENSE, LICENSE.md, LICENSE.txt or COPYING and no licence
  * mention in its README, so it is all-rights-reserved. It is also the ONE
  * component that decides whether Accio can receive at all. Everything here is
- * written against the protocol spec in `docs/generated/script052_design.md`
+ * written against the protocol spec in `docs/reference/script052_design.md`
  * §"Listen protocol", which packet S4a produced by reading the MIT *client*
  * (`listener.js`) alone. Section references below are to that spec.
  *

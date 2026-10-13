@@ -1,7 +1,7 @@
 'use strict';
 
 // Node availability — the pool's own record of its node, beside the node box's recorder.
-// Design: docs/generated/script07_design.md §20 (pool side) + script086_design.md §8 (recorder).
+// Design: docs/reference/script07_design.md §20 (pool side) + script086_design.md §8 (recorder).
 //
 // Two observers, two sources, never merged (§20.4):
 //   source 'pool'     — this module's own 30 s getStatus() probe. It answers "could the POOL get a

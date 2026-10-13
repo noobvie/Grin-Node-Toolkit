@@ -96,7 +96,7 @@ public_html/admin-dashboard.html | deleted | never existed under this name — s
 settings-alerts.html | deleted | admin alerts settings page, deleted by audit §J8-3; §J8-2's dated finding still links it and may not be rewritten
 web/07_mining_pool_public/back-end-pool/admin-panel/settings-alerts.html | deleted | same file, full path form in the §J8-2 link
 script07_reference_audit_session_plan.md | deleted | pre-mainnet run plan, session scaffolding folded into the audit's Status roll-up and deleted 2026-09-06; the roll-up names it to say where it went
-docs/generated/script07_reference_audit_session_plan.md | deleted | same file, repo-relative form
+docs/reference/script07_reference_audit_session_plan.md | deleted | same file, repo-relative form
 scripts/lib/07_lib_satellite.sh | deleted | the retired satellite role's lib, deleted 2026-06-22 in f2ebade; the audit's Status roll-up and CLAUDE.md name it to say it is GONE
 back-end-pool/satellite.js | deleted | satellite app entry point, deleted with the role in f2ebade
 lib/share-relay.js | deleted | satellite share-forwarding module, deleted with the role in f2ebade

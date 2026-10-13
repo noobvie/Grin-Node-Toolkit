@@ -4,7 +4,7 @@
 // WHY A CONSTANT, AND WHO BUMPS IT. Several payout guards depend on how grin-wallet behaves, not
 // only on its API shape, and a new release can change that behaviour with no error anywhere. The
 // ones checked against the v5.5.0 source on 2026-09-27 (see the gate in
-// withdrawal-scheduler.js processSlatepackExpiry and docs/generated/script07_implementation.md):
+// withdrawal-scheduler.js processSlatepackExpiry and docs/reference/script07_implementation.md):
 //   1. `owner_api` never publishes a Tor onion — only `listen` does (controller.rs
 //      foreign_listener, both the external tor and the built-in Arti path). The pool runs owner_api
 //      only, so a miner's `grin-wallet receive` cannot reach it over Tor and prints the reply.

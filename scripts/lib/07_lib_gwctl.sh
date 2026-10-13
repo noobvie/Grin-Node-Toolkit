@@ -10,7 +10,7 @@
 #     may run this ONE binary as root and nothing else)
 # so the wg peer list and pool.json region_ports can never drift apart, and the
 # admin panel can pair a gateway without an SSH session.
-# Design: docs/generated/script07_design.md §13.
+# Design: docs/reference/script07_design.md §13.
 #
 # Subcommands (stdout is ALWAYS one JSON object; non-zero exit + {ok:false,error}
 # on any failure so execFile callers get one parse path):

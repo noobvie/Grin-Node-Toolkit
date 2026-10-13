@@ -52,7 +52,7 @@
 #  as a missing feature — that is precisely how it was reported before this row
 #  existed — and a dead key would read as a broken menu.
 #
-#  Design: docs/generated/script09_design.md
+#  Design: docs/reference/script09_design.md
 #  Memory: project_comms_hub_09
 #
 # =============================================================================
@@ -197,7 +197,7 @@ main() {
   ${YELLOW}Note:${RESET} privacy comes from INDEPENDENT operators. Running every hop of a
   route yourself provides none — and makes you the one party able to link
   every input to every output." \
-                   "docs/generated/script09_design.md (PART D)" || true ;;
+                   "docs/reference/script09_design.md (PART D)" || true ;;
             3) run_sub "093_grin_transporter.sh"    || true ;;
             0) break ;;
             "") continue ;;

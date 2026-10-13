@@ -586,7 +586,7 @@ by `cp`, so there is no upload step to think about.
      autoindex is off and nothing links `countries-10m.json`, so a renderer fetches only
      the ~890 KB the page references (~295 KB gzipped).
 
-4. **`docs/generated/script06_design.md`** — this section, updated as built.
+4. **`docs/reference/script06_design.md`** — this section, updated as built.
 
 ### The one real technical risk — vertex count, not file size
 
@@ -791,7 +791,7 @@ plus a redeploy.
 Was broken into six pasteable per-session prompts (five build + one VPS acceptance); Part 2 was
 the shippable checkpoint, after which the watermark was gone and Parts 3-5 were improvements on a
 working map. **All parts are run and committed**, so the prompt file has been deleted — session
-plans are scaffolding, not reference (see the "Session plans" note in `docs/generated/README.md`).
+plans are scaffolding, not reference (see the "Session plans" note in `docs/reference/README.md`).
 
 ### As built — the dateline seams the raster used to hide (2026-09-09)
 
@@ -1886,13 +1886,13 @@ them the way the Emission and Slate bullets already link.
 Broken into nine pasteable per-session prompts (eight build + one VPS acceptance), one tool per
 session. Part 3 is the first shippable checkpoint (4 tools) and Part 7 the second (6 tools) — both
 even grids. The prompt file itself is **kept outside the repo** with the other in-flight session
-plans; it is scaffolding, not reference (see `docs/generated/README.md`).
+plans; it is scaffolding, not reference (see `docs/reference/README.md`).
 
 ### Review pass — CLOSED 2026-09-06 except the VPS run
 
 Parts 1-8 were run on 2026-09-05. The review over that working tree — four confirmed defects plus
 per-session review prompts R1-R8 — is **kept outside the repo** alongside the build plan
-(`D:/tmp/grin-toolkit-plans/`, see `docs/generated/README.md`). What follows is its durable
+(`D:/tmp/grin-toolkit-plans/`, see `docs/reference/README.md`). What follows is its durable
 outcome; the blow-by-blow stays in the plan file.
 
 **R1-R5 and R8 are run and landed. R7 was superseded and absorbed into R8, so it never ran as its

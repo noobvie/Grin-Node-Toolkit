@@ -87,7 +87,7 @@
 #  the band would grow downward with no menu consequence at all.
 #  Keeping 052 was the alternative, and it would have left Wallets
 #  permanently split around a faucet with every future wallet landing further
-#  from 051. Full reasoning → docs/generated/script05_implementation.md
+#  from 051. Full reasoning → docs/reference/script05_implementation.md
 #
 #  ─── Numbers are internal — the menu shows NAMES only ─────────────────────
 #  051 / 053 / 059 / 05C are file and doc identity. They are NOT printed on the
@@ -149,11 +149,11 @@
 #                      ⚠ Built is not tested: no part of Accio has run on a VPS.
 #                      Its own banner says so, and its acceptance runs (testnet
 #                      build → deploy → send → receive) are still owed.
-#                      Design → docs/generated/script052_design.md
-#                      Log    → docs/generated/script052_implementation.md
+#                      Design → docs/reference/script052_design.md
+#                      Log    → docs/reference/script052_implementation.md
 #   GoblinPay          Receive-only merchant till (Nostr + slatepack), deploying
 #                      github.com/2ro/GoblinPay the toolkit way.
-#                      Design → docs/generated/script09_design.md (PART C)
+#                      Design → docs/reference/script09_design.md (PART C)
 #
 # =============================================================================
 
@@ -1885,7 +1885,7 @@ main() {
             7) _slot_notice "GOBLINPAY — NOT BUILT YET" \
                    "Receive-only merchant till (Nostr + slatepack), deploying
   github.com/2ro/GoblinPay the toolkit way." \
-                   "docs/generated/script09_design.md (PART C)" || true ;;
+                   "docs/reference/script09_design.md (PART C)" || true ;;
             8) _slot_notice "SLOT 8 — UNASSIGNED" \
                    "Reserved for the next PAYMENT rail. It gets a script number
   (054-058) on the day its build starts, not before." || true ;;

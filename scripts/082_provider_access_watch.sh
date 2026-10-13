@@ -12,7 +12,7 @@
 #   • new SSH logins accepted                      (someone got in)
 #   • large heartbeat gap with no reboot           (VM pause / clock jump)
 #
-# Design rules (see docs/generated/script082_design.md):
+# Design rules (see docs/reference/script082_design.md):
 #   1. Alerts MUST leave the box — a log on the same server an attacker touched
 #      is worthless. Delivery goes out-of-band via ntfy / Telegram / email /
 #      Nostr (any subset the operator configures).

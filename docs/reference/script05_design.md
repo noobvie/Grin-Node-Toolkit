@@ -14,7 +14,7 @@ ordering rule" block in `scripts/05_grin_wallet_service.sh`), and its design mov
 Contents:
 
 - **PART A — Accio, the public web wallet — MOVED.** It is being built, so it took its number:
-  the design now lives in **`docs/generated/script052_design.md`** (moved 2026-08-09 by build
+  the design now lives in **`docs/reference/script052_design.md`** (moved 2026-08-09 by build
   packet S0, which created `scripts/052_grin_accio.sh` and vendored the pinned upstream into
   `web/052_accio/`). This is the rule working as intended, not an exception to it.
 - PART B — Payment Pro: not designed yet; the feature sketch is in the hub script header.

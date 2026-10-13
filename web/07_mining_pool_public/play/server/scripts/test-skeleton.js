@@ -168,7 +168,7 @@ async function main() {
   // The contract: the design doc's §19.4 SQL, executed on its own, must produce exactly
   // the schema the migration produces. Only runs from a repo checkout (the doc is not
   // deployed to the box).
-  const DOC = path.resolve(SERVER, '../../../../docs/generated/script07_design.md');
+  const DOC = path.resolve(SERVER, '../../../../docs/reference/script07_design.md');
   if (fs.existsSync(DOC)) {
     const doc = fs.readFileSync(DOC, 'utf8');
     const sec = doc.indexOf('### 19.4');

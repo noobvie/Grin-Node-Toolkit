@@ -58,7 +58,7 @@
 #       vendor/SHA256SUMS before every build, and reports (never takes) what
 #       upstream changed since the pin. A pin nothing checks is a comment.
 #
-#  ─── Build packets (docs/generated/script052_design.md §"Build plan") ───────
+#  ─── Build packets (docs/reference/script052_design.md §"Build plan") ───────
 #    S0  vendor & pin ...................................... DONE 2026-08-09
 #    S1  052_lib_build.sh (own the build) ................... DONE 2026-08-09
 #    S2  static deploy on testnet, stock nginx        [first VPS work]
@@ -95,15 +95,15 @@
 #           the nginx lib — is paid here too, because an SSL vhost cannot be
 #           added to a vhost that was never written.
 #    S8  security audit .................................... DONE 2026-08-11
-#        └─ docs/generated/script052_security_audit.md — 8 fixed, 6 open.
+#        └─ docs/reference/script052_security_audit.md — 8 fixed, 6 open.
 #    S9+ deletion passes, one subsystem per session
 #        └─ pass 1 (MQS) DONE 2026-08-11. Pass 2 waits for a box: it is the
 #           pass that deletes files rather than reducing one.
 #    R1–R8 review arc — the whole authored surface read once before S2 spends
 #        VPS time on it. Plan + findings: script052_implementation.md.
 #
-#  Design:  docs/generated/script052_design.md
-#  Log:     docs/generated/script052_implementation.md
+#  Design:  docs/reference/script052_design.md
+#  Log:     docs/reference/script052_implementation.md
 #
 #  ─── Network submenu ────────────────────────────────────────────────────────
 #   1) Install / deploy          5) Check upstream        (052_lib_vendor.sh)

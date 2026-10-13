@@ -6,7 +6,7 @@
 # Grin wallet (Tor payouts), nginx + SSL, backups. Regional GATEWAYS (thin HAProxy +
 # WireGuard forwarders, scripts/lib/07_lib_gateway.sh) tunnel miner stratum to this box's
 # per-region internal ports — there is NO satellite share/block ingestion API anymore.
-# See docs/generated/script07_design.md §3–6.
+# See docs/reference/script07_design.md §3–6.
 #
 # The hub brain REUSES the shared pool_* setup functions from the parent script
 # (install/configure/deploy web/nginx/admin/status/backup) AND the parent's WireGuard

@@ -12,7 +12,7 @@ longer a build packet at all: it is the acceptance session**, and until it passe
 no stubs is not a tested product. Independence is already permanent — see §"Read this first".
 
 - Provenance and the pin → `web/052_accio/PROVENANCE.md`, `web/052_accio/PINNED_SHA`
-- Session log (the handoff between build sessions) → `docs/generated/script052_implementation.md`
+- Session log (the handoff between build sessions) → `docs/reference/script052_implementation.md`
 - Moved here from `script05_design.md` PART A at S0, per the numbering rule: an unbuilt product
   lives under its hub's number; it gets its own the day its first file is created.
 
@@ -246,7 +246,7 @@ web/052_accio/
   gateway/                       our Node service: /listen + /wallet/<id> + /tor forwarder
   patches/                       branding + Grin-default overlay (see Stage 4a)
   PROVENANCE.md                  what vendor/ is, where it came from, the measurements
-docs/generated/script052_*.md    design/implementation/security_audit, once 052 exists
+docs/reference/script052_*.md    design/implementation/security_audit, once 052 exists
 ```
 
 No `vendor/nginx-modules/` — that is the point of the simplification above.
@@ -385,7 +385,7 @@ certbot vhost, Tor hidden service for the wallet itself, hub 05 key `2` switched
 downloadable artefact (offline/airgapped — note it **cannot receive** without the user running
 their own gateway).
 
-### Stage 6 — Security audit → `docs/generated/script052_security_audit.md`
+### Stage 6 — Security audit → `docs/reference/script052_security_audit.md`
 
 Priorities: the
 `/tor/` forwarder as an SSRF surface (we now own this guard outright — `Block-Access` is no
@@ -401,7 +401,7 @@ any single session growing large enough to be compacted. The stages map to sessi
 
 ### The rule that makes this work: the doc is the handoff, not the chat
 
-Every session ends by writing its outcome into `docs/generated/script052_implementation.md`
+Every session ends by writing its outcome into `docs/reference/script052_implementation.md`
 (created in S0). The **next** session reads that file plus the relevant part of this design —
 never the previous conversation. If a session ends with knowledge only in the chat log, the
 packet is not finished.
@@ -409,7 +409,7 @@ packet is not finished.
 **Standing header — paste at the top of each new session**, substituting the packet number:
 
 ```
-Working on Accio (script 052), session S<n> of docs/generated/script052_design.md
+Working on Accio (script 052), session S<n> of docs/reference/script052_design.md
 §"Build plan". Read that packet's "Read first" list, do the "Do" list, verify with
 "Verify", then do "Close-out". Do not read other packets. Do not run scripts locally —
 this is a VPS product.
@@ -456,7 +456,7 @@ The only packet whose output is legally significant: after it, Accio is permanen
 > **(a)** the tree measures **7.10 MiB**, not 4.7 MB — that figure was GitHub's *packed*
 > repository size, and nothing is missing (`diff -r` against a fresh archive is empty);
 > **(b)** the nginx reference landed at **`web/052_accio/docs/upstream-nginx.conf.reference`**
-> (product-local — `docs/generated/` only takes `script##_*.md`);
+> (product-local — `docs/reference/` only takes `script##_*.md`);
 > **(c)** cloning on Windows with `core.autocrlf=true` rewrites every text file to CRLF, **and
 > `git archive` honours that setting too** — the first attempt produced a tree whose `LICENSE`
 > hashed `eb2c5d88…` instead of upstream's `bbc8b96c…`. Re-vendor only with
@@ -511,7 +511,7 @@ The only packet whose output is legally significant: after it, Accio is permanen
    port, onion address) and is re-read by every action, so a rebuild never re-prompts. **Every
    action must be idempotent** — unlike upstream's `build.sh`, ours run against a live box with
    other vhosts, live certs and a running gateway that must survive.
-6. Move this whole PART A to `docs/generated/script052_design.md`; leave a one-line pointer in
+6. Move this whole PART A to `docs/reference/script052_design.md`; leave a one-line pointer in
    `script05_design.md`. Create `script052_implementation.md` with a "Session log" heading.
 
 **Verify** — `bash -n scripts/052_grin_accio.sh`; `vendor/upstream-wallet/LICENSE` present and
@@ -757,7 +757,7 @@ and how a wallet proves ownership of a URL across reconnects. Note anything the 
 
 **Do** — extend the gateway with the WebSocket rail: `/listen`, per-wallet
 `/wallet/<id>/v2/foreign` minting, and relay of inbound Foreign-API POSTs down the open socket.
-Reuse 093 Transporter's Node+SQLite patterns (`docs/generated/script09_design.md`), including its
+Reuse 093 Transporter's Node+SQLite patterns (`docs/reference/script09_design.md`), including its
 two hard-won lessons: **partition capacity per writer** (a per-victim cap is a DoS *on* the
 victim), and **normalise the wallet id at the route, not in mounted middleware** (Express
 rebuilds `req.params` per layer). Add nginx `proxy_pass` with WebSocket upgrade headers and the

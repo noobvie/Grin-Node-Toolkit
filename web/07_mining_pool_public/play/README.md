@@ -1,7 +1,7 @@
 # /play/ — the pool's games platform
 
 Games, events and a moderated chat for the public pool, served under `/play/` on the pool's
-own domain. **The contract is [`docs/generated/script07_design.md` §19](../../../docs/generated/script07_design.md)**
+own domain. **The contract is [`docs/reference/script07_design.md` §19](../../../docs/reference/script07_design.md)**
 — decisions D1–D20, the pool ↔ games routes, the schema, the threat notes and the build
 status. This file only tells you where things are.
 

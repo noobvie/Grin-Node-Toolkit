@@ -4,7 +4,7 @@
 //
 // Verifies the JSON file written by `grin-wallet export_proof`. Every layout
 // fact below is from the "Payment proof — verified wire facts" subsection of
-// docs/generated/script06_design.md, which was read field-by-field from
+// docs/reference/script06_design.md, which was read field-by-field from
 // mimblewimble/grin-wallet at v5.4.1 (the toolkit's pin) and re-checked at
 // v5.5.0 and master. Do not "improve" a byte layout here without re-reading
 // that subsection — a guessed layout produces a verifier that calls every

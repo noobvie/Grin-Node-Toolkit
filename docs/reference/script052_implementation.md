@@ -11,7 +11,7 @@ in a conversation, the packet is not finished.
 **Standing header — paste at the top of each new session**, substituting the packet number:
 
 ```
-Working on Accio (script 052), session S<n> of docs/generated/script052_design.md
+Working on Accio (script 052), session S<n> of docs/reference/script052_design.md
 §"Build plan". Read that packet's "Read first" list, do the "Do" list, verify with
 "Verify", then do "Close-out". Do not read other packets. Do not run scripts locally —
 this is a VPS product.
@@ -79,7 +79,7 @@ section is the handoff for that arc, exactly as the `## Session log` is for the 
 **Standing header — paste at the top of each review session**, substituting the packet:
 
 ```
-Reviewing Accio (script 052), packet R<n> of docs/generated/script052_implementation.md
+Reviewing Accio (script 052), packet R<n> of docs/reference/script052_implementation.md
 §"Review plan". Read that packet's "Files" and "Hunt for" lists, review only those files,
 then do "Close-out". Do not review other packets' files. Do not run scripts locally —
 this is a VPS product; verification is bash -n / node --check plus reading.
@@ -359,8 +359,8 @@ earns. Everything after this removes *operational* dependencies only.
 | `web/052_accio/gateway/README.md` | the four jobs our Node service must carry (empty until S3) |
 | `web/052_accio/patches/README.md` | overlay rules (empty until S5) |
 | `scripts/052_grin_accio.sh` | menu skeleton, every action a stub — **this is what assigned the number** |
-| `docs/generated/script052_design.md` | PART A moved out of `script05_design.md` |
-| `docs/generated/script052_implementation.md` | this file |
+| `docs/reference/script052_design.md` | PART A moved out of `script05_design.md` |
+| `docs/reference/script052_implementation.md` | this file |
 
 **The pin**
 

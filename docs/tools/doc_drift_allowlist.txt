@@ -70,7 +70,6 @@ LICENSE.md      | not-a-path | named inside a NEGATIVE statement — "No LICENSE
 # external — real files, but not in this repo
 # ---------------------------------------------------------------------------
 MEMORY.md                   | external | the local-memory index, which lives outside the repo by design (CLAUDE.md)
-project_drop_backup_052.md  | external | a local-memory file, outside the repo; named while recording its rename to _059
 install.sh                  | external | 2ro's floonet-rs upstream repo — we deploy it, we do not fork it
 deploy/install.sh           | external | same floonet-rs upstream repo
 apply-spec.sh               | external | same floonet-rs upstream repo

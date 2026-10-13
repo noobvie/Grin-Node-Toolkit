@@ -65,7 +65,7 @@ resolver, the allowlist rules, and what is still open.
 | [script01_design_ipv6.md](script01_design_ipv6.md) | IPv6 support for the node builder |
 | [script01_reference_flowchart.md](script01_reference_flowchart.md) | Node build flow — chain sync, binary install |
 | [script02_reference_flowchart.md](script02_reference_flowchart.md) | Nginx file-server manager flow |
-| [script03_design.md](script03_design.md) | Chain-data sharing: mirrors, landing page, remote pull |
+| [script03_design.md](script03_design.md) · [_implementation](script03_implementation.md) | Chain-data sharing: mirrors, landing page, remote pull — design, and as-built + build notes |
 | [script03_reference_flowchart.md](script03_reference_flowchart.md) | Chain-data sharing flow |
 | [script04_reference_flowchart.md](script04_reference_flowchart.md) | Node Foreign API + stats collector flow |
 | [script04_security_audit.md](script04_security_audit.md) | Public node API exposure |
@@ -86,7 +86,7 @@ resolver, the allowlist rules, and what is still open.
 
 | Doc | What it covers |
 |---|---|
-| [script06_design.md](script06_design.md) | Global health + price collector, peer map, self-hosted basemap, **06d Tiny Explorer + tools hub** |
+| [script06_design.md](script06_design.md) · [_implementation](script06_implementation.md) | Global health + price collector, peer map, self-hosted basemap, **06d Tiny Explorer + tools hub** |
 | [script06_security_audit.md](script06_security_audit.md) | Collector and public stats exposure |
 | [script06b_design.md](script06b_design.md) · [_implementation](script06b_implementation.md) | **GrinScan** explorer — pruned vs archive behaviour |
 
@@ -94,17 +94,20 @@ resolver, the allowlist rules, and what is still open.
 
 | Doc | What it covers |
 |---|---|
-| [script07_design.md](script07_design.md) | Public mining pool architecture — PPLNS, address-as-identity, Model C regional gateways, hub move + connect-page latency (§13.13), games platform `/play/` (§19; Parts 1–10 built, not VPS-tested), node availability beside the event recorder (§20; Parts 6–8 built, not VPS-tested) |
-| [script07_implementation.md](script07_implementation.md) | Pool deploy + runbook, incl. the hub-move runbook (§8.7); node availability as built (§10.15) |
-| [script07_security_audit.md](script07_security_audit.md) | Pool security record, §A–§J17. **Start at the Status roll-up** — 14 k lines, and the roll-up is the whole of it in one table |
+| [script07_design.md](script07_design.md) | Public mining pool design, in 13 subject chapters (overview · architecture · stratum · rewards · payments · identity · incentives · multi-region · admin · data · node availability · ports). `§` numbers are permanent IDs — chapter order is not § order |
+| [script07_design_games.md](script07_design_games.md) | The `/play/` games platform (design §19) |
+| [script07_implementation.md](script07_implementation.md) | Pool as built, by subject · runbooks (incl. hub move §8.7) · Build notes — obstacles & lessons · Open items |
+| [script07_implementation_games.md](script07_implementation_games.md) | `/play/` as built, with its own Build notes |
+| [script07_reference_solo_flowchart.md](script07_reference_solo_flowchart.md) | Solo private mining flow (`07_grin_mining_solo.sh`) |
+| [script07_security_audit.md](script07_security_audit.md) | Pool security record, §A–§J17. **Start at the Status roll-up** — open and partial findings only; the roll-up is the whole of it in one table |
 | [script07_security_audit_archive.md](script07_security_audit_archive.md) | Closed findings of the Script 07 audit (142, verbatim, by audit section). Open items and the roll-up stay in `script07_security_audit.md` |
 
 ## Admin & host (Script 08 band)
 
 | Doc | What it covers |
 |---|---|
-| [script082_design.md](script082_design.md) | Provider Access Watch — VPS host-tamper detection |
-| [script083_design.md](script083_design.md) | Host Optimization advisor (read-only) |
+| [script082_design.md](script082_design.md) · [_implementation](script082_implementation.md) | Provider Access Watch — VPS host-tamper detection |
+| [script083_design.md](script083_design.md) · [_implementation](script083_implementation.md) | Host Optimization advisor (read-only) |
 | [script086_design.md](script086_design.md) | Diagnostics & Support Bundle — health check, support bundle, log triage; §8 node event recorder design (built, never run) |
 | [script086_implementation.md](script086_implementation.md) | Node event recorder as built — files, installed footprint, Part 2–5 deltas, the R1 review, classification order, acceptance (§8.15–§8.22; never run) |
 
@@ -119,8 +122,8 @@ resolver, the allowlist rules, and what is still open.
 
 | Doc | What it covers |
 |---|---|
-| [script00_report_deferred_work.md](script00_report_deferred_work.md) | Scripts 01/03/04/08 still carry private copies of the shared node libs — deferred DRY migration |
-| [script00_report_manual_findings.md](script00_report_manual_findings.md) | Where the code disagrees with the README, CLAUDE.md, menu hints and `docs/reference/` — ~100 findings logged while writing the grinnode.org manual, 14 flagged to fix first |
+| [script00_report_deferred_work.md](script00_report_deferred_work.md) | Two open items left from the shared-node-lib DRY migration (04's local session-name copy, 03's own `@reboot` writer) |
+| [script00_report_manual_findings.md](script00_report_manual_findings.md) | Where the code disagrees with the README, CLAUDE.md, menu hints and `docs/reference/` — findings logged while writing the grinnode.org manual that still hold after the 2026-10 re-check |
 
 ---
 
@@ -130,11 +133,11 @@ Honest list of what a reader will look for and not find, so nobody re-derives it
 
 - **Hub 08 has no design doc.** Seven scripts (`08`, `081`, `084`, `085`, `089`, `08del`, plus
   `08_grin_node_admin.sh` itself) are covered only by `082`/`083`. Biggest hole here.
-- **06d Tiny Explorer** and **07 solo mining** have no doc of their own; both live inside a
-  larger file (`script06_design.md`, memory `project_testnet_solo_mining`).
+- **06d Tiny Explorer** has no doc of its own (lives inside `script06_design.md`). **07 solo
+  mining** has a flowchart only ([script07_reference_solo_flowchart.md](script07_reference_solo_flowchart.md)), no design.
 - **Scripts 01, 02, 04 have a flowchart but no `design`.** The flowcharts describe *what runs*,
   not *why it was built that way*.
-- **`051x` (XP-themed Fidelius variant)** is undocumented.
+- **`051x` (XP-themed Fidelius variant)** has only a menu/path mention in `script05_implementation.md` — no doc of its own.
 
 ## Deep detail lives in local memory
 

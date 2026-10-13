@@ -1,6 +1,6 @@
-// games.html page script — moved BYTE-verbatim out of the page's inline script block (code-layout F5).
-// Classic script (no defer/module) loaded at the same position as the old block, after the <script src> tags before it, whose globals it uses (H14).
-// Games → Overview & settings (design §19.6, §19.10, §19.11; games Part 9). Every call goes
+// games.html page script.
+// Classic script (no defer/module) loaded after the <script src> tags before it, whose globals it uses.
+// Games → Overview & settings (script07_design_games.md §19.6, §19.10, §19.11). Every call goes
 // through GamesAdmin.call (the admin proxy, adminFetch — never API.*). A settings save is
 // step-up: the POOL asks for the password before it proxies (lib/games-link.js).
 API.guardAdminPage();
@@ -185,7 +185,7 @@ document.getElementById('gs-save').addEventListener('click', async () => {
 });
 document.getElementById('gs-reload').addEventListener('click', load);
 
-// ── Launch (§19.17.2) ─────────────────────────────────────────────────────────────────
+// ── Launch (script07_design_games.md §19.17.2) ─────────────────────────────────────────────────────────────────
 const MODE_TEXT = { off: 'off', preview: 'preview', on: 'live' };
 const MODE_BADGE = { off: 'badge badge-dim', preview: 'badge badge-warn', on: 'badge badge-ok' };
 function modeBadge(label, mode) {

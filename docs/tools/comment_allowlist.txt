@@ -57,3 +57,8 @@ web/07_mining_pool_public/back-end-pool/lib/node-availability.js:mainnet\sgenesi
 web/07_mining_pool_public/back-end-pool/lib/stratum-pause.js:calendar-impossible\sdate\s\(2026-02-30  DIARY_DATE  example input for the date parser, not a diary entry
 web/07_mining_pool_public/back-end-pool/routes/admin/cms.js:code\sad,\sor\sto\sedit\sa\slegacy  STALE_TERM	describes the live 400 refusal of ad_type code (lib/ads.js REMOVED_MSG); not a claim code ads exist
 web/07_mining_pool_public/back-end-pool/routes/index.js:NO\ssatellite\sshare/block  STALE_TERM  states there is NO satellite ingestion API (trap guard against reintroducing one)
+web/07_mining_pool_public/back-end-pool/admin-panel/admin-shell.js:Absent\sstamp\s=\sthis\ssession\swas\sjust\sminted  DIARY_DATE  false positive: "just minted" describes a session with no stamp, not a dated entry
+web/07_mining_pool_public/back-end-pool/admin-panel/js/ads.js:A\slegacy\scode\sad\sis\snever\sserved  STALE_TERM  describes the live guard that refuses to serve a stored code ad (design D22); not a claim code ads exist
+web/07_mining_pool_public/back-end-pool/admin-panel/js/node-availability.js:e\.g\.\s'2026-10-03  DIARY_DATE  example of the timestamp format the function emits, not a diary entry
+web/07_mining_pool_public/back-end-pool/admin-panel/js/regions.js:\(§13\.12r\)  DEAD_SECTION  §13.12r is a lettered bold sub-item of design §13.12 that the heading scan cannot see
+web/07_mining_pool_public/back-end-pool/admin-panel/miners.html:design\s§13\.12r  DEAD_SECTION  §13.12r is a lettered bold sub-item of design §13.12 that the heading scan cannot see

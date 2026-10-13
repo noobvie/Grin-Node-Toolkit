@@ -1,5 +1,5 @@
-// settings-announcements.html page script — moved BYTE-verbatim out of the page's inline <script> (code-layout F4).
-// Classic script (no defer/module) loaded at the same position as the old block, after settings-common.js (and the scripts before it), whose globals it uses (H14).
+// settings-announcements.html page script.
+// Classic script (no defer/module) loaded after settings-common.js (and the scripts before it), whose globals it uses.
   // ── Stratum section (design §21) ─────────────────────────────────────────────────────────
   // Reads the state from admin-shell's shared poll (window.AdminStratum — the same answer the
   // strip renders), and acts through the five freshAdmin routes with adminFetch, so a stale

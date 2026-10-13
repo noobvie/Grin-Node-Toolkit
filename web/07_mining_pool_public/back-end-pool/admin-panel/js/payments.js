@@ -1,7 +1,7 @@
-// payments.html page script — moved out of the page's inline <script> (code-layout F3): byte-verbatim, then a second commit
-// turned the on*= attributes inside its markup STRINGS into data-action (the delegated wiring is at the end).
-// Classic script (no defer/module) loaded at the same position as the old block, after auth.js,
-// api.js, admin-shell.js, stepup.js and payouts-common.js, whose globals it uses (H14).
+// payments.html page script.
+// Event wiring is delegated (data-action) and sits at the end of the file.
+// Classic script (no defer/module) loaded after auth.js,
+// api.js, admin-shell.js, stepup.js and payouts-common.js, whose globals it uses.
 // (The old-deep-link forwarder is in <head>.)
 let _withdrawals = [];
 let _filter = 'all';
@@ -22,7 +22,7 @@ const STATUS = {
   tor_checking:      ['badge-warn',  'Checking'],
   tor_sending:       ['badge-warn',  'Sending'],
   tor_held:          ['badge-warn',  'Held'],
-  // LEGACY: no new row lands here since 2026-09-26; the scheduler migrates old ones on its
+  // LEGACY: no new row lands here; the scheduler migrates old ones on its
   // first pass (confirmed / refunded / Held). Kept so such a row never renders raw.
   retry_scheduled:   ['badge-warn',  'Legacy retry'],
   slatepack_pending: ['badge-warn',  'Awaiting slate'],
@@ -529,7 +529,7 @@ document.addEventListener('DOMContentLoaded', () => { refresh(); });
 // abandoned-balance poll moved to dormant.html, the payout request audit's to users.html.)
 setInterval(refresh, 30000);
 
-// ==== F3: event wiring — replaces the inline on*= attributes (strict script-src, no inline handlers).
+// ==== event wiring — replaces the inline on*= attributes (strict script-src, no inline handlers).
 // One delegated listener per event type; data-action names the handler. Every old handler ignored
 // the Event and `this` except where noted, so the wrappers pass exactly the arguments the attribute did.
 document.addEventListener('click', (e) => {

@@ -1,6 +1,6 @@
 /* games-admin.js — shared by the admin panel's games pages: games.html, games-chat.html,
- * games-players.html, games-names.html (design §19.10, §19.11, §19.16, D11, D21; games Parts 9, 12). games-events.html
- * (Part 7) predates it and carries its own copy of call().
+ * games-players.html, games-names.html (script07_design_games.md §19.10, §19.11, §19.16, D11, D21).
+ * games-events.html predates it and carries its own copy of call().
  *
  * Two rules every games page follows, and the reason this file exists:
  *
@@ -12,7 +12,7 @@
  *      which writes need it is the pool's rule (lib/games-link.js FAST_WRITES), not ours.
  *
  *   2. Player- and moderator-written text — chat bodies, report reasons, the reasons in the mod
- *      log — reaches the DOM through textContent ONLY (§19.10: "never innerHTML, in the shell and
+ *      log — reaches the DOM through textContent ONLY (script07_design_games.md §19.10: "never innerHTML, in the shell and
  *      the admin pages alike"). el() below is the builder; this file has no HTML sink at all, and
  *      the pages build those rows with it rather than through an HTML-string table.
  */
@@ -20,7 +20,7 @@
   'use strict';
 
   var ADDR_RE = /^t?grin1[ac-hj-np-z02-9]{58}$/;
-  // A guest (design §19.17.3, games Part C5) is 'g:' + 16 base32 — not an address. A URL path
+  // A guest (script07_design_games.md §19.17.3) is 'g:' + 16 base32 — not an address. A URL path
   // segment cannot carry ':' (the proxy's path check refuses it), so a guest travels as
   // 'g.<16>' in a path; the games service turns it back into the id. Build every player path
   // with playerSeg(), never by pasting the id.

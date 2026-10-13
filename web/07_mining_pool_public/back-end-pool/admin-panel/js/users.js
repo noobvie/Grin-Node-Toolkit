@@ -1,7 +1,7 @@
-// users.html page script — moved out of the page's inline <script> (code-layout F3): byte-verbatim, then a second commit
-// turned the on*= attributes inside its markup STRINGS into data-action (the delegated wiring is at the end).
-// Classic script (no defer/module) loaded at the same position as the old block, after auth.js,
-// api.js, admin-shell.js, stepup.js and payouts-common.js, whose globals it uses (H14).
+// users.html page script.
+// Event wiring is delegated (data-action) and sits at the end of the file.
+// Classic script (no defer/module) loaded after auth.js,
+// api.js, admin-shell.js, stepup.js and payouts-common.js, whose globals it uses.
 // Auth gate (httpOnly-cookie aware): redirects to /login.html if not an admin, else wires
 // up the topbar username + Logout. Pool name + testnet banner (chrome) are handled by
 // admin-shell.js.
@@ -27,7 +27,7 @@ function fmtDur(secs) {
   return (s / 3600).toFixed(1) + 'h';
 }
 
-// For the payout request audit (moved here from payments.html, 2026-10). Local copies of the
+// For the payout request audit (not on payments.html). Local copies of the
 // payout pages' payouts-common.js helpers: this page does not load that file, which also
 // carries the payout freeze kill-switch.
 function fmtGrin(v) { return (Number(v) || 0).toFixed(4); }
@@ -192,8 +192,8 @@ async function clearBan(ip) {
 
 // ── Sessions & login activity ────────────────────────────────────────────────
 // Keys MUST match the actions the writers emit. 'login_failed' is what index.js's login
-// route inserts; the panel previously only mapped 'login_failure', which nothing writes,
-// so failed logins rendered with the raw action key as their label.
+// route inserts; 'login_failure' is not written by anything, so mapping only that would render
+// failed logins with the raw action key as their label.
 const LOGIN_LABEL = {
   login_success:    ['badge-ok',    'Login'],
   login_failed:     ['badge-error', 'Failed login'],
@@ -353,7 +353,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // notice a live sweep. The other two sections load once and refresh on demand.
 setInterval(loadPayoutAudit, 120000);
 
-// ==== F3: event wiring — replaces the inline on*= attributes (strict script-src, no inline handlers).
+// ==== event wiring — replaces the inline on*= attributes (strict script-src, no inline handlers).
 // One delegated listener per event type; data-action names the handler. Every old handler ignored
 // the Event and `this` except where noted, so the wrappers pass exactly the arguments the attribute did.
 document.addEventListener('click', (e) => {

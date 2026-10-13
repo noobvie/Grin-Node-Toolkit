@@ -1,6 +1,6 @@
-// donors.html page script — moved out of the page's inline script block (code-layout F5): byte-verbatim, then a second commit
-// turned the on*= attributes inside its markup STRINGS into data-action (the delegated wiring is at the end).
-// Classic script (no defer/module) loaded at the same position as the old block, after the <script src> tags before it, whose globals it uses (H14).
+// donors.html page script.
+// Event wiring is delegated (data-action) and sits at the end of the file.
+// Classic script (no defer/module) loaded after the <script src> tags before it, whose globals it uses.
 let _allDonors = [];
 let _donationsActive = true;
 let _windowDays = 365;
@@ -121,7 +121,7 @@ function requestCell(r) {
     return `<span class="badge badge-dim">name</span> <span class="req-name">${escHtml(r.name)}</span>${cur}`;
   }
   const w = Number(r.width) || 0, h = Number(r.height) || 0;
-  // A plain same-origin src (design §18.11 Part 3 #1): the httpOnly session cookie rides along,
+  // A plain same-origin src (script07_implementation.md §18.11): the httpOnly session cookie rides along,
   // and every way of viewing the image keeps the route's own headers — the stored mime, nosniff
   // and a sandbox CSP — which an object URL copy would drop. No img-src widening is needed.
   const img = r.has_image
@@ -201,8 +201,8 @@ async function loadQueue(reset) {
   const sel = document.getElementById('queue-status');
   _queueStatus = sel.value;
   try {
-    // Banners only (C4): a name is never pending since names went automatic. The history of the
-    // pre-C4 name decisions is in the audit log; the live and removed names are listed below.
+    // Banners only: a name is never pending (names are auto-checked). Earlier name decisions
+    // are in the audit log; the live and removed names are listed below.
     const data = await API.get('/api/admin/donors/requests?kind=banner&status=' + encodeURIComponent(_queueStatus));
     // API.get (Auth.fetch) hands back the parsed ERROR body on a non-2xx — a 429 is JSON too.
     if (!data || data.success !== true || !Array.isArray(data.requests)) {
@@ -231,7 +231,7 @@ async function rejectRequest(id) {
   if (ok) _reasons.delete(String(id));
 }
 
-// ── Donor names (design §19.17.6, Part C4) ──────────────────────────────────────────
+// ── Donor names (script07_design_games.md §19.17.6) ──────────────────────────────────────────
 // One table, three views (live / removed / banned). The five headers keep their count, so the
 // AdminTable loading/empty rows span right; their TEXT follows the view (textContent only).
 let _namesView = 'live';
@@ -559,7 +559,7 @@ document.addEventListener('DOMContentLoaded', () => { loadQueue(); loadNames(); 
 // operator is typing. It reloads after every decision and on the Refresh button.
 setInterval(loadDonors, 60000);
 
-// ==== F5: event wiring — replaces the inline on*= attributes (strict script-src, no inline handlers).
+// ==== event wiring — replaces the inline on*= attributes (strict script-src, no inline handlers).
 // One delegated listener per event type; data-action names the handler. Every old handler ignored
 // the Event and `this` except where noted, so the wrappers pass exactly the arguments the attribute did.
 document.addEventListener('click', (e) => {

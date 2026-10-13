@@ -1,10 +1,9 @@
-// dormant.html page script — moved BYTE-verbatim out of the page's inline <script> (code-layout F3).
-// Classic script (no defer/module) loaded at the same position as the old block, after auth.js,
-// api.js, admin-shell.js, stepup.js and payouts-common.js, whose globals it uses (H14).
+// dormant.html page script.
+// Classic script (no defer/module) loaded after auth.js,
+// api.js, admin-shell.js, stepup.js and payouts-common.js, whose globals it uses.
 // Dormant balances: the abandoned-balance policy, its sweep, and the record of every sweep.
-// Moved off payments.html (2026-10), which kept the payout queue — the below-minimum "manual
-// payout" went there too, since it creates a queue row. runDisposition keeps its endpoint,
-// step-up and confirm text from there.
+// Separate from payments.html, which keeps the payout queue — the below-minimum "manual
+// payout" lives there too, since it creates a queue row.
 // Auth gate (httpOnly-cookie aware): redirects to /login.html if not an admin, else wires
 // up the topbar username + Logout. Pool name + testnet banner are handled by admin-shell.js.
 // stepup.js provides adminFetch() for Run disposition and the freeze toggle.
@@ -108,7 +107,7 @@ document.addEventListener('DOMContentLoaded', () => { loadPayoutControl(); loadD
 setInterval(loadPayoutControl, 60000);
 setInterval(loadDormancy, 120000);
 
-// ==== F3: event wiring — replaces the inline on*= attributes (strict script-src, no inline handlers).
+// ==== event wiring — replaces the inline on*= attributes (strict script-src, no inline handlers).
 // One delegated listener per event type; data-action names the handler. Every old handler ignored
 // the Event and `this` except where noted, so the wrappers pass exactly the arguments the attribute did.
 document.addEventListener('click', (e) => {

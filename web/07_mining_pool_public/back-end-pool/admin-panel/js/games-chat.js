@@ -1,6 +1,6 @@
-// games-chat.html page script — moved BYTE-verbatim out of the page's inline script block (code-layout F5).
-// Classic script (no defer/module) loaded at the same position as the old block, after the <script src> tags before it, whose globals it uses (H14).
-// Games → Chat & moderation (design §19.10, §19.11, D21; games Part 9). Every call goes
+// games-chat.html page script.
+// Classic script (no defer/module) loaded after the <script src> tags before it, whose globals it uses.
+// Games → Chat & moderation (script07_design_games.md §19.10, §19.11, D21). Every call goes
 // through GamesAdmin.call (the admin proxy, adminFetch — never API.*). Chat bodies, report
 // reasons and moderator-written reasons are PLAYER TEXT: every row here is built with
 // GamesAdmin.el (textContent), never as an HTML string.

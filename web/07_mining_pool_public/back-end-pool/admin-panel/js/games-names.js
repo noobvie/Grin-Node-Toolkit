@@ -1,6 +1,6 @@
-// games-names.html page script — moved BYTE-verbatim out of the page's inline script block (code-layout F5).
-// Classic script (no defer/module) loaded at the same position as the old block, after the <script src> tags before it, whose globals it uses (H14).
-// Games → Nicknames (design §19.17.5; games Part C3, which replaced Part 12's review queue).
+// games-names.html page script.
+// Classic script (no defer/module) loaded after the <script src> tags before it, whose globals it uses.
+// Games → Nicknames (script07_design_games.md §19.17.5; names are auto-checked, there is no review queue).
 // Every call goes through GamesAdmin.call (the admin proxy, adminFetch — never API.*); every
 // write is step-up (none is in the pool's FAST_WRITES). A nickname, a banned name and a reason
 // are PLAYER/ADMIN TEXT: every row here is built with GamesAdmin.el (textContent), never as an

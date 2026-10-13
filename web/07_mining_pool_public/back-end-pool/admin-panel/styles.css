@@ -1,9 +1,8 @@
 /* ============================================================================
-   Admin Panel — sidebar dashboard shell (rebuilt 2026-06)
+   Admin Panel — sidebar dashboard shell
    ----------------------------------------------------------------------------
    Self-contained: defines the FULL CSS-variable set for both admin themes so it
-   no longer depends on the runtime /js/theme.js registry (dropped from the admin
-   pages). Two themes only — Dark (default) and Light — switched by setting
+   does not depend on a runtime theme registry. Two themes only — Dark (default) and Light — switched by setting
    data-theme on <html>; admin-shell.js persists the choice. pool.css is imported
    for the shared component classes (.card .badge .kpi-grid table .btn .spinner …);
    everything below re-skins the chrome (sidebar + topbar) and the layout.
@@ -112,7 +111,7 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   padding: 0;
   width: 100%;
 }
-/* Data tables fit WITHOUT a sideways scroll (operator request 2026-10-12). The .table-wrap
+/* Data tables fit WITHOUT a sideways scroll (operator request). The .table-wrap
    scroller stays as a last resort for a phone, never the normal desktop view. Three levers:
    1. a page with a data table may use a wide screen — the 1200px cap left ~700px unused at
       1920 while a 10-column table scrolled; text-only pages (settings forms) keep the cap;

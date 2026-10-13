@@ -24,14 +24,14 @@
     // Dashboard is the overview group: all the live data pages + System Health hang off it.
     { file: 'index.html', title: 'Dashboard', ico: '📊', children: [
         { file: 'miners.html',   title: 'Miners' },
-        { file: 'donors.html',   title: 'Donors' },     // banner review queue + donor names + donors + donation settings (design §18.6, §19.17.6)
+        { file: 'donors.html',   title: 'Donors' },     // banner review queue + donor names + donors + donation settings (script07_design.md §18.6; script07_design_games.md §19.17.6)
         { file: 'blocks.html',   title: 'Blocks' },
         { file: 'users.html',    title: 'Security' },   // login security, admin sessions, payout request audit
         { file: 'regions.html',  title: 'Regions' },
         { file: 'health.html',   title: 'System Health' },
         { file: 'node-availability.html', title: 'Node Availability' }   // pool view + node-box recorder, side by side (design §20.6)
       ] },
-    // Payouts (2026-10): the old single payments page, split by SUBJECT — each page pairs a
+    // Payouts: split by SUBJECT — each page pairs a
     // reading with the action that changes it. The queue keeps payments.html (bookmarks,
     // miners.html's ?q= link); like Settings, the parent's file is also its first child.
     { file: 'payments.html', title: 'Payouts', ico: '💸', children: [
@@ -39,7 +39,7 @@
         { file: 'treasury.html', title: 'Treasury' },    // reconciliation, wallet-send audit, wallet identity + switch wizard
         { file: 'dormant.html',  title: 'Dormant balances' }   // abandoned-balance policy, sweep, sweep history
       ] },
-    // Games (design §19.11): the /play/ games' own pages, all through the admin proxy to the
+    // Games (script07_design_games.md §19.11): the /play/ games' own pages, all through the admin proxy to the
     // games service. Shown whatever the games mode is — the operator prepares before opening.
     // The pool-owned on/off + chat switches stay under Settings → Games.
     { file: 'games.html', title: 'Games', ico: '🎮', children: [
@@ -49,7 +49,7 @@
         { file: 'games-events.html',  title: 'Events' },
         { file: 'games-names.html',   title: 'Nicknames' }
       ] },
-    // Settings was split into one file per section (2026-06). A `children` array with `file`
+    // Settings is one file per section. A `children` array with `file`
     // entries renders an always-expanded group of real pages (no more #hash tabs); the parent
     // is active whenever you're on the parent OR any child page. Ads lives here too (it's
     // operator config — a content/monetization surface alongside Pages/Announcements).
@@ -64,8 +64,8 @@
         { file: 'ads.html',                    title: 'Ads' },
         { file: 'settings-payout.html',        title: 'Payout' },
         { file: 'settings-incentives.html',    title: 'Incentives' },
-        { file: 'settings-games.html',         title: 'Games' },       // /play/ master + chat switch (design §19.11)
-        { file: 'settings-names.html',         title: 'Names' },       // the blocked-word list for player names (design §19.17.5)
+        { file: 'settings-games.html',         title: 'Games' },       // /play/ master + chat switch (script07_design_games.md §19.11)
+        { file: 'settings-names.html',         title: 'Names' },       // the blocked-word list for player names (script07_design_games.md §19.17.5)
         { file: 'settings-access.html',        title: 'Access Control' },
         { file: 'settings-database.html',      title: 'Database' }
       ] }
@@ -171,13 +171,9 @@
   window.Explorer = { url: explorerUrl, link: explorerLink, network: explorerNetwork, key: explorerKey, relink: explorerRelink };
 
   // ── Theme (Dark default, Light) ─────────────────────────────────────────
-  // Own key, and deliberately not 'admin-theme'. branding.js used to write the
-  // operator's public default_theme (e.g. "atomic") to that key on every public
-  // page, which would have clobbered this Dark/Light toggle and reset it to Dark.
-  // That write went away in 2026-08 with js/theme.js, so the collision is gone —
-  // but the separate key stays: this toggle is admin UI chrome and has nothing to
-  // do with the operator's public palette, so sharing a key would be wrong again
-  // the moment anything writes the public one back.
+  // Own key, deliberately not 'admin-theme': this toggle is admin UI chrome and has nothing
+  // to do with the operator's public palette (default_theme), so sharing a key would let a
+  // public-palette write clobber the Dark/Light choice and reset it to Dark.
   var THEME_KEY = 'admin-ui-mode';
   function getTheme() {
     var t = null;
@@ -343,7 +339,7 @@
 
     // Nav groups are always expanded (non-collapsible), so there's no caret to wire.
 
-    // Settings sub-links are now real pages (not hash tabs), so the active sub-link is
+    // Settings sub-links are real pages (not hash tabs), so the active sub-link is
     // baked in at render time — no hashchange sync needed.
 
     // In-page section navigation for the long pages (treasury, ads, settings-*)
@@ -1730,7 +1726,7 @@
     });
     // Becoming visible again is NOT interaction — it only means "evaluate now".
     //
-    // This handler used to stamp AS.lastAct before calling tick(), which defeated the whole
+    // Stamping AS.lastAct before calling tick() would defeat the whole
     // feature: an idle admin panel is normally a BACKGROUNDED tab, so the sequence
     // hide → 3 h → show reset the idle clock to zero, tick() then saw idleFor = 0, and the
     // "there was interaction since the last refresh" test passed on the stamp it had just

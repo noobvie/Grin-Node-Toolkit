@@ -34,8 +34,7 @@
             <input type="number" id="prize_fee_cut_percent" name="prize_fee_cut_percent" min="0" max="100" step="1" value="0">
             <div class="helper-text">% of the collected pool fee diverted to the prize pool.</div>
           </div>
-          <!-- allow_miner_donations + donation_address MOVED to donors.html (design §16.8) on
-               2026-09-21: they sit beside the donor list and the name/ranking settings, which is
+          <!-- allow_miner_donations + donation_address live in donors.html (design §16.8): they sit beside the donor list and the name/ranking settings, which is
                where an operator adjusting donations actually is. They must not be duplicated
                here — two forms saving the same keys is how one page silently overwrites the
                other's edit. -->

@@ -26,8 +26,8 @@
         <div class="tabs" id="filter-chips" style="margin:0;">
           <button class="tab-btn active" data-filter="all"             data-action="set-filter">All</button>
           <button class="tab-btn"        data-filter="active"          data-action="set-filter">Active</button>
-          <!-- "Retry queued" went with the Tor retry ladder (2026-09-26): nothing re-sends a payout.
-               Held is its successor — a Tor payout whose one attempt has an unknown outcome. -->
+          <!-- No "Retry queued" filter: Tor payouts are tried ONCE and nothing re-sends them.
+               Held is a Tor payout whose one attempt has an unknown outcome. -->
           <button class="tab-btn"        data-filter="tor_held"        data-action="set-filter">Held</button>
           <button class="tab-btn"        data-filter="tor_failed"      data-action="set-filter">Failed (refunded)</button>
           <button class="tab-btn"        data-filter="confirmed"       data-action="set-filter">Paid</button>
@@ -64,11 +64,10 @@
 
     </section>
 
-    <!-- ── Manual payouts (2026-10-05) ─────────────────────────────────────────
+    <!-- ── Manual payouts ─────────────────────────────────────────
          The two payouts an operator starts by hand. Both go through the same locked Tor flow as a
-         miner's own payout and appear in the queue above. Always OPEN (operator decision
-         2026-10-05): this used to be a collapsed <details>, which hid the one tool a support
-         ticket needs behind a click. -->
+         miner's own payout and appear in the queue above. Always OPEN (operator decision): a collapsed
+         <details> would hide the one tool a support ticket needs behind a click. -->
     <section>
       <h2 data-sec="Manual payouts">Manual payouts</h2>
       <p style="font-size:.82rem;color:var(--text-dim);margin:-.4rem 0 .8rem;">

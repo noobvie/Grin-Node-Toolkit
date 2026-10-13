@@ -1,6 +1,6 @@
-// games-events.html page script — moved BYTE-verbatim out of the page's inline script block (code-layout F5).
-// Classic script (no defer/module) loaded at the same position as the old block, after the <script src> tags before it, whose globals it uses (H14).
-// Games → Events (design §19.9, §19.11). Every call goes through the pool's admin proxy
+// games-events.html page script.
+// Classic script (no defer/module) loaded after the <script src> tags before it, whose globals it uses.
+// Games → Events (script07_design_games.md §19.9, §19.11). Every call goes through the pool's admin proxy
 // (/api/admin/games/* → games /internal/admin/*). Create and update are plain admin writes;
 // cancel and finalise-now need step-up, which the POOL enforces before proxying — adminFetch
 // (stepup.js) shows the in-page password dialog when the pool asks. No native dialogs.

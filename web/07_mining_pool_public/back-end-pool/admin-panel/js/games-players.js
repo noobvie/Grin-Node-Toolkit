@@ -1,9 +1,9 @@
-// games-players.html page script — moved BYTE-verbatim out of the page's inline script block (code-layout F5).
-// Classic script (no defer/module) loaded at the same position as the old block, after the <script src> tags before it, whose globals it uses (H14).
-// Games → Players (design §19.10, §19.11, D21; games Part 9). Every call goes through
+// games-players.html page script.
+// Classic script (no defer/module) loaded after the <script src> tags before it, whose globals it uses.
+// Games → Players (script07_design_games.md §19.10, §19.11, D21). Every call goes through
 // GamesAdmin.call (the admin proxy, adminFetch — never API.*); step-up is the pool's rule.
 // Chat bodies are player text: built with GamesAdmin.el (textContent), never HTML strings.
-// Match void (§19.8, games Part 10): step-up, like ban — the pool asks for the password before
+// Match void (script07_design_games.md §19.8): step-up, like ban — the pool asks for the password before
 // proxying. The answer carries the match, not the player, so the page re-reads the player.
 API.guardAdminPage();
 const G = window.GamesAdmin;
@@ -31,8 +31,8 @@ function render() {
   if (p.player && p.player.banned) head.appendChild(el('span', 'badge badge-error', p.player.banned_until >= 253402300799 ? 'Banned forever' : 'Banned until ' + G.fmtUtc(p.player.banned_until)));
   if (p.player && p.player.muted) head.appendChild(el('span', 'badge badge-warn', 'Muted until ' + G.fmtUtc(p.player.muted_until)));
   if (!p.known) head.appendChild(el('span', 'badge badge-dim', 'Never seen by the games'));
-  // A guest (§19.17.3): no mining, never a moderator (D32), deletable. Its login name is never
-  // shown here — only its dates (§19.13 #29).
+  // A guest (script07_design_games.md §19.17.3): no mining, never a moderator (D32), deletable. Its login name is never
+  // shown here — only its dates (script07_design_games.md §19.13 #29).
   const isGuest = p.kind === 'guest';
   if (isGuest) head.appendChild(el('span', 'badge badge-dim', p.deleted_at ? 'Deleted guest (' + G.fmtUtc(p.deleted_at) + ')' : 'Guest account'));
   if (isGuest && !p.deleted_at && p.guest) head.appendChild(G.btn('Delete guest account', 'btn-danger', deleteGuest));
@@ -59,7 +59,7 @@ function render() {
   document.getElementById('gp-mod-state').textContent = p.moderator
     ? 'Moderator since ' + G.fmtUtc(p.moderator.added_at) + ' (appointed by ' + p.moderator.added_by + ')' + (p.moderator.note ? ' — ' + p.moderator.note : '') + '.'
     : 'Not a moderator.';
-  // Nickname (design §19.17.5) — player text, so textContent only.
+  // Nickname (script07_design_games.md §19.17.5) — player text, so textContent only.
   const nk = p.nickname || {};
   const parts = [];
   if (nk.live) parts.push('Shown as “' + nk.live.shown_as + '” since ' + G.fmtUtc(nk.live.decided_at) + '.');
@@ -212,7 +212,7 @@ async function modChange(add) {
 }
 document.getElementById('gp-mod-add').addEventListener('click', () => modChange(true));
 
-// Guest accounts (§19.17.3): step-up, like ban — the pool asks for the password before proxying.
+// Guest accounts (script07_design_games.md §19.17.3): step-up, like ban — the pool asks for the password before proxying.
 async function deleteGuest() {
   if (!_addr || !G.GUEST_RE.test(_addr)) return;
   const ok = await G.askConfirm({ title: 'Delete this guest account?',

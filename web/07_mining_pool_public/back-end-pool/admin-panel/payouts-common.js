@@ -1,12 +1,11 @@
-/* payouts-common.js — shared logic for the admin payout pages (2026-10).
-   Moved out of payments.html's inline <script>; only flash() (which message element) and
-   renderFreeze() (the hook below) changed. Loaded by the payout pages only (payments.html =
+/* payouts-common.js — shared logic for the admin payout pages.
+   Loaded by the payout pages only (payments.html =
    the queue, treasury.html, dormant.html), after stepup.js — togglePayouts() needs
    adminFetch() — and before the page's own script (admin-panel/js/<page>.js), which calls into
    it. A classic script, not a module: the top-level function declarations stay global so the
    pages' delegated data-action listeners reach them.
 
-   WHY a shared file: the payouts page was split by SUBJECT (queue / treasury / dormant
+   WHY a shared file: the payouts pages are split by SUBJECT (queue / treasury / dormant
    balances), and every one of those pages needs the same freeze kill-switch, helpers and
    status list. Two copies of the in-flight list are how a wallet-switch wizard comes to
    count a different set than the queue does — so there is exactly one, here.
@@ -14,8 +13,8 @@
    Each page provides:
      #freeze-banner, #freeze-toggle   the kill-switch banner + button (renderFreeze fills them)
      ONE element marked data-payout-msg, with style="display:none" INLINE — flash() writes
-       there. Never hide it with a class that carries display:none (the 2026-09-19 bug that
-       made every admin flash invisible).
+       there. Never hide it with a class that carries display:none (that made every admin flash
+       invisible).
      optionally window.onPayoutFreezeChange — called after every renderFreeze(), for a page
        that mirrors the freeze state somewhere else on screen. */
 

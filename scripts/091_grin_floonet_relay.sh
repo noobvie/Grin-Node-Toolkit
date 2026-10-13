@@ -401,7 +401,7 @@ main() {
             [rR]) _flr_need_install && flr_menu_retention || true ;;
             [bB]) flr_backup_menu      || true ;;
             [uU]) _flr_need_install && flr_update   || true ;;
-            # M) Nym mixnet exit was removed 2026-08-07: upstream ARCHIVED
+            # There is no M) key (Nym mixnet exit): upstream ARCHIVED
             # 2ro/floonet-mixexit and the Goblin stack moved off Nym to Tor/arti,
             # so the option could only ever build a dead add-on. No alias is kept
             # — a retired key that still dispatched would install nothing useful.

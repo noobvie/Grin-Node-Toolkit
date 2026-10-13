@@ -201,8 +201,8 @@ DEFAULT_POOL_NAME = "Grin Solo (Node Toolkit)"
 # data/price.json — the page's strict `connect-src 'self'` CSP needs no external
 # origin, and visitors never hit a rate limit or a CORS wall. CoinGecko returns
 # USD + BTC in one call; on failure we fall back to Gate.io (GRIN/USDT for the USD,
-# ÷ BTC/USDT for the BTC). The fallback was nonlogs.io until its GRIN/BTC book went
-# offline in July 2026 (api.nonlogs.io is now NXDOMAIN) — Gate.io is the exchange
+# ÷ BTC/USDT for the BTC). nonlogs.io is NOT a fallback: its GRIN/BTC book is offline
+# (api.nonlogs.io is NXDOMAIN) — Gate.io is the exchange
 # CoinGecko's GRIN figure mostly reflects anyway, and it's a genuinely independent
 # endpoint. If every source fails the previous price.json is left untouched
 # (stale-but-shown) rather than overwritten with nulls. testnet is tGRIN (no value)

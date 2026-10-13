@@ -3,9 +3,8 @@
 # 093_grin_transporter.sh — Grin Transporter (store-and-forward slate relay)
 # =============================================================================
 #
-#  Member of the Grin Connectivity Hub (Script 09). Renumbered from the earlier
-#  "Script 056" plan on 2026-07-04; swapped 091→093 with the Floonet relay on
-#  2026-07-10 (Floonet shipped first). Phase 1 implemented 2026-07-11.
+#  Member of the Grin Connectivity Hub (Script 09). Number history (056 → 091 →
+#  092 → 093) → script09_design.md; Phase 1 is implemented.
 #
 #  Self-hosted store-and-forward relay for Grin transaction slates.
 #  Fills the gap Slatepack and Tor don't: automated AND offline-tolerant sends.
@@ -18,12 +17,12 @@
 #  a grin-wallet (combined owner_api listener, the 059/07 model) and does all
 #  crypto at the edge.
 #
-#  Phase 1 scope (standalone — no Drop/pool wiring, per 2026-07-11 decision):
+#  Phase 1 scope (standalone — no Drop/pool wiring, by decision):
 #    server (queue + R8 challenge auth) + CLI agent (send/poll/finalize) +
 #    nginx/certbot + optional Tor front + cron poll. Product integration
 #    (Drop claims) stays gated on design doc B.9 #6. The public pool is NO
-#    longer a pending consumer: Script 07 removed its reserved Transporter
-#    placeholder on 2026-08-13 and ships Tor + Slatepack only, so 093 is a
+#    longer a pending consumer: Script 07 has no reserved Transporter
+#    placeholder and ships Tor + Slatepack only, so 093 is a
 #    standalone product, not a half-wired rail waiting on the pool.
 #
 #  Design: docs/reference/script09_design.md  (PART B — 093)

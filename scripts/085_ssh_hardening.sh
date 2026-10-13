@@ -140,7 +140,7 @@ _ssh_remove_managed_block() {
 
 _ssh_remove_hardening() {
     rm -f "$HARDENING_DROPIN" 2>/dev/null || true
-    # Pre-2026-09-30 installs used a 99- name that lost the precedence fight.
+    # Older installs used a 99- name that lost the precedence fight.
     rm -f "$LEGACY_DROPIN" 2>/dev/null || true
     _ssh_remove_managed_block
     # Anything we commented out in someone else's file is part of the change and

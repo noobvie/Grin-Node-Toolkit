@@ -5,12 +5,11 @@
 #   · 086 Diagnostics (lib/086_lib_diag.sh dg_triage) — per-signature counts and
 #     a likely-origin finding for each match;
 #   · the node event recorder (lib/grin_node_events.sh) — the same counts in an
-#     evidence bundle's summary.txt. Its failure-class refinement (086 design
+#     evidence bundle's summary.txt. Its failure-class refinement (script086_design.md
 #     §8.6) is its OWN table on top of this one, because a class needs a scope
 #     (start window, kernel log, live pid) that a per-line origin does not.
 #
-# Moved here verbatim from 086_lib_diag.sh (Part 3 of the recorder build) so the
-# two cannot drift. Editing an entry changes 086's output: keep the four arrays
+# Shared by 086_lib_diag.sh and the recorder so the two cannot drift. Editing an entry changes 086's output: keep the four arrays
 # index-aligned, and the recorder's copy in /opt/grin/lib/ picks the edit up on
 # the next recorder install.
 #

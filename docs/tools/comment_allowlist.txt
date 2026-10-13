@@ -28,3 +28,11 @@ scripts/lib/07_lib_pool_backup.sh:§13.10c  DEAD_SECTION  lettered sub-item insi
 scripts/lib/07_lib_pool_wallet.sh:§13.10e  DEAD_SECTION  lettered sub-item inside design §13.10 (bold paragraph, not a heading)
 scripts/07_grin_mining_public_pool.sh:[Ss]atellite  STALE_TERM  Z) Cleanup and the exclusivity guard must still find a pre-Model-C satellite install; the name is a live detection target
 scripts/07_grin_mining_public_pool.sh:Legacy\sSATELLITE  STALE_TERM  cleanup target for a pre-Model-C install
+scripts/085_ssh_hardening.sh:Returns.0.if.something  DIARY_DATE  false positive: "changed" is the return contract, not a diary date
+scripts/08_grin_node_admin.sh:legacy.satellite.log  STALE_TERM  grin-satellite.log is still in the logrotate list so a pre-Model-C install's log stays bounded
+scripts/08_grin_node_admin.sh:Key.6.changed.hands  DIARY_DATE  regression guard: a reassigned hub key gets no alias arm (CLAUDE.md retired-vs-reassigned rule)
+scripts/08del_clean_all_grin_things.sh:web/data  DEAD_PATH  Grin web data dir globbed on the VPS, not a repo path
+scripts/lib/grin_node_events.sh:SEEN.2026-10-03  DIARY_DATE  evidence date: when grin's clean-shutdown pair was observed
+scripts/09_grin_comms_hub.sh:Transporter.moved.092 STALE_TERM  explains why 092 is a reservation for the unbuilt mixer (the band's one sanctioned exception)
+scripts/lib/07_mining_block_collector.py:nonlogs\.io STALE_TERM  WHY nonlogs.io is not used as a price source (dead endpoint), so nobody re-adds it
+scripts/lib/nostr_relay_deploy.sh:reverse-proxy\.md DEAD_PATH  upstream floonet-rs repo doc, not a path in this repo

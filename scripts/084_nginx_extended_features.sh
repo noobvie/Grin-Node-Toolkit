@@ -15,7 +15,6 @@
 #   3) Enhance Security         — harden SSL settings and HTTP security headers
 #   4) Log Rotation Setup       — configure logrotate (10 MB or 10 days, whichever first)
 #   5) Top 20 Bandwidth Consumers — parse access logs, block/rate-limit an IP
-#                                   (moved from hub 08 key 6 on 2026-09-25)
 #   0) Return to admin menu
 #
 # GRIN RESERVED NAMES (protected — cannot be used as reverse proxy domains)
@@ -600,9 +599,8 @@ ROTEOF
 # =============================================================================
 # 5) Top 20 Bandwidth Consumers
 # =============================================================================
-# Moved here from hub 08 (was its inline key 6) on 2026-09-25, when key 6 went
-# to 086 Diagnostics. It reads nginx access logs, so it belongs with the rest
-# of the nginx tooling. Behaviour is unchanged.
+# Reads nginx access logs, so it lives with the rest of the nginx tooling
+# (hub 08 key 6 belongs to 086 Diagnostics).
 show_bandwidth_consumers() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"

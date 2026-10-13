@@ -400,8 +400,8 @@ flr_fetch_source() {
 }
 
 # Probe upstream for a prebuilt release archive (his install.sh already probes
-# ./floonet-rs first — the "release archive layout"). No releases exist as of
-# 2026-07-10; this future-proofs the deployer without blocking on it.
+# ./floonet-rs first — the "release archive layout"). Upstream publishes no releases
+# yet (check before assuming); this future-proofs the deployer without blocking on it.
 _flr_try_prebuilt() {
     local arch; arch=$(uname -m)
     [[ "$arch" == "x86_64" || "$arch" == "aarch64" ]] || return 1
@@ -2205,7 +2205,7 @@ EOF
     done
 }
 
-# flr_mixexit (Nym mixnet exit add-on) was REMOVED on 2026-08-07.
+# There is no flr_mixexit (Nym mixnet exit add-on).
 #
 # Upstream archived 2ro/floonet-mixexit and the Goblin stack moved its privacy
 # transport from the Nym mixnet to Tor/arti, so the builder could only ever

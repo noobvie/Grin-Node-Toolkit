@@ -10,7 +10,7 @@
 #  ─── Members ───────────────────────────────────────────────────────────────
 #   091  091_grin_floonet_relay.sh ✅ Floonet (floonet-rs) relay deployer — COMPLETE
 #   092  (reserved)                ⏳ mwixnet CoinSwap mixer node — NOT BUILT YET
-#   093  093_grin_transporter.sh   🔧 Store-and-forward slate relay (Phase 1 built 2026-07-11;
+#   093  093_grin_transporter.sh   🔧 Store-and-forward slate relay (Phase 1 built;
 #                                     Phase 2 gated on wallet relay-receive support)
 #   094+ FREE — not reserved. 092 is this band's ONE sanctioned reservation (see
 #        below); anything else gets its number the day its build starts. Ideas
@@ -22,11 +22,11 @@
 #  They are independent: "✅  not installed" is normal and means the product is
 #  finished but not deployed here. Do not collapse them into one column.
 #
-#  (Numbers swapped 2026-07-10: Floonet relay ships first — it serves the
-#   existing Goblin/Floonet user base; the Transporter is an internal rail.)
+#  (Floonet is 091 because it ships first — it serves the existing
+#   Goblin/Floonet user base; the Transporter is an internal rail.)
 #
-#  (Renumbered 2026-08-04 by operator decision: the Transporter moved 092 → 093
-#   and 092 was reserved for the mwixnet CoinSwap MIXER — the mixer is the more
+#  (The Transporter moved 092 → 093 by operator decision:
+#   092 was reserved for the mwixnet CoinSwap MIXER — the mixer is the more
 #   actionable build (upstream is community-tested on testnet and a live route
 #   operator can add us), while the Transporter's Phase 2 stays gated on wallet
 #   relay-receive support. NOTE this breaks the toolkit's usual "assign a number
@@ -34,7 +34,7 @@
 #   product, and this is the second renumber the Transporter has taken
 #   (056 → 091 → 092 → 093). Rationale + mixer design → script09_design.md PART D.)
 #
-#  ─── Menu keys (2026-08-04) ────────────────────────────────────────────────
+#  ─── Menu keys ─────────────────────────────────────────────────────────────
 #  This hub keeps POSITIONAL keys (hub 05 moved to fixed slots; 07 and 09 did
 #  not). Rows render in NUMERIC order, so giving the reserved 092 a visible row
 #  shifted the Transporter from key 2 to key 3.

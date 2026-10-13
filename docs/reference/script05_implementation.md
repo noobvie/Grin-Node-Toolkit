@@ -1,11 +1,9 @@
-# Script 05 — Wallet & Payment Services Hub — implementation record
+# Script 05 — Wallet & Payment Services Hub: implementation
 
 > **Covers code as of:** 2026-08-04 (the doc: "current as of 2026-08-04") · **Last verified:** never systematically verified
 > **Product code last changed:** 2026-09-27 — `scripts/05_grin_wallet_service.sh` (CMD wallet `L) Listener` screen; that section and the 2026-09-25 Nuke section are current, the rest of the doc is still as of 2026-08-04)
 
-**Status: current as of 2026-08-04.** Two changes landed the same day and this document covers
-both: the **05x renumber + rename** (Grin Drop `052 → 059`, Fidelius/Accio codenames) and,
-immediately after it, the **fixed-slot menu keys** that replaced positional keys.
+**Status:** built. Sections 1.1–1.6 describe the hub as of 2026-08-04 (the 05x renumber + rename and the fixed-slot menu keys); the CMD wallet subsections are current as of 2026-09-27 and were exercised locally against stubs only — **not run on a VPS**.
 
 This is the authoritative record for the 05 hub's numbering and menu behaviour. The hub's own
 header comment in `scripts/05_grin_wallet_service.sh` carries the short form; this file carries
@@ -16,11 +14,9 @@ Companion docs: `script052_design.md` + `script052_implementation.md` (Accio —
 `script059_*.md` (Grin Drop — renamed from `script052_*`) · `script053_design.md`
 (WooCommerce — did **not** move).
 
----
+## What shipped
 
-# PART 1 — CURRENT STATE (technical spec)
-
-## 1.1 Number allocation — settled, do not reopen
+### 1.1 Number allocation — settled, do not reopen
 
 | # | Product | Category | Status |
 |---|---------|----------|--------|
@@ -46,7 +42,7 @@ would have meant paying for the migration and discarding what it was for. Accio'
 exception at all — `054`–`058` are plain unallocated numbers, and the toolkit's only live
 reservation is `092` (mwixnet mixer) in the 09 band.
 
-## 1.2 Menu keys — FIXED SLOTS
+### 1.2 Menu keys — FIXED SLOTS
 
 Each category owns a contiguous block of keys ending in a **spare**. A row owns its key
 permanently. Planned and spare rows own theirs from the start.
@@ -82,7 +78,7 @@ Plus the status-overview block above the menu, which must stay in **menu order**
 (Wallets → Payments → Giveaways). CMD Wallet is key `A` but prints **first**, because it is the
 first row on screen. A comment above the block says to keep the two in step.
 
-## 1.3 `_slot_notice()` — the planned/spare key contract
+### 1.3 `_slot_notice()` — the planned/spare key contract
 
 A planned or spare key is **live**. It dispatches to `_slot_notice()`, which prints one banner
 screen — what the slot is for, an optional design-doc pointer, `Nothing was installed or
@@ -100,7 +96,7 @@ Ends on `read -r || true`, and uses the `if`-form for its optional doc line — 
 `[[ -n "$doc" ]] && echo …` would make the function return 1 and kill the menu loop under
 `set -e`.
 
-## 1.4 Retired key vs reassigned key
+### 1.4 Retired key vs reassigned key
 
 - A **retired** key — one nothing else took — may stay as a silent, unprinted alias, so muscle
   memory still lands somewhere sane. `C` still reaches the CMD wallet.
@@ -113,7 +109,7 @@ one final time. Those old meanings are gone and get **no alias**. The per-produc
 
 Fixed slots exist to end key churn, so this rule should now be history rather than a live risk.
 
-## 1.5 Status detectors
+### 1.5 Status detectors
 
 Each row's "installed / running" state is probed independently — nothing reads a registry.
 
@@ -139,7 +135,7 @@ mirror the `_051_*` pair exactly, including the shared caveat below.
 > WooCommerce use systemd and do not have this gap. Worth tightening if a "running but broken"
 > report ever appears.
 
-## 1.6 Deployed-state keys — what a live server matches on
+### 1.6 Deployed-state keys — what a live server matches on
 
 Two artifacts on a running box are keyed by the script **number**. They are *matching keys*, not
 labels: the script greps for them to decide what is already installed. Both had to migrate with
@@ -166,7 +162,7 @@ the renumber.
 Nothing else migrated: `/opt/grin/` paths, systemd units and the Drop database carry no number.
 `051` had no deployed number-dependency at all, so its rename was purely files.
 
-### Fidelius service + path rename — 2026-08-05
+#### Fidelius service + path rename
 
 `grin-web-wallet` → **`grin-fidelius`**, and `/opt/grin/webwallet/` → **`/opt/grin/fidelius/`**.
 Done deliberately **before the first VPS deploy**, when it is a pure find-and-replace: once
@@ -186,7 +182,7 @@ both PHP-era paths that nothing has written since the Node port made Fidelius on
 serving both networks (design D1). The hub row therefore read "not installed" on every current
 deploy. Fixed alongside the rename, not by it.
 
-### Fidelius service log — location + rotation
+#### Fidelius service log — location + rotation
 
 The log moved `/var/log/grin-fidelius.log` → **`/opt/grin/logs/grin-fidelius.log`**, joining every
 other toolkit daemon log. Beyond consistency (one directory to back up, clean and look in), it lets
@@ -206,7 +202,7 @@ debugging: **`journalctl -u grin-fidelius` never shows app output** — `append:
 away from the journal, so the journal carries only systemd's own start/stop/crash lines. The setup
 screen prints both destinations.
 
-### CMD wallet (05C) — two listener modes, 2026-08-06
+#### CMD wallet (05C) — two listener modes
 
 The CMD wallet ran `grin-wallet listen` only. Setup now asks which mode, stored in
 `<dir>/.listen_mode`; `listen` stays the default and pre-existing wallets keep it.
@@ -237,7 +233,7 @@ Details that bite:
 The trade is printed at the prompt and repeated in the summary. An operator who
 only wants to receive slates by hand is strictly better off on `listen`.
 
-### CMD wallet (05C) — Nuke screen + Re-initialize fix, 2026-09-25
+#### CMD wallet (05C) — Nuke screen + Re-initialize fix
 
 ⚠ Built and exercised locally against a fake `grin-wallet` only — **not run on a VPS**.
 
@@ -269,7 +265,7 @@ commands for a mainnet archive. Setup re-registers on its next run.
 Also fixed: the summary's "Listener started" line always printed the Foreign port; it now prints
 the active mode and its port.
 
-### CMD wallet (05C) — `L) Listener` screen, 2026-09-27
+#### CMD wallet (05C) — `L) Listener` screen
 
 ⚠ Exercised locally against stubbed `tmux` / port helpers only — **not run on a VPS**.
 
@@ -289,11 +285,10 @@ The status block adds the one state the 05C screen cannot show: a `grin-wallet` 
 from `listen.sh`, outside tmux. Start would otherwise fail the port guard ("held by ANOTHER
 process") with no hint that the holder is this very wallet.
 
----
 
-# PART 2 — DECISIONS (final)
+### Decisions (final)
 
-### Why Drop moved to `059` and not `054`
+#### Why Drop moved to `059` and not `054`
 
 Giveaways is a one-member category. Parking it at the **end** of the band leaves a contiguous run
 for the two categories that actually grow — wallets and payments — and costs **one** migration
@@ -304,13 +299,13 @@ The "no headroom at the boundary" objection dissolves: the number encodes nothin
 *within* a band. A second giveaway takes `058` and the band grows downward, with no menu
 consequence, because the menu key is a fixed slot independent of the number.
 
-### Why not keep `052` and skip the whole migration
+#### Why not keep `052` and skip the whole migration
 
 The Wallets category would stay permanently split around a giveaway faucet, and every future
 wallet product would land further from `051`. This is the one-time cost that stops the question
 being reopened.
 
-### Why fixed slots replaced positional keys
+#### Why fixed slots replaced positional keys
 
 Positional keys (assigned top-to-bottom at render) stay ascending for free, but **every insertion
 silently re-points every key below it.** That is how `2` came to mean Grin Drop and then
@@ -323,7 +318,7 @@ instead of constant, invisible key drift.
 
 Hubs `07` and `09` still assign keys positionally. Only hub `05` uses fixed slots.
 
-### Why readiness ordering was retired
+#### Why readiness ordering was retired
 
 The old rule sorted rows within a group ✅ ready → 🔧 building → planned. Under fixed slots a row
 cannot move, and sorting by readiness would move a key **on the day a product ships** — exactly
@@ -331,13 +326,13 @@ what fixed slots exist to prevent. The `✅ / 🔧 / ⏳` marker carries readine
 
 This is why `2) Accio ⏳` sits above `3) Grin XP 🔧`.
 
-### Menu category order
+#### Menu category order
 
 **Wallets → Accept Payments → Giveaways.** Without this, file order (`ls scripts/`) and menu order
 stop matching, which is the main thing the renumber buys. It also reads fine on its own terms:
 hold your own GRIN → take GRIN from customers → hand GRIN out.
 
-### Codenames — the wallets are Harry Potter named
+#### Codenames — the wallets are Harry Potter named
 
 `051` is **Fidelius** (the charm that hides a place so it cannot be found unless the Secret-Keeper
 reveals it — a Tor hidden service with owner-only auth). `052` will be **Accio** (the Summoning
@@ -355,7 +350,7 @@ Hogwarts, Muggle) — spell names and Latin words are safe.
 The descriptor still rides in the dim subtitle. A bare codename on a menu row tells an operator
 nothing, which is the same failure the numbers-are-internal rule exists to prevent.
 
-### Menu rows show NAMES, not numbers
+#### Menu rows show NAMES, not numbers
 
 `051 / 053 / 059 / 05C` are file and doc identity. They are **not** printed on menu rows — an
 operator picking a wallet does not care which integer its script got, and two numbers per row
@@ -372,101 +367,10 @@ Digits and letters are two independent sequences: digits key products with their
 letters key hub-built utilities that have none. That is why CMD Wallet is `A` and Fidelius is
 still `1`, not `B`.
 
----
+## Runbook
 
-# PART 3 — PENDING / OPEN
-
-| # | Item | Blocking | Notes |
-|---|------|----------|-------|
-| 1 | **Is "Payment Pro" the same product as "GrinPay Server"?** | Decide before *either* build starts | The 05 hub header describes Payment Pro as Shopify + custom REST + subscriptions; `script053_design.md` §16 describes GrinPay Server as REST + webhooks + multi-merchant. These may be one product under two names. Whichever survives takes the next free number. |
-| 2 | ~~**Accio is unbuilt** and holds `052`~~ **RESOLVED 2026-08-09** | — | Build started (packet S0): `scripts/052_grin_accio.sh` exists, design moved to `script052_design.md`, log in `script052_implementation.md`. The old note here was wrong twice over and is kept only as a record: the upstream is **`mwcwallet.com`**, not `MWC-Wallet-Standalone` (that repo is just a build script), and it is **vendored**, not refactored — there is no `wasm-pack` build because all five WASM blobs ship prebuilt. Hub key `2` stayed on `_slot_notice` until **S7 (2026-08-10)**, which retired the last stub and wired it to `run_sub 052_grin_accio.sh`. |
-| 3 | **051/051x "running" = nginx symlink**, not a live backend | — | See §1.5. Tighten if a "running but broken" report appears. |
-| 4 | **Drop wallet passphrase still passed via `-p`** | — | `059_lib_wallet.sh` reboot-cron + watchdog wrappers build `-p "$(cat …)"`, putting the passphrase in `ps aux` for the listener's whole life. CLAUDE.md flags this file as "still on `-p`, convert when next touched". The renumber touched adjacent lines without converting — a behaviour change out of scope for a rename, but the trigger has arguably fired. |
-| 5 | **Dual cron-tag handling is a one-release measure** | — | The `052_watchdog_*` legacy greps in `059_grin_drop.sh` and `059_lib_wallet.sh` should be removed once no box carries the old tag. |
-| 6 | **Legacy nginx zone-file cleanup** | — | The `rm` of `script052-drop.conf` can be dropped at the same time as #5. |
-| 7 | **Other hubs have disordered keys** | Out of scope | Main menu prints `9` (Connectivity Hub) before `8` (Admin & Maintenance) — verified in `grin-node-toolkit.sh`; plus letter-key disorder in `06`, `03`, `02`, `04`, `051x`. A separate job — fixed slots were adopted for hub `05` only. |
-
-**Closed 2026-08-04:** `.claude/settings.local.json` carried 13 dead permission entries naming
-`052_grin_drop.sh` / `web/052_drop/…`. They were non-functional (referencing files that no longer
-exist, so they could never match) and have been removed. The file is gitignored, so the change
-does not appear in `git status`.
-
----
-
-# PART 4 — MIGRATION RECORD (history)
-
-All phases executed 2026-08-04. Kept for the lessons, not as a work list.
-
-**Line numbers and paths in this section are written as they were *before* that phase ran.** The
-hub header grew ~40 lines in Phase 4 and ~70 more in the fixed-slot change, so every line number
-quoted below has moved.
-
-### Phase 1+2 — Grin Drop `052 → 059` (one atomic change)
-
-10 logical items `git mv`d so history follows — **39 tracked files** in total: `052_grin_drop.sh`,
-five `lib/052_lib_*.sh`, three `docs/reference/script052_*.md` (9 named files), plus the whole
-`web/052_drop/` tree (30 files). Deployed-state migration as in §1.6.
-
-Reference sweep reached **outside** the 05 family — the four easily missed:
-`scripts/089_backup_restore.sh`, `scripts/lib/grin_backup_push.sh`,
-`web/093_transporter/client/agent.js`, `web/07_mining_pool_public/back-end-pool/lib/wallet.js`.
-Local memory was updated too (`project_drop_backup_052.md` → `_059.md`, plus stale
-`052_lib_*.sh` pointers in five other memory files).
-
-### Phase 3 — menu reorder *(superseded within hours — see PART 1)*
-
-Moved Giveaways below Accept Payments and let positional keys renumber: WooCommerce `3 → 2`,
-Drop `2 → 3`, prompt `Select [A / 1-3 / 0]`. **This state no longer exists.** The fixed-slot
-change replaced it the same day with the 1-9 map in §1.2, and re-pointed `2`, `3`, `5` and `9`
-one final time.
-
-### Phase 4 — record the allocation
-
-Header blocks added to `scripts/05_grin_wallet_service.sh`; one-line summary mirrored into
-`.claude/CLAUDE.md`.
-
-One conflict surfaced and was **resolved rather than copied**: the decision table listed
-`054 Payment Pro` / `055 GoblinPay`, but the rule six lines below said an unbuilt product has no
-number. The header now records `054–058 FREE`, names both as *expected* at 054/055 without
-assigning them, and states that `052` is the only reservation — with the reason it survives the
-rule. *(Superseded 2026-08-09: Accio's build started, so `052` is an assignment and the 05 band
-carries no reservation at all. The one live reservation in the toolkit is `092` in the 09 band.)*
-
-### Phase 5 — Fidelius filename
-
-`051_grin_private_web_wallet.sh` → `051_grin_fidelius.sh`, `web/051_wallet/` → `web/051_fidelius/`.
-No deployed dependency (verified, not assumed: the detectors probe config files and nginx symlinks,
-none of which carry the filename).
-
-- The old filename appeared in **two capitalisations** (`Generated` / `generated`) across the
-  header, two nginx heredocs and the `wallet.env` heredoc — a single case-sensitive pass misses one.
-- Two cross-product comments outside the 05 family named the old dir and would have been missed by
-  an 05-scoped sweep: `07_mining_pool_public/back-end-pool/index.js` (trust-proxy convention) and
-  `lib/wallet.js` (ECDH reference implementation).
-- `051x_grin_xp_wallet.sh` keeps its name — it is a variant of 051, not a separate number.
-
-### Phase 6 — final sweep
-
-Caught one directory the reference table missed: **`.claude/commands/`**. The table named
-`.claude/CLAUDE.md` specifically, so the sweep never widened to the sibling command files — and
-those carry live paths that agents **open**, so a stale one fails silently at use time rather than
-reading as out-of-date prose. `/research` pointed at two dead Drop files; `/web` at
-`web/052_drop/app/`.
-
-> **Sweep `.claude/` as a directory, not just `CLAUDE.md`.**
-
-**The two lessons worth keeping:**
-
-1. **A path grep verifies that a reference *resolves*, never that the sentence around it is still
-   true.** A self-review found `/web` labelling `web/051_fidelius/` as **PHP** when it contains
-   zero `.php` files — it is Express + a JS client, and always was. Phase 5 only renamed the
-   directory, so the wrong label predated the plan and survived because the grep matched the
-   *path*, not the language. Fixing the neighbouring heading and leaving that one would have left
-   `/web` reviewing a Node service against `echo $_POST` and `csrf.php` rules. **Read the
-   surrounding claim.**
-
-2. **A prefixed grep misses bare-number prose.** `052_` / `script052` don't match "052 Grin Drop".
-   Use both patterns:
+### Renaming or renumbering a product: the two sweeps
+Run both over `scripts/ docs/ web/ README.md .claude/` after any rename; the second catches prose the first cannot.
 
 ```bash
 # Prefixed forms — catches renamed files and paths
@@ -478,21 +382,63 @@ grep -rn "052" --include=*.sh --include=*.md --include=*.js scripts/ docs/ web/ 
   | grep -v node_modules | grep -vE "[0-9a-f]{8,}"
 ```
 
-### Ground rules that held throughout
+Ground rules that held: `bash -n` every touched `.sh`; nothing under `/opt/grin/` is renamed (Drop's data carries no number); the old and new nginx conf / cron tag cannot coexist on a running server — the only part of a rename that can break one; WooCommerce (053) does not move.
 
-1. `bash -n` every touched `.sh` before finishing. Hard rule, no exceptions.
-2. **Nothing under `/opt/grin/` is renamed** — Drop's data (`drop-main/`, `drop-test/`,
-   `drop-<net>-data/`) carries no number. The DB in particular was never touched.
-3. `052` was not reusable until Phase 2 completed, because three `script052_*.md` docs described
-   Grin Drop.
-4. The nginx conf and cron tag **cannot coexist** in old and new form — the only part of the job
-   that can break a running server.
-5. **WooCommerce (053) does not move.** If you find yourself renaming it, stop and re-read §1.1.
+## Build notes — obstacles & lessons
 
-### What the migration deliberately did not do
+The migration log this section replaces (Phases 1–6 of the Drop `052 → 059` move, 2026-08-04): `git log -- docs/reference/script05_implementation.md`, the commit before the G7 re-org (2026-10-13).
 
-- Did not touch the other hubs' key ordering (PART 3 #7).
-- Did not renumber WooCommerce.
-- Did not migrate any `/opt/grin/` path, systemd unit or database.
-- **Did not add compatibility aliases for reassigned keys.** Single-user toolkit; old keys simply
-  change, and the per-product banner is the safety net for a mis-key.
+### Renames and renumbers
+
+#### The reference sweep must reach outside the product family
+**Symptom:** the Drop move had four references outside the 05 family that an 05-scoped sweep would have missed — `089_backup_restore.sh`, `lib/grin_backup_push.sh`, the 093 `agent.js` and the pool's `lib/wallet.js` — and two cross-product comments (pool `index.js`, `lib/wallet.js`) named the old Fidelius directory and would have been missed by a 05-scoped sweep. **Fix:** sweep the whole repo with an explicit file list, memory files included. **Lesson:** a sweep scoped to the product's own directory misses the products that mention it.
+
+#### `.claude/commands/` carries live paths, and nobody sweeps it
+**Symptom:** `/research` pointed at two dead Drop files and `/web` at `web/052_drop/app/`; a stale command path fails silently at use time instead of reading as out-of-date prose. **Cause:** the reference table named `.claude/CLAUDE.md` specifically, so the sweep never widened to the sibling files. **Lesson:** sweep `.claude/` as a directory.
+
+#### A path grep proves a reference resolves, never that the sentence around it is true
+**Symptom:** `/web` labelled `web/051_fidelius/` as PHP although it contains no `.php` file — Express plus a JS client, always. **Cause:** the rename changed the directory only, and the grep matched the path, not the language. **Lesson:** read the surrounding claim, or the reviewer checks a Node service against `csrf.php` rules.
+
+#### A prefixed grep misses bare-number prose
+`052_` and `script052` do not match "052 Grin Drop". Run both patterns (Runbook). Strip hex-substring noise (`RFC 6052`, commit anchors) from the bare-number one.
+
+#### Old and new deployed state cannot coexist
+**Symptom (avoided):** a duplicate watchdog and a legacy entry that could never be removed. **Cause:** the cron tag and the nginx zone file carry the number. **Fix:** detect-and-remove paths grep for both tags for one release; the old nginx conf is removed before the new one is written. **Lesson:** before renaming, list every deployed identifier that embeds the number; the `@reboot` tag and `/opt/grin/` paths carried none and were left alone.
+
+#### A table contradicted its own rule
+**Symptom:** the allocation table listed `054 Payment Pro` / `055 GoblinPay` six lines above the rule "an unbuilt product has no number". **Fix:** resolved rather than copied — the header records `054–058 FREE` and names both as *expected* without assigning them. **Lesson:** when a table and a rule disagree, fix the one that is wrong; do not copy both.
+
+#### Positional menu keys re-pointed within hours
+Phase 3 let positional keys renumber (WooCommerce `3 → 2`, Drop `2 → 3`) and was replaced the same day by the fixed-slot map, which re-pointed `2`, `3`, `5` and `9` once more. **Lesson:** this is why keys are fixed slots (see *Decisions*): every insertion silently re-points every key below it. No compatibility aliases were added for reassigned keys — a single-user toolkit, with the per-product banner as the mis-key safety net.
+
+### Hub detectors and the CMD wallet
+
+#### Hub rows read "not installed" on every current deploy
+**Symptom:** the Fidelius row was dark on a working install. **Cause:** `_051_installed` / `_051_status` probed PHP-era `config.conf` paths and `web-wallet-{main,test}` symlinks that nothing had written since the Node port made Fidelius one instance serving both networks. **Fix:** probe `config.conf` plus `systemctl is-active grin-fidelius`. **Lesson:** a detector keyed on a path outlives the layout that created it; "running" for 051/051x is still only an nginx symlink (Open items).
+
+#### Re-initialize reported success over the old wallet
+**Symptom:** setup printed "Wallet initialized." with the old wallet untouched, then saved a new passphrase that does not open it. **Cause:** grin-wallet refuses `init -h` when the toml and `wallet_data/` both exist; the success check looked only at the toml, which the old wallet still had; the pass and seed files were deleted before the mode prompt, so cancelling left a wallet with no saved passphrase. **Fix:** every question first, success = `wallet_data/wallet.seed` (grin-wallet writes the toml before the seed, so a failed init leaves a toml), a toml without a seed is a failed earlier init and is cleared without the destroy prompt, mainnet is archived not deleted (details in *What shipped*). **Lesson:** test the artifact written last, not first; collect every answer before touching disk.
+
+#### Restarting on the port alone races the dying listener
+**Symptom:** after a mode switch the restart failed with an LMDB lock error that said nothing about a mode change. **Cause:** the old listener still held the *old* port while the wait loop watched the *new* one, so it read "free" at once and raced the dying process for the wallet's lock. **Fix:** wait on the tmux session, and stop by cwd (the wallet's own PIDs) rather than by port; a foreign port holder is never killed. **Lesson:** a port is not an identity.
+
+#### An unpinned testnet wallet binds the mainnet owner port
+**Cause:** `grin-wallet init` writes the mainnet default into `owner_api_listen_port` as well. **Fix:** both port keys are pinned always; every port guard uses `_cmd_mode_port`, because an `owner_api` wallet never binds 3415 and the old foreign-port guard would have let a real 3420 collision through. `owner_api_include_foreign` is set, never unset (inert under `listen`), so switching modes never undoes a toml edit; mode parsing fails closed to `listen`.
+
+#### Service log: `copytruncate` and `mkdir -p`
+Moving the Fidelius log under `/opt/grin/logs` needs `mkdir -p` before start (systemd `append:` creates the file, not the directory) and `copytruncate` rotation (the fd stays open). Full entry: `script051_implementation.md` · Build notes.
+
+## Open items
+
+
+### Pending
+
+| # | Item | Blocking | Notes |
+|---|------|----------|-------|
+| 1 | **Is "Payment Pro" the same product as "GrinPay Server"?** | Decide before *either* build starts | The 05 hub header describes Payment Pro as Shopify + custom REST + subscriptions; `script053_design.md` §16 describes GrinPay Server as REST + webhooks + multi-merchant. These may be one product under two names. Whichever survives takes the next free number. |
+| 3 | **051/051x "running" = nginx symlink**, not a live backend | — | See §1.5. Tighten if a "running but broken" report appears. |
+| 4 | **Drop wallet passphrase still passed via `-p`** | — | `059_lib_wallet.sh` reboot-cron + watchdog wrappers build `-p "$(cat …)"`, putting the passphrase in `ps aux` for the listener's whole life. CLAUDE.md flags this file as "still on `-p`, convert when next touched". The renumber touched adjacent lines without converting — a behaviour change out of scope for a rename, but the trigger has arguably fired. |
+| 5 | **Dual cron-tag handling is a one-release measure** | — | The `052_watchdog_*` legacy greps in `059_grin_drop.sh` and `059_lib_wallet.sh` should be removed once no box carries the old tag. |
+| 6 | **Legacy nginx zone-file cleanup** | — | The `rm` of `script052-drop.conf` can be dropped at the same time as #5. |
+| 7 | **Other hubs have disordered keys** | Out of scope | Main menu prints `9` (Connectivity Hub) before `8` (Admin & Maintenance) — verified in `grin-node-toolkit.sh`; plus letter-key disorder in `06`, `03`, `02`, `04`, `051x`. A separate job — fixed slots were adopted for hub `05` only. |
+

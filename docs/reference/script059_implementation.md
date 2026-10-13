@@ -1,18 +1,17 @@
-╔══════════════════════════════════════════════════════════════════════════════╗
-║         059_grin_drop.sh  —  REALIZATION  (As Built)                        ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+# Script 059 — Grin Drop: implementation
 
 > **Covers code as of:** 2026-05-04 (the doc's own `Date:`) · **Last verified:** never systematically verified
 > **Product code last changed:** 2026-08-22 — `scripts/059_grin_drop.sh`, `scripts/lib/059_lib_*.sh`, `web/059_drop/`
 
-  Date:     2026-05-04
-  Scope:    Documents the architecture and flow of the code actually shipped
-            in scripts/059_grin_drop.sh + scripts/lib/059_lib_*.sh
-            Compare with: docs/reference/script059_design.md (planning v12)
+> **Scope:** the architecture and flow of the code shipped in `scripts/059_grin_drop.sh` + `scripts/lib/059_lib_*.sh`, as written 2026-05-04, plus the Build notes for the whole product. The plan is `script059_design.md` (planning v12).
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  1. ARCHITECTURE OVERVIEW
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**Status:** built; no VPS acceptance run is recorded in this doc. Later changes (combined listener, DB move, backup) are in *Build notes* and *Open items*.
+
+## What shipped
+
+### Architecture overview
+
+```text
 
   One domain, one nginx vhost, two independent Node.js services:
 
@@ -29,9 +28,11 @@
   The domain is owned once at the top level — both networks share it.
   The homepage is static files served by nginx directly (not proxied).
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  2. FULL STACK DIAGRAM (as-built)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+### Full stack diagram
+
+```text
 
   Internet
      │
@@ -91,9 +92,11 @@
   │  fetch('/mainnet/api/public-stats')        │
   └────────────────────────────────────────────┘
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  3. SCRIPT STRUCTURE (as-built)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+### Script structure
+
+```text
 
   scripts/
     059_grin_drop.sh              entry point (~840 lines)
@@ -175,9 +178,11 @@
       css/home.css
       img/
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  4. FILE / PATH REFERENCE (as-built)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+### File / path reference
+
+```text
 
   Services & ports:
   Service              Port    App dir
@@ -226,9 +231,11 @@
       mainnet/seed-words
       shared/drop_shared.conf
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  5. MENU STRUCTURE (as-built)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+### Menu structure
+
+```text
 
   ── Top-level menu ──────────────────────────────────────────────────────────
 
@@ -359,9 +366,11 @@
   │   Select [1/2/3/0]:                                                     │
   └─────────────────────────────────────────────────────────────────────────┘
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  6. NGINX INJECTION MODEL (sub_filter)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+### Nginx injection model (`sub_filter`)
+
+```text
 
   The same static HTML files serve both networks. nginx injects context:
 
@@ -387,9 +396,11 @@
   JS reads window.DROP_NETWORK to label the network (GRIN / tGRIN).
   CSP is dynamically extended in nginx to allow GA4/Turnstile domains.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  7. WALLET SETUP FLOW (as-built, option 1 → Install New)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+### Wallet setup flow (option 1 → Install New)
+
+```text
 
   Runs sequentially:
     1. _drop_ensure_system_user()   create grin:grin system user if absent
@@ -416,9 +427,11 @@
     - Run `grin-wallet address` to auto-fetch address
     - Save fetched address to grin_drop_<net>.conf
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  8. CONFIG KEYS (grin_drop_<net>.conf — JSON)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+### Config keys (`grin_drop_<net>.conf` — JSON)
+
+```text
 
   Key                       Type    Default (mainnet)
   ────────────────────────  ──────  ────────────────────────────────────────
@@ -460,9 +473,11 @@
   turnstile_site_key    Cloudflare Turnstile public key or ""
   turnstile_secret      Cloudflare Turnstile secret (also in per-net conf)
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  9. DIFFERENCES FROM PLANNING (planning v12)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+### As built vs the design doc (planning v12)
+
+```text
 
   ── A. TOP-LEVEL MENU RESTRUCTURED ──────────────────────────────────────────
 
@@ -657,9 +672,11 @@
             documented with inline comments — no alternative exists since
             grin-wallet accepts passphrase only via -p flag.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  10. WHAT MATCHED THE PLAN (key decisions confirmed)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+### What matched the plan
+
+```text
 
   ✓  Four lib files: 059_lib_wallet / _app / _nginx / _admin
   ✓  Two tmux sessions per network (TOR + ownerapi), named drop-<net>-tor
@@ -679,6 +696,56 @@
   ✓  SHELL=/bin/bash prefixed on all tmux new-session calls for cron safety
   ✓  No shebang in lib files (sourced, not executed)
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  END OF REALIZATION
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+## Runbook
+
+Operator path, from the menus above (top level, then per network):
+
+1. Top-level **1 Domain & nginx** once (one vhost serves both networks; stored in `drop_shared.conf`).
+2. Per network: **1 Setup wallet** → **2 Wallet listening** → **3 Install** → **4 Configure** → **5 Deploy web files** → **6 Start/Stop**. **7 Drop status** shows the state; **L** tails the log.
+3. Updates: **5 Deploy web files** (refreshes server and public files). Backups: top-level **B**, restore **R**.
+4. **After the combined-listener change on an existing install:** re-run Setup wallet → *Switch Grin node* (re-patches the toml with `owner_api_include_foreign = true`) and make sure the conf's `wallet_foreign_api_port` equals the owner port — defaults are written only when a key is MISSING, so an old conf keeps `3415` and the backend hits a dead port.
+5. **After the DB move:** re-save the backup schedule — an installed daily cron wrapper has the old DB path baked in and silently backs up without the database until it is regenerated.
+6. Syntax: `bash -n scripts/059_grin_drop.sh scripts/lib/059_lib_*.sh`.
+
+## Build notes — obstacles & lessons
+
+The full pre-G7 text of this doc (including the dated "differences from planning" log in its original form): `git log -- docs/reference/script059_implementation.md`, the commit before the G7 re-org (2026-10-13). Memory sources: `project_drop_combined_listener`, `project_drop_backup_059`.
+
+### Wallet and listener
+
+#### Two wallet listeners became one combined Owner+Foreign listener
+**Symptom/driver:** two tmux sessions (`listen` on 3415 and `owner_api` on 3420) both carried `-p` on argv. **Fix:** ONE `grin-wallet -p <pass> owner_api` session on the owner port with `owner_api_include_foreign = true`, so Foreign rides the Owner port; the old `listen`/3415 path is retired and `DROP_TMUX_TOR` / `DROP_TOR_PORT` survive only to clean up legacy sessions. `-p` was kept (the solo model, not the pool's locked+ECDH) because Drop is single-box and single-owner and already exposed `-p`; opening the wallet at boot means donations (`receive_tx`) and giveaways (`send`) need no unlock orchestration. **Lesson:** the conf default that overrides `config.js` (`wallet_foreign_api_port`) must change in the same patch as the port, and migration needs a runbook step (see Runbook 4).
+
+#### The combined listener has NO Tor onion
+**Symptom:** the donation tab "TOR Direct" and tab 3's "delivered automatically via TOR" hint are dead paths as shipped. **Cause:** read against grin-wallet v5.4.1 (`controller/src/controller.rs`), only `foreign_listener` (the `listen` command) calls `init_tor_listener`; `owner_listener` never does whatever `tor.use_tor_listener` says, and `command::owner_api` passes the tor config for OUTBOUND sends only. An earlier note here said the opposite and was wrong. **Fix:** open — mint an onion for the owner port via torrc (as Script 04 does for the node) or drop the tab; tabs 2–3 (paste a slatepack over HTTPS) and the giveaway are unaffected. **Lesson:** a claim about what a binary does belongs next to the source line that proves it.
+
+#### Passphrase exposure on argv
+**Symptom:** during an interactive start the passphrase is a literal `-p` in the tmux command, visible in `ps aux` for the life of the wallet process, while the `@reboot` and watchdog wrappers read it from the pass file. **Cause:** the code predates the stdin finding (grin-wallet reads a piped passphrase via rpassword; there is no env input). **Fix:** open — convert the long-running listener to stdin when next touched (CLAUDE.md, *Passphrase input*). **Lesson:** "the only option is `-p`" was a belief, not a measurement.
+
+#### The local-node secret was missing from the wallet toml
+**Symptom:** a wallet on the local node got 403 from the node and "Cannot parse response". **Cause:** `node_api_secret_path` was not patched. **Fix:** `_drop_write_toml()` reads `grin_instances_location.conf` (written by Script 01) to find the node's `.foreign_api_secret` and patches it. **Lesson:** a wallet is a node *client*; its toml needs the node's foreign secret, not its own.
+
+### Data and backup
+
+#### A wallet reinstall wiped claim history
+**Symptom (avoided):** `_drop_wallet_reinstall` does `rm -rf "$DROP_WALLET_DIR"`, and the SQLite DB lived inside it — claims, cooldowns and donations went with it. **Fix:** the DB moved to a separate `/opt/grin/drop-<net>-data/` (`DROP_DATA_DIR`); `_drop_ensure_data_dir` creates and owns it and migrates a legacy in-dir DB (plus `-wal`/`-journal`/`-shm`) once, from `drop_install`, the admin deploy block and the top of `_drop_wallet_reinstall`; `drop_nuke` removes both `-data` dirs. **Lesson:** never keep durable state in a directory a routine operation deletes.
+
+#### Backing up a live SQLite file
+**Symptom (avoided):** a plain tar of the live DB can be torn. **Fix:** a two-phase tar — phase 1 `tar -cf` the live dirs with `--exclude='*.db'` (and the redeployable `server`, `public_html`, `node_modules`, `*.log`); phase 2 `tar -rf` appends a SQLite online-backup snapshot staged under its absolute path so restore's `tar -xzf -C /` puts it back exactly. The separate append is why the global exclude does not strip the snapshot. Verified: excludes fire, the snapshot is the only DB in the archive, round-trip clean. **Lesson:** snapshot a live DB with the engine's own backup, not with a file copy.
+
+#### SQLite driver: `better-sqlite3` → `node:sqlite`
+Node 24's built-in driver removed the native-compile step (`node-gyp`, build tools, glibc version trouble) from every install. Watch the `u64` limit in the built-in driver (see the pool's Build notes). Node 24 prints an ExperimentalWarning — cosmetic.
+
+### Edge
+
+#### Rate limits that look protective but are not
+Findings F1–F4 in the audit: Turnstile ships disabled and fails OPEN, the per-address cooldown is free to rotate, `CF-Connecting-IP` is trusted without a Cloudflare check, and `limit_req` keyed on `$binary_remote_addr` sees a shared edge IP behind Cloudflare — so the global daily/hourly cap is the only real loss ceiling. **Lesson:** state the true ceiling in the setup flow; a limiter that can be defeated for free is documentation, not a control. Status: open (see *Open items*).
+
+## Open items
+
+- **No VPS acceptance run is recorded here:** this doc was written against the code of that date. Known supersessions: one combined `owner_api` session (no TOR session), DB in `drop-<net>-data/`, backup in `059_lib_backup.sh` (`dbk_*`, key **B**). Sections 1–5 and 10 may still describe the earlier two-session layout; compare with the code before relying on them.
+- Donation "TOR Direct" path has no onion (Build notes above).
+- Passphrase still on argv for the long-running listener (Build notes above).
+- Audit F1–F7 are open (`script059_security_audit.md`): Turnstile fail-open and default-off, spoofable client IP off Cloudflare, cosmetic per-address cooldown, no `real_ip` mapping, unescaped `drop_name`/`maintenance_message`, address-activity oracle on `/api/status`, hot-wallet passphrase on disk (accepted).

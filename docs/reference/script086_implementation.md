@@ -1,10 +1,10 @@
 # Script 086 — Diagnostics & Support Bundle (Implementation)
 
 > **Covers code as of:** 2026-10-03 — §8 only, written against the uncommitted working tree that
-> holds the node event recorder (Parts 1–5 and the R1 fixes). §8.15–§8.19 were written by the
+> holds the node event recorder (the recorder and its post-build fixes). §8.15–§8.19 were written by the
 > sessions that built each part and moved here unchanged from `script086_design.md` on 2026-10-03;
 > the file map, §8.20 and §8.21 were read against the code on that day ·
-> **Last verified:** 2026-10-03, PARTIAL — §8 only. The R1 review (§8.19) checked the read-only gate
+> **Last verified:** 2026-10-03, PARTIAL — §8 only. The post-build review (§8.19) checked the read-only gate
 > by grep, the transitions and the debounce with a local harness over the pure functions, and the
 > launch command through stubbed `su`/`tmux`/`grin`. The docs-fold session re-read the file map,
 > §8.20 and §8.21 against the libs (function names, paths, unit and logrotate text, the order of
@@ -17,6 +17,8 @@
 > `scripts/03_grin_share_chain_data.sh`, `scripts/07_grin_mining_solo.sh`, `scripts/081_host_monitor_port.sh`,
 > `scripts/08del_clean_all_grin_things.sh`, `scripts/089_backup_restore.sh` (uncommitted)
 
+**Status:** built, reviewed locally, **never run on a VPS** (acceptance and open items: §8.22).
+
 The design is [`script086_design.md`](script086_design.md). Keys 1–6 (health check, support bundle,
 API performance, log triage, consumer load test, saved reports) have no separate as-built record:
 their design doc §1–7 was written with the code on 2026-09-25 and doubles as one. This file holds
@@ -26,9 +28,9 @@ the as-built record of the **node event recorder** (key 7).
 design; §8.15 onward are here. Code comments that say "086 §8.15" or "086 §8.18" therefore resolve
 to this file, and the design keeps a pointer under the same numbers.
 
----
+## What shipped
 
-## 8. Node event recorder — as built (2026-10-03, NOT VPS-tested)
+### 8. Node event recorder — as built
 
 Every part below was built and reviewed locally. **None of it has run on a VPS.** Acceptance
 (§8.22) is testnet first, then mainnet.
@@ -67,9 +69,9 @@ Every part below was built and reviewed locally. **None of it has run on a VPS.*
   removes those, asking about evidence first.
 - Schemas are as in design §8.8, with the extra flat `status.json` keys listed in §8.15 and §8.16.
 
-### 8.15 Part 2 as-built deltas (2026-10-03, never run)
+### 8.15 Recorder core as built
 
-Part 2 built the recorder core in `scripts/lib/grin_node_events.sh`: `gne_decide` (§8.4 as one pure
+The recorder core lives in `scripts/lib/grin_node_events.sh`: `gne_decide` (§8.4 as one pure
 function), the per-net check, the ledger and `status.json` writers, the config loader, the worker
 (`check` / `capture` stub / `show`), the timer and the logrotate stanza. Where it differs from the
 sections above:
@@ -90,7 +92,7 @@ sections above:
   no `testnet/` dir.
 - **`failed_start` subs** are `timeout`, `exited_rc=<n>` or `exited`. The sub charset has no space,
   so this is not the `exited rc=<n>` of §8.6.
-- **An outage that spans a `gap` keeps wall-clock `duration_s`.** Part 5's availability maths must
+- **An outage that spans a `gap` keeps wall-clock `duration_s`.** the availability maths must
   subtract `gap` intervals that overlap an outage.
 - **`status.json` is one line**, with extra keys beside §8.8's: `sub_state`, `last_pid`,
   `grin_version_key`, `start_ref`, `last_outage_end`, flat copies of the open outage
@@ -99,13 +101,13 @@ sections above:
   in the same second). `open_outage` is written last. The worker parses only the flat keys.
 - **The worker sources `/opt/grin/lib/grin_node_control.sh` and `grin_node_events.sh`,** both copied
   there by `gne_install`. Re-running the install is how a box picks up a toolkit update.
-  `gne_install` creates `/opt/grin/node-events/` 0755, which turns on Part 1's markers.
-- **`capture` is a stub** that exits 0, so the Part 3 watchdog hook can never fail a restart.
-  (Part 3 filled it in; see §8.16.)
+  `gne_install` creates `/opt/grin/node-events/` 0755, which turns on the planned-stop markers.
+- **`capture` is a stub** that exits 0, so the watchdog hook can never fail a restart.
+  (Filled in; see §8.16.)
 
-### 8.16 Part 3 as-built deltas (2026-10-03, never run)
+### 8.16 Evidence capture, classification and the watchdog hook
 
-Part 3 built evidence capture, classification and the watchdog hook. The signature table
+Evidence capture, classification and the watchdog hook. The signature table
 (`DG_SIG_*`) moved from `086_lib_diag.sh` to `lib/grin_log_signatures.sh`. Its four arrays
 are byte-identical (`declare -p` was compared before and after), so 086's output does not
 change. The recorder uses that table only for the "signature counts" section of
@@ -163,7 +165,7 @@ differs from §8.6 and §8.9:
   `status.json` key by key (`_gne_jset`, with the same first-match rule as `_gne_jget`). It
   never rebuilds the file.
 - **Bundle files** are as in §8.9, plus three:
-  - `match.txt`: the one matched line, for Part 4's alert body. Nothing else may leave the
+  - `match.txt`: the one matched line, for the alert body. Nothing else may leave the
     bundle.
   - `start.txt`: the start window.
   - `notable.txt`: the last 2000 window lines that a class rule keys on, from the whole window.
@@ -176,11 +178,11 @@ differs from §8.6 and §8.9:
   protected ones (those named by a `corrupted` ledger line). It never deletes the bundle just
   written, a symlink, or a dir whose name is not a bundle name.
 - **`capture <net> manual [reason]`** writes a bundle on demand, with no ledger line and no
-  state change. It is meant for Part 5's menu.
+  state change. It is meant for the operator menu.
 - **The bundle dir is claimed with a plain `mkdir`, then `chmod`.** With `mkdir -m 700` in the
   claim loop, a chmod failure read as "name taken", and the harness got nine empty dirs and no
   bundle.
-- **A Part 2 fix:** while a strike is pending on a vanished pid, `node_started_at` keeps the
+- **Pending-strike start time:** while a strike is pending on a vanished pid, `node_started_at` keeps the
   old start time, the same way `last_pid` does. Without that, a `.grin_last_exit` with no
   `.grin_last_start` beside it was judged stale at the tipping check, and a crash read as
   `exit_unknown`.
@@ -189,9 +191,9 @@ differs from §8.6 and §8.9:
   `gnk_watchdog_install` regenerates the worker. The recorder's own new files reach a box only
   through a re-install (`gne_install` now also copies `grin_log_signatures.sh`).
 
-### 8.17 Part 4 as-built deltas (2026-10-03, never run)
+### 8.17 Off-box alerts
 
-Part 4 built off-box alerts. Delivery is in `lib/grin_alert_send.sh` (`gas_*`); the rules and the
+Off-box alerts: delivery is in `lib/grin_alert_send.sh` (`gas_*`); the rules and the
 debounce are in `lib/grin_node_events.sh`. Where the build differs from §8.10, or adds to it:
 
 - **082 inlines the lib; it does not source it.** `_aw_install_worker` writes the worker as
@@ -212,7 +214,7 @@ debounce are in `lib/grin_node_events.sh`. Where the build differs from §8.10, 
     `note` logger.
 - **`lib/grin_alerts.sh` (Script 03) is NOT converged.** It is an older, separate copy of the
   same channel code, with its own title and `from:` line, and it reads 082's `alert.conf`
-  directly. Part 4 did not touch it. There are now two delivery implementations, not three.
+  directly. It is untouched. There are now two delivery implementations, not three.
 - **Claim, then send, after the lock.** `gne_check_net` decides each alert and writes its key
   into `status.json.alerted_for` under the lock. `gne_worker_check` sends after releasing it.
   - A slow channel therefore never makes the watchdog's capture (15 s lock wait) give up on
@@ -254,7 +256,7 @@ debounce are in `lib/grin_node_events.sh`. Where the build differs from §8.10, 
   sendmail/mail/msmtp/nak/nostril/websocat. Each run gets a 20 s deadline. A channel whose turn
   comes later is skipped and logged.
 - **Secrets.**
-  - The ntfy topic URL (since R1, §8.19) and the Telegram URL, which embeds the bot token,
+  - The ntfy topic URL (since the post-build review, §8.19) and the Telegram URL, which embeds the bot token,
     reach curl on stdin (`-K -`), never argv. 082 keeps passing both in argv, unchanged.
   - **The Nostr key is still in argv** for the length of one send, in both products, because
     `nak` and `nostril` take it only as `--sec`.
@@ -291,15 +293,15 @@ debounce are in `lib/grin_node_events.sh`. Where the build differs from §8.10, 
   - It reports the channels now active.
 - **New pieces.**
   - Worker subcommand `test-alert`.
-  - `gne_conf_set`, which Part 5's alert settings will reuse.
+  - `gne_conf_set`, which the alert settings menu reuses.
   - `gne_status` prints the configured channel names.
   - `gne_install` copies `grin_alert_send.sh` to `/opt/grin/lib/`; `gne_remove` removes that
     copy, because only the recorder runs from it.
   - Channels set without the lib, or only half of a pair, produce a once-per-conf-edit warning.
 
-### 8.18 Part 5 as-built deltas (2026-10-03, never run)
+### 8.18 Operator screens and lifecycle
 
-Part 5 built the operator side. 086 has a new key `7`, **Node event recorder**, under a new
+The operator side: 086 has a new key `7`, **Node event recorder**, under a new
 "Over time" group. Its read side is `lib/086_lib_recorder.sh` (`dgr_*`); the screens are
 `rec_*` in `086_grin_diagnostics.sh`. Where the build differs from §8.12, or adds to it:
 
@@ -348,7 +350,7 @@ Part 5 built the operator side. 086 has a new key `7`, **Node event recorder**, 
   pair. New lib functions: `gne_set_channel`, `gne_set_num`, `gne_chan_valid`,
   `gne_num_specs`, `gne_chan_keys`.
 - **Install offers the watchdog regeneration.** When the installed sync watchdog has no
-  `grin-node-events capture` line (it predates Part 3), `I` offers, default yes, to rerun
+  `grin-node-events capture` line (it predates evidence capture), `I` offers, default yes, to rerun
   `gnk_watchdog_install`. That keeps the watchdog's config and state. Without it, a watchdog
   restart destroys the pane before anything saves it.
 - **Support bundle:** new file `10_recorder.txt`. It holds the install state, and per net the
@@ -363,14 +365,14 @@ Part 5 built the operator side. 086 has a new key `7`, **Node event recorder**, 
   - If bundles exist, it asks separately whether to delete them. **No** moves `evidence/`, the
     ledger files and `status.json` to `/root/grin-node-events-saved_<UTC>/` (0700).
   - If the move fails, the state dir is kept and the screen says to decline STEP 4.
-- **089 backup: yes, ledger only** (Part 5's decision):
+- **089 backup: yes, ledger only** (decision):
   - **What goes in:** `ledger.jsonl` and its logrotate siblings, with no prompt. They are
     small, hold no secrets or IPs, and cannot be rebuilt.
   - **What stays out:** `status.json` (per-boot state) and `evidence/` (up to 500 MB of raw
     logs; export from 086 instead).
   - **Restore** writes a net's ledger only where that net has none. A live ledger is newer
     than any archive.
-- **Fix in Part 4 text:** `gne_import_alert_channels`'s error pointed at "hub 08 → 7", which is
+- **Alert-import error text:** `gne_import_alert_channels`'s error pointed at "hub 08 → 7", which is
   Disk Cleanup. Provider Access Watch is key `2`.
 - **Tested locally:** a scratchpad harness that sources only the libs, against a synthetic
   13-line ledger built with the recorder's own `_gne_ledger_json`. It checked:
@@ -386,71 +388,7 @@ Part 5 built the operator side. 086 has a new key `7`, **Node event recorder**, 
 
   Not tested: mawk itself (not on the dev box), and anything that installs, removes or
   captures.
-
-### 8.19 R1 review of Parts 1–5 (2026-10-03, never run)
-
-A cold review of Parts 1–5 against §8.2–§8.12. Its checks were: §8.2's read-only gate (by grep);
-the launch command, expanded through stubbed `su`, `tmux` and `grin`; and `gne_decide` and
-`_gne_alerts_decide`, driven by a local harness. **Fixed:**
-
-- **A slow toolkit stop counted as a `hung` outage.** The marker for the live pid was read only
-  once the pid was gone. Meanwhile, two failed checks opened `down hung`, and a 3-minute exit
-  also paged DOWN. grin may still be exiting long after SIGTERM: Script 01 waits up to 300 s.
-  - *Fix:* while a valid marker (§8.5) names the live, unchanged pid, a failed check is not a
-    strike.
-  - *Bound:* `MARKER_TTL_MIN`. A kill that never lands goes `stale_marker`, and the strikes
-    resume.
-  - A marker with `pid=0`, a different pid or `by=grin-node-sync-watchdog` still strikes.
-  - Whether grin's API stops answering during shutdown at all is unknown. Part 10 step 2 shows
-    it.
-- **`no_secret` turned a stopped node into a false outage.** A rebuild on a box with no vault
-  entry wipes the secret with the dir. That moved `stopped` to `unknown` but kept the old
-  `last_pid`. The rebuilt node's start then struck as "pid changed" and opened an outage
-  (`unexplained_stop`).
-  - *Fix:* with no pid, `no_secret` is judged as `refused`, since there is nothing to
-    authenticate against. A stopped node stays stopped. A vanished node still strikes. With a
-    live pid it is `unknown`, as before.
-- **The ntfy topic URL was in curl's argv.** 086's menu reads it hidden because the URL is the
-  credential. Under `GAS_HIDE_SECRETS` it now goes on stdin like Telegram's. 082 does not set
-  that knob, so its argv is unchanged (diffed against a stubbed curl).
-
-**Open (not fixed, needs a decision or a VPS):**
-
-- **The check-path capture can lose its own `down` line** (unconfirmed).
-  - The check captures evidence BEFORE it writes the ledger and status (§8.16). The oneshot
-    unit has `TimeoutStartSec=120`.
-  - If the box thrashes and the capture takes longer, for example zcat of the rotated logs on
-    a 4 GB archive box, systemd kills the check. Neither the `down` line nor `status.json` is
-    written.
-  - The next check sees the same strikes, opens the outage again and captures again.
-  - Options: a larger timeout, a time budget on `_gne_log_stream`, or the capture path's
-    order (write first, then `reclass`).
-- **A watchdog restart that the capture did not record reads as a planned `start`.**
-  - This happens when the capture gives up on a lock busy for over 15 s (two 8 s probe
-    timeouts plus the check-path capture), or when the watchdog predates the hook.
-  - In state `up` the only trace is then the `by=grin-node-sync-watchdog` marker. Rule 7
-    turns that into `start`, and nothing is counted.
-  - Mirroring §8.16 (open an outage from `up`) needs a class choice: the watchdog's reason is
-    lost by then.
-- **A marker whose kill failed explains too much for one TTL.** For up to `MARKER_TTL_MIN`, a
-  real crash of that pid reads as a planned `stop`, and a hang gets no strikes. This is accepted
-  as the price of the first fix.
-
-**Checked, nothing found:**
-
-- The read-only gate: the worker's only deletes are inside `$GNE_EVENTS_DIR`, its temp dirs and
-  `recorder.conf`. It makes no signal, launch, `systemctl` or node-dir write.
-- The launcher in both branches and the cron line (both readings of `\%`): `$?` reaches the
-  pane, `.grin_last_exit` gets `rc=101`, and `read` stays last.
-- Errexit endings and menu `||`-guards.
-- The heredocs: the worker body and the watchdog's hook are quoted.
-- 082's delivery argv.
-- Debounce: a 3 h outage with a watchdog restart every 20 min sends one DOWN, one RECOVERY and
-  three LOOP alerts, 40–60 min apart.
-- Rotation: rename + `create`.
-- Pruning: oldest first, protected bundles last, never the bundle just written.
-
-### 8.20 Launch-contract additions (Part 1)
+### 8.20 Launch-contract additions
 
 All in `scripts/lib/grin_node_control.sh`. They are inert until the recorder is installed:
 the marker writer returns at once while `/opt/grin/node-events/` is absent, and the pane stamps
@@ -507,12 +445,98 @@ the run never answered `get_status`, §8.16).
 | 6 | kernel hung-task line for one of our threads | `kernel.txt` | class `hung` | `hung` / `io_stall` | PROVISIONAL |
 | 7 | `compact` | `notable.txt` | class `hung`, archive node | `hung` / `compaction` (never suppressed) | PROVISIONAL |
 | 8 | `shutdown in progress, please wait` + `shutdown complete` | `notable.txt`, pane | class `unexplained_stop` | `unexplained_stop` / `clean_shutdown` | SEEN |
+## Runbook
+
+- **Install or refresh the recorder:** 086 key 7 → `I` (re-running it is how a box picks up a toolkit update; it offers to regenerate the sync watchdog when that has no `capture` line). Script 01 offers it in its wizard and installs it in Super Auto.
+- **Look at what happened:** key 7 → `1` Timeline, `2` Availability, `3` Show evidence, `4` Export (masked tarball for an upstream issue), `C` Capture evidence now, `5` Alert settings, `S` Status, `R` Remove.
+- **Remove:** key 7 → `R`, or 08del STEP 3c (asks about the alert tokens in `conf/node-events/` and, separately, the evidence bundles).
+- **What reaches an installed box, and when:** the table in §8.20.
+- **Acceptance procedure (testnet first, then mainnet):** §8.22.
+
+## Build notes — obstacles & lessons
+
+Section numbers §8.15–§8.22 are permanent IDs (code comments cite "086 §8.15" and the pool doc cites §8.22). The full pre-G7 text of the dated build records, including the post-build review's "checked, nothing found" list: `git log -- docs/reference/script086_implementation.md`, the commit before the G7 re-org (2026-10-13). Everything below was found by local harnesses and cold review; **none of it has run on a VPS.**
+
+### 8.19 Post-build review findings (fixed)
+
+#### A slow toolkit stop counted as a `hung` outage
+**Symptom:** a 3-minute exit after a planned stop opened `down hung` and paged DOWN. **Cause:** the planned-stop marker for the live pid was read only once the pid had gone; meanwhile two failed checks were two strikes. grin may keep exiting long after SIGTERM (Script 01 waits up to 300 s). **Fix:** while a valid marker (§8.5) names the live, unchanged pid, a failed check is not a strike; `MARKER_TTL_MIN` bounds it, after which a kill that never landed goes `stale_marker` and strikes resume. A marker with `pid=0`, a different pid or `by=grin-node-sync-watchdog` still strikes. **Lesson:** read the marker while the process is still alive, and bound every "expected" window.
+
+#### `no_secret` turned a stopped node into a false outage
+**Symptom:** a rebuild on a box with no vault entry produced `unexplained_stop`. **Cause:** the rebuild wiped the secret with the dir, which moved `stopped` to `unknown` but kept the old `last_pid`, so the rebuilt node's start struck as "pid changed". **Fix:** with no pid, `no_secret` is judged `refused` (nothing to authenticate against), so a stopped node stays stopped; a vanished node still strikes; with a live pid it stays `unknown`. **Lesson:** a state change must clear the identity fields that only made sense in the old state.
+
+#### The ntfy topic URL was in curl's argv
+**Symptom:** the menu reads the URL hidden because the URL is the credential, but delivery put it in `ps`. **Fix:** under `GAS_HIDE_SECRETS` it goes on stdin (`-K -`) like Telegram's; 082 does not set that knob, so its argv is unchanged (diffed against a stubbed curl). The Nostr key still reaches `nak`/`nostril` through argv for one send, because they take it only as `--sec`.
+
+### Classification and capture
+
+#### The watchdog restarts faster than the recorder can see
+**Symptom (avoided):** a restart loop the watchdog catches early would read as 100 % available. **Cause:** the watchdog acts on one failed probe every 5 min; the recorder needs two 30 s strikes, so the watchdog can restart a node the recorder still calls `up`, and rule 7 would count that restart as planned. **Fix:** when the recorder is `up`, `capture … watchdog_restart` writes a `down` line and then `restart_by_watchdog`; in `starting`, `stopped`, `auth_fail` and `unknown` it opens nothing. **Lesson:** two observers with different cadences must not each be the source of truth for "planned".
+
+#### Capture writes the event before the evidence
+**Symptom (avoided):** a timeout inside the watchdog's 20 s budget losing the event itself. **Fix:** the capture path writes ledger and status first and the bundle after, so a timeout can lose evidence but never the event; a class refined by the bundle arrives as a separate `reclass` line (the check path, which is not under that budget, captures first and renames the bundle dir to the refined class). The bundle dir is claimed with a plain `mkdir` then `chmod` — with `mkdir -m 700` in the claim loop a chmod failure read as "name taken" and a harness produced nine empty dirs and no bundle.
+
+#### OOM and hung-task lines must name OUR process
+**Symptom (avoided):** a kernel OOM line for the other network's `grin` refining this node to `killed`. **Cause:** both networks run a process named `grin`, and grin names its threads, so the comm of a hung task is usually not `grin`. **Fix:** an OOM line refines to `killed` only when its pid equals the recorder's last pid (a `failed_start` killed by the OOM killer becomes `killed`/`oom_start`, a panic during a start stays `failed_start`/`panic` — the first is the host, the second is grin); hung-task lines count when the comm is `grin` or the tid is still a task of the live grin pid. **Lesson:** match on pid, never on the process name.
+
+#### The confirmed `verify failed` line is DEBUG level
+With grin's default `file_log_level=Info` the PMMR line is not in the log at all — only the final error is, and its text is still unknown (the missing part of the upstream issue draft). `summary.txt` says so whenever the level is not Debug or Trace.
+
+#### A pending strike on a vanished pid lost its start time
+**Symptom:** a crash read as `exit_unknown`. **Cause:** `.grin_last_exit` with no `.grin_last_start` beside it was judged stale at the tipping check once `node_started_at` had moved. **Fix:** while a strike is pending on a vanished pid, `node_started_at` keeps the old start time, the same way `last_pid` does.
+
+### Alerts
+
+#### Send after releasing the lock, claim before it
+`gne_check_net` decides each alert and writes its key into `status.json.alerted_for` under the lock; `gne_worker_check` sends after releasing it. A slow channel therefore never makes the watchdog's capture (15 s lock wait) give up on its evidence. The guarantee is at-most-once: a send that dies half-way is lost, not repeated every 30 s. Keys are claimed even when every channel fails ("sent once"), but nothing is claimed while no channel is configured, so an operator who adds a channel mid-outage still gets the DOWN. `alerted_for` keeps the last 20 keys but never drops a key of the open outage — a day-long restart loop adds an hourly `loop:` key and evicting the `down:` key would re-send it. **Lesson:** decide under the lock, perform side effects outside it.
+
+#### Importing 082's alert conf without evaluating it
+`gne_import_alert_channels` reads 082's `alert.conf` line by line and decodes `printf %q` without `eval`; a `$'…'` value or an unescaped metacharacter is refused; it copies only keys 082 has set and writes through the pure-bash `gne_conf_set` (temp + `mv`, 0600), so a value never reaches `sed`'s argv. **Lesson:** a config file written by another product is untrusted input.
+
+#### 082 inlines the delivery lib instead of sourcing it
+A tamper alert must not depend on anything else on the box still being intact, so `_aw_install_worker` writes the worker as quoted heredoc + `cat lib/grin_alert_send.sh` + a second quoted heredoc into a temp file and moves it into place; `/opt/grin/access-watch.sh` stays ONE self-contained file. A failed refresh (for example a missing lib) now keeps the installed worker and warns — before, the half-written worker replaced it and the error exited the menu. Old and new workers were run against stubbed `curl`/`sendmail`/`mail`/`msmtp`/`nak`/`nostril`/`websocat` in nine channel combinations with identical argv, stdin and log lines. Script 03's older `lib/grin_alerts.sh` is not converged (Open items).
+
+### Operator side
+
+#### Availability is a sweep, not a state walk
+Each second of a window goes into exactly one bucket, precedence unobserved > down > state; availability = up ÷ (up + down), floored so a real outage never shows 100.00 %. Three cases the sweep had to learn: a `boot` that closes an outage leaves the reboot window unobserved (while a `boot` after an `up` over-counts a few minutes per reboot); a `recorder_start` line makes the span since the previous line unobserved and ends any outage still open; a ledger with no `status.json` beside it ends at its own last line, not at "now". **Lesson:** make every instant belong to exactly one bucket, then state the precedence.
+
+#### Export is public, so it masks more than the support bundle
+An upstream issue is public and a peer's /24 is still a fingerprint there, so export masks IPv4 /24 and IPv6 /48 fully after `dg_maskip`, replaces the box's own hostname (5+ characters, not a common word), and swaps bundle names out around `dg_redact` (24+ character tokens would be eaten). The tarball's `ledger_last200.jsonl` and `status.json` are IP-masked but not redacted, because ledger ids are 20+ characters and are the point of those files.
+
+#### Fixed `hub 08 → 7` pointer
+`gne_import_alert_channels`' error pointed at "hub 08 → 7", which is Disk Cleanup; Provider Access Watch is key `2`.
+
+## Open items
+
+### 8.19 Open findings (need a decision or a VPS)
+
+
+- **The check-path capture can lose its own `down` line** (unconfirmed).
+  - The check captures evidence BEFORE it writes the ledger and status (§8.16). The oneshot
+    unit has `TimeoutStartSec=120`.
+  - If the box thrashes and the capture takes longer, for example zcat of the rotated logs on
+    a 4 GB archive box, systemd kills the check. Neither the `down` line nor `status.json` is
+    written.
+  - The next check sees the same strikes, opens the outage again and captures again.
+  - Options: a larger timeout, a time budget on `_gne_log_stream`, or the capture path's
+    order (write first, then `reclass`).
+- **A watchdog restart that the capture did not record reads as a planned `start`.**
+  - This happens when the capture gives up on a lock busy for over 15 s (two 8 s probe
+    timeouts plus the check-path capture), or when the watchdog predates the hook.
+  - In state `up` the only trace is then the `by=grin-node-sync-watchdog` marker. Rule 7
+    turns that into `start`, and nothing is counted.
+  - Mirroring §8.16 (open an outage from `up`) needs a class choice: the watchdog's reason is
+    lost by then.
+- **A marker whose kill failed explains too much for one TTL.** For up to `MARKER_TTL_MIN`, a
+  real crash of that pid reads as a planned `stop`, and a hang gets no strikes. This is accepted
+  as the price of the first fix.
 
 ### 8.22 Status and acceptance
 
-- **Built:** Parts 1–5 and the R1 fixes (this file), and the pool side (Parts 6–8 and the R2 fixes:
+- **Built:** the recorder (this file) and the pool side (
   `script07_implementation.md` §10.15). **Never run on a VPS.**
-- **Acceptance (Part 10, operator):** on TESTNET first — install from key 7 and see the timer fire
+- **Acceptance (operator):** on TESTNET first — install from key 7 and see the timer fire
   every 30 s; a toolkit stop + start gives one planned event and no outage; `kill -9` gives
   `killed` with a bundle, then `restart_by_watchdog` and `up` with a duration; `kill -STOP` for
   90 s gives `hung`; Ctrl+C in `gtmux` gives `unexplained_stop`; a reboot gives `boot` and no
@@ -520,7 +544,7 @@ the run never answered `get_status`, §8.16).
   refined to `corrupted` plus a HIGH alert; `test-alert` reaches every channel; a 10-minute outage
   sends exactly one DOWN and one RECOVERY; 082 still alerts as before. Then mainnet, left running
   a week.
-- **Open from R1** (§8.19): the check-path capture can lose its own `down` line under
+- **Open from the post-build review** (§8.19): the check-path capture can lose its own `down` line under
   `TimeoutStartSec=120` on a thrashing box; a watchdog restart whose capture gave up on the lock
   reads as a planned `start`; a marker whose kill failed explains too much for one TTL.
 - **Deferred** (design §8.14): the watchdog backing off on `corrupted`; a fleet view in 081; the

@@ -1,16 +1,14 @@
-GrinScan (06b) — Implementation Gotchas & Solutions
-=====================================================
+# Script 06b — GrinScan: implementation
 
 > **Covers code as of:** 2026-05-10 · **Last verified:** never systematically verified
 > **Product code last changed:** 2026-07-27 — `scripts/lib/06b_grinscan.sh`, `web/06b_grinscan/`
+> **Scope:** the contracts the running code holds, the runtime behaviour by node mode, and the obstacles hit while building it. The plan is `script06b_design.md`.
 
-Compiled from real bugs and surprises hit during development.
-Reference this before touching server.js, info.js, app.js, or the CSS theme system.
+**Status:** built; no VPS acceptance run is recorded in this doc. Reference this before touching `server.js`, `info.js`, `app.js` or the CSS theme system.
 
+## What shipped
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-1. HASHRATE CALCULATION — WRONG FORMULA GIVES 366× TOO HIGH
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+### Hashrate calculation — the formula that is 366× too high if wrong
 
 WRONG (common mistake):
   hashrate = difficulty / 60
@@ -29,11 +27,7 @@ In server.js:
 
 Display units: G/s (< 1000), kG/s (>= 1000), MG/s (>= 1000000)
 Matches: world.grin.money, 06_collector.py, aglkm/grin-explorer
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-2. GENESIS / OLD BLOCK LOOKUP — CACHE MISS ON PRUNED NODE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+### Block lookup order — cache miss on a pruned node
 
 Block lookup order in /api/block/:id:
   1. Check SQLite cache  →  fast, works for recent blocks
@@ -50,11 +44,7 @@ If a user reports "genesis block not loading":
 
 The string hint: 'cache_miss' is checked by the frontend (app.js showCacheMiss()).
 Do NOT rename it without updating the frontend handler.
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-3. get_tip RETURNS "Method not found" — USE get_status INSTEAD
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+### Node API method split — `get_status`, not `get_tip`, on the Owner API
 
 On the Node OWNER API (/v2/owner), get_tip does not exist in practice.
 It returns {"error": {"code": -32601, "message": "Method not found"}}.
@@ -69,11 +59,7 @@ get_tip DOES exist on the Foreign API (/v2/foreign) — that is a different endp
 Node Owner vs Foreign API method split:
   Owner API:   get_status, get_connected_peers, validate_chain, compact_chain
   Foreign API: get_block, get_header, get_outputs, get_pool_size, push_transaction
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-4. RESULT UNWRAPPING — Grin node wraps results in {"Ok": T}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+### Result unwrapping — the node wraps results in `{"Ok": T}`
 
 The Grin node serialises Rust Result<T, E> inside the JSON-RPC result field:
   Success: { "result": { "Ok": <actual data> } }
@@ -84,11 +70,7 @@ RIGHT:  const data = unwrapResult(response.result);  // strips the Ok/Err wrappe
 
 GrinScan's ownerApi() and foreignApi() helpers call unwrapResult() automatically.
 Always use these helpers — never access .result directly for node API calls.
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-5. _prev_timestamp — INJECTED BY /api/block/:id, NOWHERE ELSE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+### `_prev_timestamp` — injected by `/api/block/:id`, nowhere else
 
 The Grin node API does not return the previous block's timestamp alongside a block.
 GrinScan injects block._prev_timestamp by doing a second SQLite lookup for height - 1.
@@ -103,11 +85,7 @@ which gives inaccurate results for blocks with non-standard block times.
 If you add or replace the block-fetch endpoint, make sure _prev_timestamp is injected.
 The /api/search endpoint (now removed) was missing this field — that was one reason it
 was removed.
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-6. /api/* vs /rest/* — CORS SPLIT, DO NOT MIX THEM
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+### `/api/*` vs `/rest/*` — the CORS split
 
 Prefix      CORS        Intended callers
 /api/*      NONE        GrinScan frontend (same-origin only)
@@ -120,11 +98,7 @@ Do NOT add CORS headers to /api/* routes.
 
 /events has no CORS. External server-side scripts (Python, Node) can use it fine since
 CORS is a browser restriction only. Cross-origin browser apps cannot subscribe to it.
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-7. SSE (/events) — PUSH FIRES HEIGHT ONLY, NOT BLOCK DATA
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+### SSE `/events` — push fires height only, not block data
 
 broadcastNewBlock() sends: { type: "block", height: N }
 That's it — no block content, no hash, no tx count.
@@ -134,191 +108,61 @@ SSE is a trigger, not a data pipe.
 
 If a new feature needs to react to new blocks, hook into broadcastNewBlock() in server.js
 and add a new event type — do not embed block JSON in the stream payload.
+### Runtime behaviour by node mode
 
+Source: project memory `project_grinscan_archive_lazy`; verify against `web/06b_grinscan/server.js` before asserting.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-8. CSS GLOW — --glow: none IN DARK THEME, HOVER IS INVISIBLE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- **Node mode probe:** `get_block(1)` success or failure is the archive-vs-pruned discriminator (`node_mode`).
+- **Pruned node:** GrinScan degrades gracefully — it keeps a rolling `history_days` window in its own SQLite and serves recent blocks; genesis and old lookups beyond the cache return "not found". The aglkm grin-explorer (06b option C) requires an archive node and refuses to install on a pruned one. The peer-map collector (`06_collector.py`) is unaffected: it owns a full genesis→tip import in its own `stats.db`.
+- **Lazy block import (default):** only the recent `blocks_cache` window is cached (`startupBackfill` ≈ tip−500, sequential); the poller fills forward; old blocks are served live on a cache miss in `/api/block` (`fetchBlockLive`, archive only, no insert). The eager `historicalBackfill` is opt-in (`config.backfill_history`, default `false`; absent in old configs → lazy) and, when on, runs at concurrency 3 with a 150 ms pause between batches. `jsonRpc` timeout is a hardcoded 10 s.
+- **`daily_stats` rollup:** derived by aggregating the per-block `blocks` table per UTC day (exact Σtx / Σfees, cumulative-difficulty deltas → `hashrate_gps = work×42/sec/16384`), recomputed incrementally from the last finalised day; a day is `final=1` once a later day exists. `/api/history` serves ≤ 7 d from per-block (`source:"blocks"`, hourly) and > 7 d from `daily_stats` (`source:"daily"`, ≤ 800 points).
+- **Kernel and output lookup:** pages `/kernel.html?ex=<excess>` and `/output.html?c=<commit>` (query-param routing, the GrinScan convention) over `/api/kernel/:excess` and `/api/output/:commit`. Foreign API `get_kernel` (immutable, 300 s cache) and `get_outputs` (spent status mutable, 60 s cache); no archive gate — kernels always resolve on a pruned node, a spent and pruned output 404s. Smart search `searchTarget()`: digits or 64-hex → block, 66-hex → kernel or output (indistinguishable; a miss probes the other kind). Block-page kernel excesses and output commits link into these pages; inputs deliberately do not (spent → would 404).
 
-Theme --glow values:
-  dark:   none
-  light:  0 2px 8px rgba(0,0,0,0.08)   (subtle drop shadow)
-  neon:   0 0 18px rgba(0,240,255,0.22), ...  (cyan glow)
-  matrix: 0 0 16px rgba(0,255,68,0.12), ...   (green glow)
+## Runbook
 
-WRONG (hover effect invisible in dark theme):
-  .my-card:hover { box-shadow: var(--glow); }
+- **Genesis or an old block will not load:** check whether the node is archive or pruned (the node-type badge, or the Network tab). Only an archive node serves blocks outside the cache window; on a pruned node the 404 is correct and permanent.
+- **Blocks and stats stop loading with 401 after a Script 01 rebuild:** the secret copies under `/opt/grin/grinscan/{test,main}/` are stale. Re-run GrinScan Configure (step 2), or rely on the box-wide `grin-secret-sync` timer.
+- **A cron-started session misbehaves:** every `tmux new-session` in a cron wrapper needs the inline `SHELL=/bin/bash` prefix (see Build notes).
+- **Syntax check before shipping:** `node --check web/06b_grinscan/server.js`, and `bash -n scripts/lib/06b_grinscan.sh`.
 
-RIGHT pattern used in GrinScan:
-  1. grinscan.css — explicit rgba box-shadow (orange accent, works in dark + light):
-       .my-card:hover { box-shadow: 0 0 14px rgba(255,153,0,0.22), 0 4px 16px rgba(0,0,0,0.3); }
-  2. neon.css — override with cyan:
-       .my-card:hover { box-shadow: 0 0 20px rgba(0,240,255,0.38), ...; }
-  3. matrix.css — override with green:
-       .my-card:hover { box-shadow: 0 0 18px rgba(0,255,68,0.32), ...; }
+## Build notes — obstacles & lessons
 
-Only use var(--glow) for ambient/resting shadows where invisible is an acceptable fallback.
-Never use it for interactive hover states.
+The full pre-G7 text of this doc (the original numbered "gotchas" list, with its code samples): `git log -- docs/reference/script06b_implementation.md`, the commit before the G7 re-org (2026-10-13).
 
+### Node API
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-9. SECTION HEADINGS (h3) — var(--muted) IS TOO SUBTLE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#### `get_tip` answers "Method not found" on the Owner API
+**Symptom:** status polling returns `{"error":{"code":-32601,"message":"Method not found"}}`. **Cause:** `get_tip` lives on the Foreign API; the Owner API has `get_status`. **Fix:** poll `get_status` (height, total difficulty, peers, sync). **Lesson:** the Owner/Foreign method split in *What shipped* is the contract; check it before blaming the node.
 
-Default .gs-info-section h3 used color: var(--muted). In dark/matrix themes this makes
-headings visually merge into surrounding text — users cannot distinguish sections.
+#### Block list silently blank: block methods on the wrong endpoint
+**Symptom:** an empty block list with no visible error. **Cause:** two mistakes that compound — `get_block`/`get_header`/`get_outputs`/`get_pool_size` called through `ownerApi()` (method not found), and `response.result` read without `unwrapResult()`, which on the right endpoint yields `{Ok: …}` instead of the block. **Fix:** block data only through `foreignApi()`; both helpers unwrap. **Lesson:** an error that never reaches the UI is the same as no error — make the helper own the unwrap so callers cannot skip it.
 
-Fix applied (grinscan.css):
-  color: var(--text);               changed from var(--muted)
-  border-left: 2px solid var(--accent);   left accent stripe as visual anchor
-  padding-left: 10px;
-  font-size: 14px;                  bumped from 13px
+#### A convenience alias that dropped a required field
+**Symptom:** `/api/search?q=` had zero callers and omitted `_prev_timestamp`, so any block fetched through it fell back to the 60 s hashrate estimate. **Fix:** removed from `server.js` and the API page listing. **Lesson:** before adding an alias for an endpoint, verify something calls it and that it keeps every injected field callers depend on.
 
-Theme overrides (neon.css, matrix.css):
-  color: var(--accent);             full accent colour
-  text-shadow: 0 0 8px ...;         glow matching theme accent
+### Credentials
 
-When adding new tab content, use the same pattern. Do not rely on weight or size alone
-to separate sections — the left accent border is the primary visual cue.
+#### `www-data` cannot read the node's secret files
+**Symptom:** node API calls fail silently; blocks and stats never load. **Cause:** Script 01 creates both secrets `grin:grin` mode 600, and the GrinScan service runs as `www-data`, which is not in the `grin` group — `EACCES`. **Fix:** Configure (step 2) copies both secrets into `/opt/grin/grinscan/{test,main}/`, chowns the copies `www-data`, and points `foreign_secret_path` / `owner_secret_path` in `config.json` at them; the node's own files are never touched. **Lesson:** a copied secret goes stale when the original is regenerated — that is what the secret self-heal exists for.
 
+### Service launch
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-10. DEAD-CODE ENDPOINT — /api/search WAS REMOVED
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#### tmux started from cron uses `/bin/sh`
+**Symptom:** bash-only syntax inside the session silently fails. **Cause:** cron sets `SHELL=/bin/sh`; a `#!/bin/bash` shebang sets only the script's own interpreter, not the variable tmux children inherit, and `export SHELL=` at the top of the wrapper does not help once a tmux server already exists. **Fix:** prefix the command inline: `SHELL=/bin/bash tmux new-session -d -s … -c "$DIR" "…"`. **Lesson:** the inline prefix is the only reliable form (now a toolkit-wide rule in CLAUDE.md).
 
-/api/search?q= was a query-param wrapper around the same findBlock() lookup as
-/api/block/:id. It had ZERO callers (the search box redirects to block.html?h=
-which calls /api/block/:id directly) and intentionally omitted _prev_timestamp.
+### Front end
 
-Removed from both server.js and the API page docs listing in app.js.
+#### Mainnet page loaded the testnet theme on refresh
+**Symptom:** refreshing the mainnet page showed the matrix (testnet) theme instead of neon. **Cause:** the early theme code ran before `window.GRINSCAN_NETWORK` was set — the globals script was injected near the end of `<head>`, and every default path falls back with `|| 'testnet'`. A second variant: the localStorage key carried a network suffix computed at parse time, so with the global undefined it became `grinscan-theme-undefined`, missed the saved preference and fell to the testnet default. **Fix, three parts together:** inject the globals immediately after `<head>`; patch the initial `<link id="theme-css">` href server-side (`dark.css` → `neon.css` mainnet / `matrix.css` testnet) so the right CSS is in the DOM before any JS; drop the key suffix (`grinscan-theme`) — the networks are different origins, so localStorage is already partitioned. **Lesson:** never lean on `|| 'testnet'` as a safe fallback; it silently applies the wrong theme in production.
 
-Rule going forward: before adding a convenience alias for an existing endpoint,
-  - verify it will actually be called by something
-  - verify it does not silently drop fields callers depend on (_prev_timestamp, etc.)
+#### `var(--glow)` makes hover invisible in the dark theme
+**Symptom:** a card hover effect that does nothing in dark. **Cause:** `--glow` is `none` in dark (a faint shadow in light, cyan in neon, green in matrix). **Fix:** hover states use an explicit `rgba` `box-shadow` in `grinscan.css` (orange accent), overridden in `neon.css` (cyan) and `matrix.css` (green). **Lesson:** `var(--glow)` is for resting shadows where invisible is acceptable, never for interactive state.
 
+#### `h3` section headings merged into the text
+**Symptom:** users could not tell sections apart in the dark and matrix themes. **Cause:** `.gs-info-section h3` used `color: var(--muted)`. **Fix:** `var(--text)`, a 2 px accent left border, 10 px left padding, 14 px size; neon and matrix use the full accent colour with a matching `text-shadow`. **Lesson:** do not separate sections by weight or size alone; the left accent border is the cue for new tab content.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-11. tmux IN CRON — SHELL=/bin/bash PREFIX IS MANDATORY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+## Open items
 
-cron sets SHELL=/bin/sh. A #!/bin/bash shebang only affects the script's own interpreter,
-not the SHELL env var inherited by child processes. If tmux starts (or a new session is
-created) while SHELL=/bin/sh, all sessions use sh — bash-only syntax will silently fail.
-
-WRONG:
-  tmux new-session -d -s "grinscan" -c "$DIR" "node server.js"
-
-RIGHT:
-  SHELL=/bin/bash tmux new-session -d -s "grinscan" -c "$DIR" "node server.js"
-
-export SHELL=/bin/bash at the top of a cron wrapper is NOT sufficient when the tmux server
-was already started by a different process with /bin/sh.
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-12. MAINNET PAGE SHOWS TESTNET THEME ON REFRESH — GRINSCAN_NETWORK UNDEFINED TOO LATE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Symptom: refreshing the mainnet page loads the matrix (testnet) theme instead of neon.
-
-Root cause: the early theme-selection code ran before window.GRINSCAN_NETWORK was set.
-Every code path that picks a default theme has a fallback:
-  var net = (window.GRINSCAN_NETWORK || 'testnet');   ← fallback is 'testnet'
-  function _defaultTheme() { return GRINSCAN_NETWORK === 'mainnet' ? 'neon' : 'matrix'; }
-
-If GRINSCAN_NETWORK is undefined when either runs, the result is 'matrix' regardless of
-which instance is actually serving the page.
-
-This happened when the globals script injection was positioned too late in <head> (e.g.
-before </head> instead of right after <head>), so the inline FOUC-prevention scripts
-ran first with GRINSCAN_NETWORK still undefined.
-
-A secondary variant: the localStorage key previously included the network suffix
-('grinscan-theme-mainnet'). The suffix was computed at module-parse time using
-GRINSCAN_NETWORK — if undefined at that moment, the key became 'grinscan-theme-undefined',
-missing the saved preference and falling through to the 'testnet' default.
-
-Fix — three parts applied together:
-
-  1. Inject globals at the TOP of <head> (immediately after the <head> tag), not the bottom:
-       out = out.replace('<head>', '<head>\n' + seoBlock + '\n' + globals);
-     This guarantees window.GRINSCAN_NETWORK is set before any inline script in <head> runs.
-
-  2. Server-side patch the initial <link id="theme-css"> href in the served HTML:
-       dark.css  →  neon.css   (mainnet)
-       dark.css  →  matrix.css (testnet)
-     The correct theme CSS is in the DOM before any JS executes — no flash even if JS fails.
-
-  3. Drop the network suffix from the localStorage key. Mainnet and testnet run on different
-     origins (different domains), so localStorage is already partitioned by the browser.
-     The suffix was redundant AND created a GRINSCAN_NETWORK dependency at parse time.
-     Current key: 'grinscan-theme'  (no suffix)
-
-Rule: any code that reads GRINSCAN_NETWORK to pick a default must be able to trust it is
-already set. If it runs from <head> inline scripts or from a script file's top-level code,
-it MUST be placed after the globals injection in <head>. Never rely on || 'testnet' as a
-safe fallback — it silently applies the wrong theme in production.
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-14. WRONG API ENDPOINT FOR BLOCK METHODS — BLOCKS SILENTLY BLANK
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Block methods (get_block, get_header, get_outputs, get_pool_size) live on the FOREIGN API.
-If called on the Owner API they return {"error": {"code": -32601, "message": "Method not found"}}.
-The UI gets no data and shows a blank block list — no visible error to trace.
-
-Two mistakes that compound:
-  1. Calling block methods on /v2/owner instead of /v2/foreign.
-  2. Not calling unwrapResult() — even on the right endpoint, accessing .result directly
-     gives {"Ok": <data>} instead of the actual block, so nothing renders.
-
-WRONG:
-  ownerApi('get_block', [hash])          // wrong endpoint — method not found
-  const block = response.result;         // skips unwrapping — gets {Ok: ...} not block
-
-RIGHT:
-  foreignApi('get_block', [hash])        // correct endpoint
-  // ownerApi() and foreignApi() helpers call unwrapResult() automatically
-
-Endpoint / method split to memorise:
-  Owner API  (/v2/owner,   .api_secret):         get_status, get_connected_peers,
-                                                  validate_chain, compact_chain
-  Foreign API (/v2/foreign, .foreign_api_secret): get_block, get_header, get_outputs,
-                                                  get_unspent_outputs, get_pool_size,
-                                                  push_transaction
-
-Always use foreignApi() for block data. Never call block methods through ownerApi().
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-15. API SECRET PERMISSION DENIED — www-data CANNOT READ grin:grin FILES
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Script 01 creates node secrets with:
-  chown grin:grin .api_secret .foreign_api_secret
-  chmod 600       .api_secret .foreign_api_secret
-
-GrinScan's Node.js process runs as www-data (set in the systemd unit).
-www-data is NOT in the grin group, so reading from the node directory fails with
-EACCES — node API calls silently fail and blocks/stats never load.
-
-Fix applied in GrinScan Configure (step 2):
-  1. Both secrets are COPIED to /opt/grin/grinscan/{test,main}/
-  2. Re-chowned to www-data:www-data with chmod 600
-  3. config.json points foreign_secret_path and owner_secret_path at the copies
-
-The node directory secrets are never touched — GrinScan reads only its own copies.
-
-  Source (read-only, owned by grin):
-    /opt/grin/node/{net}-prune/.api_secret
-    /opt/grin/node/{net}-prune/.foreign_api_secret
-
-  Copies (owned by www-data, readable by Node.js):
-    /opt/grin/grinscan/{test,main}/.api_secret
-    /opt/grin/grinscan/{test,main}/.foreign_api_secret
-
-IMPORTANT: if Script 01 rebuilds the node, it regenerates both secrets.
-The copies in /opt/grin/grinscan/ then become stale — node API calls start
-failing again with 401 Unauthorized. Fix: re-run GrinScan Configure (2) to
-refresh the copies.
+- Deep history goes back only as far as accumulated blocks: `daily_stats` is derived from the per-block table and is not reconstructed to genesis.
+- Pre-warming the cache or a heavy genesis crawl wants an 8 GB+ box; lazy mode (single on-demand reads) is light enough for a ~4 GB archive box.
+- No VPS acceptance run is recorded in this doc.

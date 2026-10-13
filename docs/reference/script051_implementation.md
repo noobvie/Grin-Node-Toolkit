@@ -1,16 +1,17 @@
-# Script 051 — Fidelius: Grin Transporter integration
+# Script 051 — Fidelius: implementation
 
 > **Covers code as of:** 2026-08-06 (the doc states "built 2026-08-06") · **Last verified:** never systematically verified
 > **Product code last changed:** 2026-08-17 — `scripts/051*_*.sh`, `web/051_fidelius/`, `web/051_xp_wallet/`
 > The doc's "121 assertions, all passing" is a test of the *code*, not a check of this document.
+> **Scope:** the Grin Transporter rail as built, plus the Build notes for the whole product. The port plan is `script051_design.md`; findings are in `script051_security_audit.md`.
 
 **Status:** built 2026-08-06, **NOT VPS-tested.** Verified locally against a live
 Transporter (121 assertions, all passing) with a stubbed wallet.
 **Depends on:** Script 093 Grin Transporter ≥ v0.2.1.
 
----
+## What shipped
 
-## What this adds
+### What this adds
 
 A third delivery rail in Fidelius, alongside the two that already existed:
 
@@ -25,7 +26,7 @@ PUTs an encrypted slate into the payee's queue; the payee's wallet collects it
 whenever it is next unlocked, replies into the sender's queue, and the sender
 finalizes and broadcasts.
 
-## Files
+### Files
 
 | File | Change |
 |---|---|
@@ -36,7 +37,7 @@ finalizes and broadcasts.
 | `web/051_fidelius/client/style.css` | `.checkbox-row` |
 | `scripts/051_grin_fidelius.sh` | deploy now globs `*.js` (see *Deploy* below) |
 
-## Why not `web/093_transporter/client/agent.js`
+### Why not `web/093_transporter/client/agent.js`
 
 The standalone agent needs `wallet_pass_file` — a passphrase on disk. Fidelius
 keeps the passphrase **in process memory only** and has no `.wallet_pass`
@@ -48,9 +49,7 @@ passphrase, the registry, or an HTTP route, so it is testable without a wallet.
 
 Secondary reason: Fidelius is multi-wallet; the agent is one-config-per-wallet.
 
----
-
-## The four protocol deltas (all deliberate, all load-bearing)
+### The four protocol deltas (all deliberate, all load-bearing)
 
 These are the differences between the Transporter path and Fidelius's own
 copy-paste send. Each one silently loses money if it is "simplified" back.
@@ -83,9 +82,7 @@ proof field on this rail, unlike the Tor panel.
 without it, and then every incoming payment fails at the last step — the single
 most confusing failure mode here, so the inbox reports it explicitly.
 
----
-
-## Design decisions
+### Design decisions
 
 **Polling is server-side but scoped to UNLOCKED wallets.**
 Collecting a slate means decrypting it with the wallet key, so a locked wallet
@@ -139,9 +136,7 @@ was made case-insensitive at the same time: the Tor form submits the address as
 typed while this one lowercases first, so one rail could otherwise report an
 address as unknown that the other had already proven.
 
----
-
-## API
+### API
 
 | Route | Notes |
 |---|---|
@@ -159,24 +154,10 @@ than a new file, so it inherits the same permissions and 089 backup coverage.
 contacted server-side. `connect-src 'self'` stands — another reason the relay call
 does not belong in the browser. No inline handlers were added.
 
----
 
-## Deploy — one real break, fixed
+## Runbook
 
-`ww_deploy_app()` used to enumerate files:
-
-```bash
-cp -r "$WW_SRC_DIR/server.js" "$WW_SRC_DIR/package.json" "$WW_SRC_DIR/client" ...
-```
-
-`transporter.js` would never have reached the VPS, and the failure surfaces only
-at service start as a bare `MODULE_NOT_FOUND`. It now globs `"$WW_SRC_DIR"/*.js`,
-which also covers the next module. The glob still excludes `client/` and any
-`node_modules`.
-
----
-
-## Testing with two wallets
+### Testing with two wallets
 
 1. Deploy a testnet Transporter (script 093) and note its HTTPS URL.
 2. Fidelius → **Setup → Grin Transporter** → paste the URL under *Testnet* →
@@ -198,9 +179,7 @@ If step 6 or 7 reports nothing: read the inbox banner first — it names the one
 blocking condition (no relay / locked / Owner API down / listener down) rather
 than making you guess.
 
----
-
-## Verification performed
+### Verification performed
 
 Local only; no VPS, no real grin-wallet.
 
@@ -227,37 +206,105 @@ Local only; no VPS, no real grin-wallet.
   being a relative `/api/` path (the `connect-src 'self'` contract).
 - `bash -n` across 52 shell files; `node --check` on all Fidelius + 093 JS.
 
-## Review pass (same day, post-build)
+## Build notes — obstacles & lessons
 
-A full re-read of the delivered code found four defects. All are fixed above; they
-are recorded because each is a class of mistake, not a one-off.
+Commit hashes are the bulk commits a change landed in (the repo has few fine-grained ones); `git log -S<symbol>` finds the exact line. The full pre-G7 text of this doc: `git log -- docs/reference/script051_implementation.md`, the commit before the G7 re-org (2026-10-13).
 
-1. **The first-send safety net was built but never connected.** `testPassed` and
-   `markAddressProven()` were written specifically to feed the Tor panel's
-   test-send warning, and then the Transporter form was shipped without that
-   warning — so the flag had no consumer on the rail it was added for. Building
-   half of a guard is worse than building none: the design doc claimed a
-   protection the UI did not have.
-2. **The network badge disagreed with the other two Send panels.**
-   `refreshSendTspAvailability()` overwrote the `send-method-net` badge that
-   `selectWallet()` paints, replacing `TESTNET` with an unstyled lowercase
-   `testnet` and dropping the colour class. Three panels on one screen must not
-   disagree about which chain is about to be spent from.
-3. **`findAddrEntry()` was case-sensitive** while the two Send forms normalise
-   the address differently (Tor sends it as typed, Transporter lowercases). The
-   same address could read as proven on one rail and unknown on the other.
-4. **The relay's TTL was printed as a raw ISO instant.** A misread expiry is a
-   user re-sending a payment that had not actually expired, so it is now trimmed
-   to minutes and explicitly labelled UTC.
+### Transporter rail
 
-Confirmed *not* problems, having been checked: the idle backstop's
-`IDLE_GET_ACTIONS` regex does not match `…/transporter/status`, so the 10-second
-inbox poll cannot renew a session (the manual **Check Now**, a POST, correctly
-does); `showModal` assigns button labels with `textContent`, so the unescaped
-amount in a label is not an injection point; the nginx CSP (`connect-src 'self'`,
-`script-src 'self'`) needs no change and no inline handler was added.
+#### Deploy list enumerated files, so the new module never shipped
+**Symptom:** service start fails with a bare `MODULE_NOT_FOUND` on the VPS only. **Cause:** `ww_deploy_app()` copied `server.js`, `package.json`, `client` by name; `transporter.js` was not on the list. **Fix:** copy `"$WW_SRC_DIR"/*.js` (still excludes `client/` and `node_modules`). **Lesson:** a hand-enumerated deploy list fails only at runtime on the target; glob the source dir.
 
-## Open / not done
+#### The first-send safety net was built but never connected
+**Symptom:** `testPassed` / `markAddressProven()` existed with no consumer on the rail they were added for; the design claimed a warning the UI did not show. **Cause:** the flag was written for the Tor panel's test-send gate, then the Transporter form shipped without the gate. **Fix:** the same gate on the Transporter panel, one modal only. **Lesson:** half a guard is worse than none — it documents a protection that is not there. Grep a new flag's readers before calling it done. Landed in 3fabc1e.
+
+#### Two Send forms normalised the address differently
+**Symptom:** the same address read as proven on the Tor rail and unknown on the Transporter rail. **Cause:** the Tor form submits as typed, the Transporter form lowercases first; `findAddrEntry()` was case-sensitive. **Fix:** case-insensitive lookup. **Lesson:** when two forms normalise differently, the shared lookup between them is the bug.
+
+#### Network badge overwritten by a refresh helper
+**Symptom:** `TESTNET` replaced by an unstyled lowercase `testnet`. **Cause:** `refreshSendTspAvailability()` rewrote the badge `selectWallet()` paints. **Fix:** stop overwriting it. **Lesson:** three panels on one screen must not disagree about which chain is about to be spent from.
+
+#### Relay TTL printed as a raw ISO instant
+**Symptom:** a user could misread an expiry and re-send a payment that had not expired. **Fix:** trimmed to minutes and labelled UTC. **Lesson:** a money-relevant timestamp is shown in one stated zone at human precision.
+
+#### A wallet health probe must cover the half that failed
+**Symptom:** real incoming payments were deleted after ~6 minutes. **Cause:** the poller reaped queue entries after 5 deliveries, guarded by an Owner-API probe; the S1 path fails at `receive_tx`, which needs the Foreign listener. Owner-up + listener-down is the normal state of an unlocked wallet nobody started the listener on, and the Owner API is necessarily up because the poll reached that line through it. **Fix:** probe both (`ownAddress` + foreign `check_version`). **Lesson:** a guard that is true whenever the code runs can never fail; probe the dependency that actually broke.
+
+#### Lock outputs at send, not at finalize (manual rail too)
+**Symptom:** a pending slatepack send was invisible in History, uncancellable, and its inputs stayed selectable. **Cause:** deferring the lock meant `init_send_tx` wrote no tx-log entry; a second send picked the same coins and produced two conflicting slatepacks. **Fix:** lock at send, matching `grin-wallet send` and the Transporter path; Recover releases an unanswered one. **Lesson:** reserve inputs when you hand out a slate, not when it comes back.
+
+### Wallet identity, passphrase and recovery
+
+#### Wallet names collided across networks
+**Symptom:** a mainnet and a testnet `savings`: the second was unreachable, and `DELETE ?files=1` on the visible row destroyed the seed of the hidden one. **Cause:** every route is `/api/wallet/:name/…`, `findWallet()` and `sessions` key on name alone, but registration enforced uniqueness per `(name, network)`. **Fix:** one `nameTaken()` shared by `write-config` and `import`; `duplicateWalletNames()` reports legacy collisions at startup, in `/api/wallets` and on the status screen. **Lesson:** a uniqueness rule must be as wide as the routing key. Landed in 3fabc1e.
+
+#### Recovery (`init -hr`) needs a PTY and asks phrase before password
+**Symptom:** recover could never work; the command died before reading a byte. **Cause:** grin-wallet's `parse_init_args` calls `prompt_recovery_phrase()` before `prompt_password_confirm()`, and the phrase prompt (linefeed `Interface`) opens `/dev/tty`, not stdin; a plain `spawn()` under systemd has no controlling terminal. The code also had the order reversed. **Fix:** run recover under `script -qfec` with a prompt matcher (phrase → pass → pass); `init -h`, `listen` and `owner_api` use rpassword/stdin and stay plain. `script` (bsdutils / util-linux) is now a dependency. **Lesson:** read the CLI's prompt code before choosing a stdin channel. Landed in 17c0a8d.
+
+#### grin-wallet is pinned, in two places
+**Symptom (avoided):** every wallet stops unlocking after an unattended upgrade, with no local change to blame. **Cause:** passphrases go over stdin, which works only while grin-wallet pins rpassword 4.x; rpassword 7 reads `/dev/tty`. **Fix:** pin `v5.4.1` in `_WW_PIN_TAG` (script) and `GRIN_WALLET_PIN` (server.js); the two must agree. **Lesson:** do not chase `releases/latest` for a binary whose I/O contract you depend on. (The shared toolkit pin later moved to v5.5.0, where stdin still works; Fidelius stays on v5.4.1.)
+
+#### A passphrase outlived a closed browser tab
+**Symptom:** the wallet stayed unlocked with no tab open. **Cause:** auto-lock lived only in `app.js`. **Fix:** a server-side backstop `WW_IDLE_LOCK_MINUTES` (default 60) counting only deliberate actions, never the status/price pollers; it zeroes the passphrase but leaves the listener alive so receiving survives. The client auto-lock still calls `/disconnect` and kills the children — the two are not aligned. **Lesson:** idle means user action, never request traffic (same rule as the pool admin). Landed in 3fabc1e.
+
+### Backup, secrets and the node
+
+#### Fidelius seeds were in no backup
+**Symptom:** every 089 archive taken before 2026-08-05 held zero Fidelius seeds yet printed "wallet dirs contain seed files". **Cause:** 089 discovers wallet dirs from `grin_wallets_location.conf`, which only the CMD wallet and the XP wallet write; Fidelius registers in its own `wallets_info.json`. **Fix:** a step that live-globs `/opt/grin/fidelius/wallet_<net>_*` (deliberately not a conf file — wallets are created from the web UI at any time, so install-time state goes stale); restore keeps `/opt/grin/fidelius` root-owned (server.js runs as root). **Lesson:** a backup that reports success while omitting a class of data is the worst bug in its category; discover by live state.
+
+#### `grin_sync_wallets()` leaked a local node secret to public nodes
+**Symptom:** wallets pointed at public nodes sent the local node's foreign secret as Basic Auth to a third party. **Cause:** the "skip remote nodes" guard grepped `node_api_http_addr`, but the toml key is `check_node_api_http_addr` (anchored, so it never matched); under `pipefail` the no-match `| head -1` also killed errexit callers at the first wallet, while the timer (no `set -e`) stamped the secret into every wallet. **Fix:** `grep -m1 … || true` (never `| head -1` in a `$()` under pipefail), both key spellings, "no address key → skip". A stale remote+local-secret combination is warned about, not auto-edited. **Lesson:** a guard that matches nothing fails open; test it against a real toml. Affects 059/05/07 too.
+
+#### Switching a wallet to a public node left the local secret in place
+**Symptom:** the write-path twin of the leak above. **Cause:** `POST /api/wallet/node` changed `check_node_api_http_addr` only, so `node_api_secret_path` kept pointing at the local secret. **Fix:** clear/replace the secret path together with the address. **Lesson:** fields that must change together are one write, not two.
+
+#### Node status described the wrong wallet's node
+**Symptom:** a testnet wallet on a public node showed `LOCAL NODE · SYNCED`, the mainnet node's peers, and the wrong chain in the sync banner. **Cause:** `/api/node/status`, `/peers` and `/sync-detail` resolved their node from `loadWallets()[0]`, never the open wallet; each endpoint looked right in isolation. **Fix:** one `resolveWalletNode(wallet)` and `?wallet=<name>` on all three. The registry `nodeUrl` and the toml's `check_node_api_http_addr` are two sources of truth that drift; the toml wins because the binary obeys it, and the disagreement is reported to the operator, never silently resolved. **Lesson:** when two widgets on one screen disagree, the user believes the pessimistic one; check what each resolves its subject from. Landed in 0ad5564.
+
+#### "Local Node — not running" against a synced node
+**Symptom:** the node page read offline against a healthy synced mainnet node while peers/sync-detail rendered. **Cause:** three probes called the removed v1 REST API (`GET /v1/status` → 404 on grin 5.x); proved by curl before editing. **Fix:** one `nodeRpc()` with `nodeOwnerRpc`/`nodeForeignRpc` and the `{"Ok":…}` unwrap in one place; a 401 is the one non-2xx that still proves a node is listening. **Trap in the fix:** returning `sync_status: null` for public nodes (honest — only `get_tip` is answerable) made `app.js` call `.toUpperCase()` on null, and that throw landed in the catch that paints "NODE UNREACHABLE" — the same symptom one layer up. **Lesson:** a server-side honesty fix needs its client null path checked in the same pass. Peers/sync-detail on a public node return `available:false` / `synced:null`, never an error or `false` (which fires the "syncing" banner forever).
+
+#### `isLocal` was an unanchored substring match
+**Symptom (avoided):** `https://localhost.example.com` counted as local and would have been sent the node's `.api_secret`. **Fix:** anchor to the scheme. **Lesson:** never decide "is this host mine" by substring; this is the second time the product nearly handed a local secret to a third party.
+
+#### `/api/node/ping` was an authenticated SSRF
+**Fix:** allowlist = the server's `MAINNET_NODES`/`TESTNET_NODES`, which must stay the same curated set as `PUBLIC_NODES` in `client/app.js` (they had drifted; a node added on one side pings as unreachable). **Lesson:** a list duplicated across client and server needs one owner or a check.
+
+### Page security, logging and naming
+
+#### `script-src 'unsafe-inline'` on a wallet UI
+**Fix:** theme boot moved to `client/theme-boot.js` (loaded **without** `defer`, or the light-mode flash returns); two `onclick=` copy buttons became `wireCopyButton()`; the webfont CDN was dropped (it told Google when the operator opened their wallet), so the CSP is first-party only. **Lesson:** removing `'unsafe-inline'` is a code change, not a header change.
+
+#### Service log: `copytruncate` is the only safe rotation
+**Symptom (avoided):** the unit fails to start, or the rotated log stays empty forever. **Cause:** systemd `append:` creates the file but not the directory (setup `mkdir -p /opt/grin/logs`), and holds an open fd, so rename-and-create rotation leaves the daemon writing to the old inode (server.js has no USR2 reopen). **Fix:** 051 ships its own `/etc/logrotate.d/grin-fidelius` with `copytruncate` rather than joining Script 08's opt-in list (the same path in both files makes logrotate error "duplicate log entry"). `journalctl -u grin-fidelius` shows only start/stop/crash lines because `append:` redirects stdout away from the journal. **Lesson:** match the rotation method to how the daemon holds its log.
+
+#### The rename was done before the first deploy, on purpose
+`grin-web-wallet` → `grin-fidelius` and `/opt/grin/webwallet` → `/opt/grin/fidelius` happened before any VPS deploy — the only window where it is find-and-replace instead of a matched-key migration (stop and remove the old unit and vhost first, move the htpasswd, delete the old ratelimit conf before the new one: two `limit_req_zone` lines with one name is fatal). `/opt/grin/webwallet/` was never Fidelius-only: the XP wallet keeps `xp-mainnet/config.conf` there and was left alone. **Lesson:** rename before the first deploy or not at all. The hub's `_051_installed`/`_051_status` also probed PHP-era paths nothing had written since the Node port, so the row read "not installed" on every current deploy.
+
+### Private access (WireGuard + DNS-01)
+
+Architecture and the menu key are in the design doc; these are the traps. Landed in 56ea004.
+
+#### `listen 10.9.0.1:443` with wg0 down stops all of nginx
+**Symptom (avoided):** one failed bind takes every vhost on the box (explorer, pool, file server) offline. **Fix:** `net.ipv4.ip_nonlocal_bind=1` (load-bearing — it also survives a runtime `wg-quick down`) plus an `After=/Wants=wg-quick@wg0` nginx drop-in; `Wants`, never `Requires`. **Lesson:** a wallet change must not be able to break the explorer.
+
+#### An HTTP-01 certificate stops renewing in private mode
+**Symptom:** it renews fine the day you switch and fails silently ~60 days later. **Cause:** HTTP-01 answers on public port 80, which private mode removes. **Fix:** the switch hard-refuses an LE cert whose renewal conf is not `authenticator = dns-*`; a Cloudflare Origin cert is fine. **Lesson:** a failure with a 60-day fuse needs a gate at the moment of the change.
+
+#### Never switch on a configured tunnel, only a proven one
+**Fix:** gate on `gwa_handshake_seen` (non-zero `wg show latest-handshakes`); a conf file is not evidence. Automatic rollback: a vhost failing `nginx -t` is never left on disk, because the next unrelated `systemctl reload nginx` from any toolkit script would fail on it.
+
+#### fail2ban must `ignoreip` the WireGuard subnet
+**Symptom (avoided):** five mistyped passwords from the phone ban the only address that can still reach the wallet, and the unban needs the SSH session this design exists to avoid. **Cause:** after the switch `$remote_addr` is the operator's own tunnel address.
+
+#### `certbot certonly --dns-*` never loads the nginx plugin
+**Symptom:** `nginx -t` hard-fails on an `include` of a missing `ssl-dhparams.pem` / `options-ssl-nginx.conf`. **Fix:** both includes are existence-guarded via `_ww_le_ssl_extra()`, which the older `certonly --nginx` path was rerouted through too.
+
+#### `${var//./\\.}` does not escape dots in bash
+It returns the string unchanged, leaving every dot a regex wildcard; it bit twice (listener check, peer IP scan). Compare fields with exact-match `awk` instead of building a regex from an IP.
+
+## Open items
+
 
 1. **Never run against a real grin-wallet.** The wallet side is stubbed. The
    Owner API method names and shapes are taken from the working `agent.js`, but

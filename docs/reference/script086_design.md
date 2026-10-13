@@ -3,10 +3,10 @@
 > **Covers code as of:** 2026-09-25 for §1–7 · 2026-10-03 for §8.1–§8.14 (DESIGN, written
 > before the code against `grin_node_control.sh`, `grin_node_keepalive.sh`, `086_lib_diag.sh`
 > and `082_provider_access_watch.sh` as committed at `65d5061`; §8.5 and §8.13 also carry the
-> Part 1 decisions). Parts 1–5 and the R1 fixes are built, uncommitted and never run; where the
+> launch-contract decisions). The recorder and its post-build fixes are built, uncommitted and never run; where the
 > build differs, the as-built record wins: it moved to
 > [`script086_implementation.md`](script086_implementation.md) §8.15–§8.22 on 2026-10-03 ·
-> **Last verified:** 2026-10-03, PARTIAL — §8 only, by the R1 review (implementation §8.19):
+> **Last verified:** 2026-10-03, PARTIAL — §8 only, by the post-build review (implementation §8.19):
 > §8.2's read-only gate by grep, §8.4/§8.5's transitions and §8.10's debounce by a local harness
 > over the pure functions. Nothing installed or run on a VPS; §1–7 never systematically verified
 > **Product code last changed:** 2026-10-03 — `scripts/086_grin_diagnostics.sh` (key 7: recorder
@@ -136,7 +136,7 @@ old meaning.
 
 ---
 
-## 8. Node event recorder — DESIGN 2026-10-03 (Parts 1–5 built and R1-reviewed, never run; as-built → `script086_implementation.md` §8.15–§8.22)
+## 8. Node event recorder — design (built and reviewed, never run; as-built → `script086_implementation.md` §8.15–§8.22)
 
 ### 8.1 Why it exists
 
@@ -201,7 +201,7 @@ These are review gates. Any hit is CRITICAL.
 | `pid` | `/proc/*` scan: `readlink -f /proc/<pid>/exe` = `node_dir/grin` (`comm` = `grin`) | **`exe` is required, not optional.** Matching on cmdline or cwd is NOT enough: the tmux SERVER started by the `@reboot` line has argv `tmux new-session … <dir>/grin server run` and cwd = the node dir. Fact-finding on 2026-10-03 (vps152623) showed `pgrep -f 'grin server run'` returning the tmux server (parent `/sbin/init`) next to the real grin pid. `gnc_kill_grin_procs` matches cwd OR exe, so it also TERMs that server; that is harmless on a stop path and fatal for a "which pid is the node" question. **Not** "PID on the API port" either: during 5.5's heavy init the port is not bound yet, and a port-only lookup would call a starting node "gone". The port lookup is a fallback only. |
 | `pid_start` | `/proc/<pid>/stat` field 22 ÷ `CLK_TCK` + `btime` | Parse after the LAST `)`. Field 2 (`comm`) may contain spaces or parens. |
 | `api` | one Owner `get_status`, 8 s max | Result KIND: `ok` (parsed `result.Ok`) · `timeout` (curl rc 28) · `refused` (rc 7) · `auth` (HTTP 401/403) · `bad` (any other HTTP code, non-JSON, envelope error, `Err`) · `no_secret` (unreadable `.api_secret`). |
-| `last_start` | `<node_dir>/.grin_last_start` (`ts=<epoch>`) | Written by the node's tmux pane (`_gnc_node_run_cmd`, Part 1): launcher starts AND `@reboot` lines written after Part 1. Absent on nodes started before Part 1, by an `@reboot` line not re-enabled since (§8.13 F-1), or by 081's remote start. |
+| `last_start` | `<node_dir>/.grin_last_start` (`ts=<epoch>`) | Written by the node's tmux pane (`_gnc_node_run_cmd`): launcher starts AND `@reboot` lines written since the launch contract. Absent on nodes started before it, by an `@reboot` line not re-enabled since (§8.13 F-1), or by 081's remote start. |
 | `last_exit` | `<node_dir>/.grin_last_exit` (`ts=<epoch> rc=<n>`) | **Valid only if `ts ≥ last_start.ts`**, so that it belongs to the latest run. |
 | `marker` | `/opt/grin/node-events/<net>/planned_stop` | See §8.5. |
 | `autostart_delay` | the root crontab line tagged `grin_autostart_<net>` → `sleep N` | Read-only. No line → the net does not autostart after a boot. |
@@ -277,7 +277,7 @@ with no marker. `auth` and `no_secret` are never failures.
   Durations are clamped at ≥ 0. Strikes reset after a gap, because two failures five minutes apart
   are not "consecutive".
 
-### 8.5 Planned stops — the marker contract (Part 1 writes, the recorder reads)
+### 8.5 Planned stops — the marker contract (the launcher writes, the recorder reads)
 
 `/opt/grin/node-events/<net>/planned_stop` is one line, written atomically (temp + `mv`) BEFORE the kill:
 
@@ -290,7 +290,7 @@ ts=<epoch> by=<caller script basename> pid=<grin pid at write time, or 0> reason
   every start (§8.13 F-2), so an unconditional write would leave a marker on every start of an
   already-stopped node.
 - **It is written only once the recorder is installed** (`/opt/grin/node-events/` exists). The
-  writer creates `<net>/` (0755) but never the root, so `gne_install` (Part 2) must create
+  writer creates `<net>/` (0755) but never the root, so `gne_install` must create
   `/opt/grin/node-events/` 0755. Before that, every stop path is a silent no-op.
 - **`<net>` comes from the session name** (`*testnet*` / `*mainnet*`); the pid comes from
   `/proc/<pid>/exe` = `<dir>/grin`, matched back to the session via `_grin_session_name`. A
@@ -324,7 +324,7 @@ ts=<epoch> by=<caller script basename> pid=<grin pid at write time, or 0> reason
 Every class is a **lean, not a verdict** — the same rule as §3's likely origin. `summary.txt` and
 every alert say "likely, not a verdict".
 
-**Initial class** (Part 2: from the recorder's own inputs, no log reading):
+**Initial class** (from the recorder's own inputs, no log reading):
 
 | Observation | `class_initial` | `sub` |
 |---|---|---|
@@ -339,11 +339,11 @@ every alert say "likely, not a verdict".
 | no `ok` within `start_timeout_min`, or the process exited before its first `ok` | `failed_start` | `timeout` or `exited rc=<n>` |
 | watchdog `capture` reason starting `wedged:` | `wedged` | the watchdog's reason |
 
-`exit_unknown` is a sub-reason, not a new class. It covers nodes started before Part 1, and nodes
+`exit_unknown` is a sub-reason, not a new class. It covers nodes started before the launch contract, and nodes
 started by the `@reboot` line (§8.13 F-1). Evidence refinement (below) usually turns it into
 `killed` or `crashed`.
 
-**Refinement** (Part 3: evidence-based). The captured log window plus the pane are run through a
+**Refinement** (evidence-based). The captured log window plus the pane are run through a
 signature table. A match may refine `class_initial` → `class`. Both are recorded.
 
 | Refines to | Signature (lower-cased ERE, mawk-safe) | Scope | Status |
@@ -372,7 +372,7 @@ signature table. A match may refine `class_initial` → `class`. Both are record
   <net>/                                     0755
     status.json                              0644       rewritten every check (temp + mv)
     ledger.jsonl                             0644       append-only, one line per transition
-    planned_stop                             0644       written by gnc_kill_grin_session (Part 1)
+    planned_stop                             0644       written by gnc_kill_grin_session
     evidence/                                0700 root
       <YYYYmmddTHHMMSSZ>_<class>/            0700       one bundle
 /opt/grin/conf/node-events/recorder.conf     0600 root  KEY=VALUE, parsed not sourced
@@ -390,7 +390,7 @@ signature table. A match may refine `class_initial` → `class`. Both are record
 - `status.json` and `ledger.jsonl` are world-readable on purpose: they hold nothing sensitive. The
   `grinsecret` group is NOT reused; it means "may read node secrets".
 - 089 backs up `/opt/grin/conf/` wholesale, so `recorder.conf` and its alert tokens ride along,
-  exactly like 082's `alert.conf`. Whether to back up `ledger.jsonl` is Part 5's call (default: yes,
+  exactly like 082's `alert.conf`. Whether to back up `ledger.jsonl` is an operator-UI decision (default: yes,
   ledger only, no evidence).
 - **Ledger rotation is rename-based** (`create 0644 root root`, no `copytruncate`), so the pool's
   ingest (§20.3 of the 07 design) sees a new inode and resets its offset. `copytruncate` can lose
@@ -459,7 +459,7 @@ readers; missing keys mean null.
 Captures are rate-limited to one per network per 5 minutes, except for `corrupted`.
 
 **Contents** (`evidence/<UTC-ts>_<class>/`, root 0700, files 0600). Raw on the box, because only
-root reads it. Masking (`dg_maskip` / `dg_redact`) happens at **export** (Part 5), never in place.
+root reads it. Masking (`dg_maskip` / `dg_redact`) happens at **export**, never in place.
 
 | File | Content | Cap |
 |---|---|---|
@@ -479,7 +479,7 @@ root reads it. Masking (`dg_maskip` / `dg_redact`) happens at **export** (Part 5
 past the age limit first, then past the total cap. A bundle whose dir name a `corrupted` ledger line
 references is pruned last.
 
-**The watchdog hook** (Part 3) is the ONLY change to the watchdog. In the generated
+**The watchdog hook** is the ONLY change to the watchdog. In the generated
 `do_restart()`, after the cooldown check and before `gnc_start_node_tmux`:
 
 ```bash
@@ -494,7 +494,7 @@ references is pruned last.
   `pending_restart_by`.
 - Existing installs pick it up only when `gnk_watchdog_install` next regenerates the worker.
 
-### 8.10 Alerts and debounce (Part 4)
+### 8.10 Alerts and debounce
 
 Delivery code is **extracted** from 082 into a shared lib (`lib/grin_alert_send.sh`), not copied.
 082's output must stay byte-for-byte the same. (As built, 082 inlines the lib into its generated
@@ -558,7 +558,7 @@ explicit "import channels from Access Watch" action. It never reads 082's `alert
   Plus 082's channel keys, under the same names. Every numeric value is validated against a range.
   An invalid value falls back to the default and logs once.
 
-### 8.12 Operator UI and lifecycle (Part 5, summary)
+### 8.12 Operator UI and lifecycle (summary)
 
 - **086 sub-menu "Node event recorder":**
   - Install / Remove / Status.
@@ -575,7 +575,7 @@ explicit "import channels from Access Watch" action. It never reads 082's `alert
   evidence.
 - Hub 08 has no free key, which is why the recorder lives inside 086.
 
-### 8.13 Findings from the Part 0 reading (open — the operator decides)
+### 8.13 Findings from the pre-build reading (open — the operator decides)
 
 **F-1 — the `@reboot` autostart bypasses the launch contract.**
 
@@ -585,18 +585,18 @@ explicit "import channels from Access Watch" action. It never reads 082's `alert
 - *Consequence:*
   - After every reboot, until the first toolkit or watchdog restart, a crash destroys the pane, and
     the panic text with it, the moment grin exits.
-  - Part 1's `.grin_last_exit` will never be written for that run.
+  - The launch contract's `.grin_last_exit` will never be written for that run.
   - The plan's premise "the pane survives grin's exit until something kills the session" holds only
     for launcher-started sessions.
   - CLAUDE.md says every path that starts `grin server run` MUST go through
     `gnc_launch_node_session`.
-- *Proposal (needs a decision before Part 1):*
-  - Bring both `@reboot` lines into Part 1's scope.
+- *Proposal (needed a decision before the launch contract was built):*
+  - Bring both `@reboot` lines into the launch contract's scope.
   - The cleanest form calls a tiny installed entry point (e.g. `/usr/local/bin/grin-node-start
     <net>` → `gnc_start_node_tmux`), so the boot path IS the launcher.
   - The minimal form appends the same exit-capture + `read` tail to the existing line.
 - *Until then:* the recorder handles such runs as `exit_unknown` (§8.6).
-- **Decided + built (Part 1, 2026-10-03): the minimal form.** One builder,
+- **Decided + built: the minimal form.** One builder,
   `_gnc_node_run_cmd <dir> <binary> [cron]` in `grin_node_control.sh`, emits the pane command
   (start stamp, `HOME=<dir> grin server run`, exit-code capture, `read`). The launcher (both
   branches), `gnk_autostart_enable` and Script 03 → G all use it; `cron` mode backslash-escapes
@@ -636,14 +636,14 @@ explicit "import channels from Access Watch" action. It never reads 082's `alert
   SIGTERM to pid 1041. That ends every session on grin's socket, so the testnet node dies, and
   nothing restarts it unless the testnet watchdog is enabled. A "the testnet node just died"
   report would look exactly like this. That is a hypothesis to keep in mind, not a confirmed cause.
-- *Resolution:* Part 1 owns the launch contract, so it fixes this. `gnc_kill_grin_procs` must
+- *Resolution:* the launch contract owns this, so it fixes it. `gnc_kill_grin_procs` must
   match on exe (`readlink -f /proc/<pid>/exe` = `<dir>/grin`, or `comm` = `grin`), never on
   cwd/cmdline alone. The recorder's pid lookup (§8.3) already requires exe. Fact-finding script B
   is restricted to testnet for this reason: a testnet stop matches only the testnet grin.
-- **Fixed (Part 1, 2026-10-03), still unreproduced.** `gnc_grin_pids_for_dir` matches the exe only
+- **Fixed, still unreproduced.** `gnc_grin_pids_for_dir` matches the exe only
   (`<dir>/grin`, or its `readlink -f`, with a ` (deleted)` suffix stripped), and
   `gnc_kill_grin_procs` uses it. Its full sweep (no dir) now also requires an exe named `grin`.
-  The Part 1 audit found the same cwd match in two more places, both now exe-based. One is
+  The launch-contract audit found the same cwd match in two more places, both now exe-based. One is
   Script 01's `start_grin_tmux` orphan kill, which SIGKILLed any cwd hit, so it could hit the
   shared server. The other is 081's remote start snippet.
 
@@ -653,7 +653,7 @@ explicit "import channels from Access Watch" action. It never reads 082's `alert
 - *Consequence:* a marker written unconditionally in the kill path would appear on every start,
   including the watchdog's restarts.
 - *Resolution:* §8.5 resolves it with `pid=`, `by=` and "write only when something is there".
-  Part 1 implements it, plus the never-downgrade rule (§8.5).
+  The launch contract implements it, plus the never-downgrade rule (§8.5).
 
 **F-3 — `gnc_owner_get_status` puts the owner secret in argv** (`curl -u grin:$secret`).
 
@@ -667,14 +667,14 @@ explicit "import channels from Access Watch" action. It never reads 082's `alert
 - *What it does:* `lib/grin-node.js` throws `HTTP 401` as `transport:'other'`, the same tag as a 5xx
   or an nginx error page.
 - *Consequence:* `auth` cannot be classified without reading the message.
-- *Resolution:* Part 6 adds the tag at the source (07 design §20.2).
+- *Resolution:* the pool side adds the tag at the source (07 design §20.2).
 
 **F-5 — the pool unit can already read the recorder's files.**
 
 - *What it does:* `grin-pool-manager` runs `ProtectSystem=strict` + `ProtectHome=yes` +
   `PrivateTmp=yes`, with no `InaccessiblePaths` and no `ReadOnlyPaths`. `strict` leaves `/opt`
   readable.
-- *Consequence:* Part 6 needs **no unit change**. The only requirement is the 0755/0644 modes in
+- *Consequence:* the pool side needs **no unit change**. The only requirement is the 0755/0644 modes in
   §8.7.
 - *Remaining check:* checklist G confirms the live unit matches the template, because an older
   install may differ.
@@ -697,11 +697,11 @@ The as-built record moved out of this design on 2026-10-03 and kept its numbers,
 
 | § | Content |
 |---|---|
-| 8.15 | Part 2 as-built deltas: the recorder core |
-| 8.16 | Part 3 as-built deltas: evidence, classification, the watchdog hook |
-| 8.17 | Part 4 as-built deltas: off-box alerts, the 082 extraction |
-| 8.18 | Part 5 as-built deltas: the key 7 sub-menu, Script 01, 08del, 089 |
-| 8.19 | The R1 review of Parts 1–5: fixed and open findings |
+| 8.15 | The recorder core as built |
+| 8.16 | Evidence capture, classification, the watchdog hook |
+| 8.17 | Off-box alerts, the 082 extraction |
+| 8.18 | Operator screens and lifecycle: the key 7 sub-menu, Script 01, 08del, 089 |
+| 8.19 | The post-build review: fixed findings are in the Build notes, open ones under Open items |
 | 8.20 | Launch-contract additions, and what reaches an installed box when |
 | 8.21 | `gne_classify`'s rule order as built |
 | 8.22 | Status, the VPS acceptance list, open items |

@@ -42,7 +42,7 @@ Free Grin Coin Portal: https://drop.grin.money/
 
 Solo Grin Mining Pool: https://solo.grin.money (user/pass disabled for easy viewing)
 
-Public Grin Mining Pool: https://grinium.com/ (in development)
+Public Grin Mining Pool: https://grinium.com/ 
 
 Grin Nostr Relay (Floonet) for Goblin wallet: https://relay.grin.money/
 

@@ -57,6 +57,7 @@ fi
 PGS_APP_DIR="/opt/grin/pubgames/${POOL_NET:-mainnet}"
 PGS_DATA_DIR="/opt/grin/pubgames-data/${POOL_NET:-mainnet}"
 PGS_DB="$PGS_DATA_DIR/grinium-games.db"
+PGS_RESTORE_MARK="$PGS_DATA_DIR/.restore-info"   # written by pgs_restore_db_from_archive
 PGS_LINK="/opt/grin/conf/grin_pubgames_link_${POOL_NET:-mainnet}"
 PGS_LOG="/opt/grin/logs/${PGS_SERVICE}.log"
 PGS_UNIT="/etc/systemd/system/${PGS_SERVICE}.service"
@@ -861,6 +862,16 @@ pgs_status() {
         sz=$(du -sh "$PGS_DB" 2>/dev/null | cut -f1 || echo "?")
         sv=$(_pgs_db_scalar "SELECT value FROM meta WHERE key = 'schema_version'" || true)
         echo -e "  Database  : $PGS_DB  ${DIM}($sz, schema v${sv:-?})${RESET}"
+        # Counts tell a restored DB from a fresh one at a glance (a fresh install has 0 / 0).
+        local np nm
+        np=$(_pgs_db_scalar "SELECT COUNT(*) FROM players" || true)
+        nm=$(_pgs_db_scalar "SELECT COUNT(*) FROM matches" || true)
+        echo -e "  Contents  : ${np:-?} players · ${nm:-?} matches"
+        if [[ -f "$PGS_RESTORE_MARK" ]]; then
+            echo -e "  Origin    : $(head -c 300 "$PGS_RESTORE_MARK" 2>/dev/null | head -1)"
+        else
+            echo -e "  Origin    : ${DIM}never restored on this box (created here, or restored before this was recorded)${RESET}"
+        fi
     else
         echo -e "  Database  : ${DIM}not created yet ($PGS_DB)${RESET}"
     fi
@@ -1083,14 +1094,23 @@ pgs_snapshot_db() { # <dest file>
 # Restore the games DB from a DECRYPTED pool archive, if it holds one. Asks first, default
 # Y (D18). Never fails the pool restore: every problem is a warning and rc 1 at most.
 # The old DB is kept beside it as grinium-games.db.pre-restore (one generation).
-pgs_restore_db_from_archive() { # <clear.tar.gz>
-    local clear="$1" rel="${PGS_DB#/}"
-    tar -tzf "$clear" "$rel" >/dev/null 2>&1 || return 0   # older archive / games never installed
+# PGS_RESTORE_RESULT tells the caller what happened, so it can SAY so on its summary
+# screen: absent (the archive holds no games DB) | declined | restored | failed.
+# A restore also writes $PGS_RESTORE_MARK (archive name + UTC time), which P → 5 prints —
+# the one place an operator can check later whether this box's games DB came from an archive.
+pgs_restore_db_from_archive() { # <clear.tar.gz> [archive label for the marker]
+    local clear="$1" label="${2:-}" rel="${PGS_DB#/}"
+    PGS_RESTORE_RESULT="failed"
+    if ! tar -tzf "$clear" "$rel" >/dev/null 2>&1; then   # older archive / games never installed
+        PGS_RESTORE_RESULT="absent"; return 0
+    fi
     echo ""
-    echo -e "  ${BOLD}This archive also holds the games database${RESET} ${DIM}(points, ratings, finished games).${RESET}"
-    echo -ne "  Restore the games database too? [Y/n]: "
+    echo -e "  ${BOLD}This archive holds the games database${RESET} ${DIM}(points, ratings, finished games).${RESET}"
+    echo -ne "  Restore the games database? [Y/n]: "
     local a; read -r a || a="n"   # EOF declines
-    if [[ "${a,,}" == "n" || "${a,,}" == "no" ]]; then info "Games database left as it is."; return 0; fi
+    if [[ "${a,,}" == "n" || "${a,,}" == "no" ]]; then
+        PGS_RESTORE_RESULT="declined"; info "Games database left as it is."; return 0
+    fi
 
     local tmpd; tmpd=$(mktemp -d /tmp/grin_pubgames_restore_XXXXXX 2>/dev/null) \
         || { warn "mktemp failed — games database NOT restored."; return 1; }
@@ -1126,6 +1146,9 @@ pgs_restore_db_from_archive() { # <clear.tar.gz>
     fi
     rm -rf "$tmpd"
     chmod 600 "$PGS_DB" 2>/dev/null || true
+    PGS_RESTORE_RESULT="restored"
+    printf 'restored %s from %s\n' "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" "${label:-a pool archive}" \
+        > "$PGS_RESTORE_MARK" 2>/dev/null || warn "Could not write $PGS_RESTORE_MARK (the restore itself stands)."
     if id "$PGS_USER" >/dev/null 2>&1; then
         chown -R "$PGS_USER:$PGS_USER" "$PGS_DATA_DIR" 2>/dev/null || warn "Could not chown $PGS_DATA_DIR to $PGS_USER."
     else
@@ -1137,6 +1160,82 @@ pgs_restore_db_from_archive() { # <clear.tar.gz>
             || warn "$PGS_SERVICE did not start — P → 4."
     fi
     return 0
+}
+
+# ─── 9) Restore ONLY the games DB from a pool archive ───────────────────────
+# For the box where Migrate IN / 2) Restore was answered "n", failed on the games step, or
+# ran before the games mattered. B → 2) Restore would also do it, but it rewinds pool.db,
+# the wallet and the WG identity too — never the tool for a games-only fix. This touches
+# the games DB and nothing else; the pool is not stopped. The decrypted archive holds the
+# wallet seed, so it lives in a mktemp file (0600) and is removed on every path.
+pgs_restore_menu() {
+    echo -e "\n${BOLD}Games — restore the games database from a pool archive (${POOL_NET_LABEL:-$POOL_NET})${RESET}"
+    echo -e "  ${DIM}Only the games DB is replaced. pool.db, wallet and config are not touched; the pool keeps running.${RESET}"
+    local f
+    for f in gbe_decrypt gbe_parse_date pbk_load_conf; do
+        declare -F "$f" >/dev/null 2>&1 || { error "Backup helper $f is not loaded — nothing changed."; return 1; }
+    done
+    command -v openssl >/dev/null 2>&1 || { error "openssl not found — cannot decrypt. Nothing changed."; return 1; }
+    pbk_load_conf 2>/dev/null || true
+
+    if [[ -f "$PGS_DB" ]]; then
+        echo -e "  Current DB: $PGS_DB  ${DIM}($(du -sh "$PGS_DB" 2>/dev/null | cut -f1 || echo "?"))${RESET}"
+        if [[ -f "$PGS_RESTORE_MARK" ]]; then echo -e "  ${DIM}$(head -1 "$PGS_RESTORE_MARK" 2>/dev/null)${RESET}"; fi
+    else
+        echo -e "  Current DB: ${DIM}none yet ($PGS_DB)${RESET}"
+    fi
+    echo ""
+
+    local -a baks=()
+    while IFS= read -r f; do [[ -n "$f" ]] && baks+=("$f"); done \
+        < <(ls -t "$PBK_BACKUP_DIR/${PBK_PREFIX}"*.tar.gz.enc 2>/dev/null || true)
+    if [[ "${#baks[@]}" -eq 0 ]]; then
+        warn "No ${PBK_PREFIX}* archives in $PBK_BACKUP_DIR — copy one there first. Nothing changed."
+        return 1
+    fi
+    echo -e "  ${BOLD}Pool archives (newest first):${RESET}"
+    local i=1
+    for f in "${baks[@]}"; do
+        echo -e "  ${GREEN}$i${RESET}) $(basename "$f")  ${DIM}($(du -sh "$f" 2>/dev/null | cut -f1 || echo "?"))${RESET}"
+        (( i++ ))
+    done
+    echo -e "  ${DIM}0) Cancel${RESET}"
+    echo -ne "${BOLD}Select archive [1-${#baks[@]}/0]: ${RESET}"
+    local sel; read -r sel || sel=0
+    [[ "$sel" =~ ^[0-9]+$ && "$sel" -ge 1 && "$sel" -le "${#baks[@]}" ]] || { info "Cancelled — nothing changed."; return 1; }
+    local chosen="${baks[$((sel-1))]}"
+
+    local d key pass clear
+    d=$(gbe_parse_date "$chosen") || { error "Cannot read the date from the file name. Nothing changed."; return 1; }
+    read -rs -p "  Personal key for this archive: " key || key=""; echo ""
+    [[ -n "$key" ]] || { warn "No key entered — nothing changed."; return 1; }
+    pass="${key}${d}"; unset key
+    clear=$(mktemp "/tmp/grin_pubgames_arc_XXXXXX.tar.gz") || { unset pass; error "mktemp failed — nothing changed."; return 1; }
+    if ! gbe_decrypt "$chosen" "$clear" "$pass"; then
+        unset pass; rm -f "$clear"; error "Wrong key or corrupt archive — nothing changed."; return 1
+    fi
+    unset pass
+    if ! tar -tzf "$clear" >/dev/null 2>&1; then
+        rm -f "$clear"; error "The decrypted file is not a readable archive — nothing changed."; return 1
+    fi
+    if ! tar -tzf "$clear" "${PGS_DB#/}" >/dev/null 2>&1; then
+        rm -f "$clear"
+        warn "This archive holds NO games database — it was made without one (games not installed on"
+        warn "  that box, or its snapshot failed there: usually python3 missing). Nothing changed."
+        return 1
+    fi
+    if [[ -f "$PGS_DB" ]]; then
+        echo -e "  ${YELLOW}Replacing the games DB loses every game played here since that archive was made.${RESET}"
+        echo -e "  ${DIM}The current DB is kept beside it as $(basename "$PGS_DB").pre-restore.${RESET}"
+    fi
+    local rc=0
+    pgs_restore_db_from_archive "$clear" "$(basename "$chosen")" || rc=1
+    rm -f "$clear"
+    case "$PGS_RESTORE_RESULT" in
+        declined) return 0 ;;
+        restored) pgs_installed || echo -e "  Next: ${BOLD}P → 1 Install${RESET}, then ${BOLD}P → 3 Nginx${RESET} — Install keeps this DB." ;;
+    esac
+    return "$rc"
 }
 
 # ─── Z) Cleanup hook (called from pool_cleanup) ──────────────────────────────
@@ -1201,10 +1300,11 @@ pool_games_menu() {
         echo -e "  ${GREEN}6${RESET}) Logs                   ${DIM}(tail -50 | less)${RESET}"
         echo -e "  ${YELLOW}7${RESET}) Rotate link secret     ${DIM}(atomic replace, no restarts)${RESET}"
         echo -e "  ${RED}8${RESET}) Uninstall              ${DIM}(keeps the database unless you confirm twice)${RESET}"
+        echo -e "  ${YELLOW}9${RESET}) Restore games DB       ${DIM}(from a pool archive — games DB only, pool untouched)${RESET}"
         echo ""
         echo -e "  ${RED}0${RESET}) Back"
         echo ""
-        echo -ne "${BOLD}Select [1-8/0]: ${RESET}"
+        echo -ne "${BOLD}Select [1-9/0]: ${RESET}"
         read -r c || c=0
         case "${c,,}" in
             "") continue ;;
@@ -1216,6 +1316,7 @@ pool_games_menu() {
             6) pgs_view_logs     || true ;;
             7) pgs_rotate_secret || true; _pool_pause ;;
             8) pgs_uninstall     || true; _pool_pause ;;
+            9) pgs_restore_menu  || true; _pool_pause ;;
             0|q|exit) return 0 ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac

@@ -538,7 +538,8 @@ pbk_restore() {
     # Games DB: its own question, default Y (D18). Skipped after a failed extraction — the
     # operator restores again cleanly anyway. Whatever happens, the pool restore goes on.
     if [[ "$xrc" -ne 1 ]] && declare -F pgs_restore_db_from_archive >/dev/null 2>&1; then
-        pgs_restore_db_from_archive "$tmp_clear" || warn "Games database not restored — the pool restore continues."
+        pgs_restore_db_from_archive "$tmp_clear" "$(basename "$chosen")" \
+            || warn "Games database not restored — the pool restore continues (P → 9 restores it later)."
     fi
     rm -f "$tmp_clear"
     case "$xrc" in

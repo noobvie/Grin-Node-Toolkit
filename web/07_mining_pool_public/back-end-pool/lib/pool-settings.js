@@ -113,7 +113,7 @@ const hasKey = (section, key) =>
 // Keys deleted for a SECURITY reason whose stored rows must never be read back. An ordinary
 // retired key just goes inert (getSection layers every stored row, but no consumer asks for
 // it); these are hidden outright, because "inert" still meant shipping the value to the admin
-// panel, and threat note #22 (design §19.13) says a stored legacy value never reaches a
+// panel, and threat note #22 (script07_design_games.md §19.13) says a stored legacy value never reaches a
 // browser. Rows are left in pool_config, not deleted: nothing reads them, and an operator who
 // needs the old verification tag can still recover it from a backup of the DB.
 const RETIRED_KEYS = {
@@ -131,7 +131,7 @@ const retiredReason = (section, key) =>
     ? RETIRED_KEYS[section][key] : null;
 
 // Analytics provider fields — the ONLY values that reach a <script> on a public page
-// (design §19.17 D22: provider-ID loaders only). Each is a strict pattern, never free text.
+// (script07_design_games.md §19.17 D22: provider-ID loaders only). Each is a strict pattern, never free text.
 // public_html/js/branding.js carries the same patterns and re-checks before loading.
 const ANALYTICS_PATTERNS = {
   ga_tracking_id: /^G-[A-Z0-9]{1,32}$/,
@@ -168,8 +168,8 @@ class PoolSettings {
       pool_name: 'GRINIUM',
       pool_tagline: 'Mine Grin, anywhere',
       pool_description: 'Mine Grin and have fun while you do it. GRINIUM is a low-fee PPLNS pool with anonymous Tor payouts, a per-address identity (no accounts, no sign-up), and live per-rig stats. Stack rewards on top of your shares with prize draws, join bonuses, streak rewards and a community fortune board — fair payouts for everyone, plus a little luck for the lucky. Point your miner at the nearest region and start earning in minutes.',
-      // `pool_visibility`, `address_whitelist`, `max_miners` and `mining_mode` were REMOVED
-      // 2026-09-02 (audit §J9-1). They were validated, audited, step-up gated and rendered in a
+      // No `pool_visibility`, `address_whitelist`, `max_miners` or `mining_mode` (audit §J9-1).
+      // They were validated, audited, step-up gated and rendered in a
       // purpose-built "Private (whitelisted only)" UI while NOTHING read any of them — the
       // stratum login gate checks is_banned and nothing else, so a pool set to private was
       // fully open. Deleted rather than wired up because "private" is a product mode, not a
@@ -181,7 +181,7 @@ class PoolSettings {
       // rows on an already-deployed pool are inert once the keys are gone.
       pool_fee_percent: 1.0,
       contact_email: 'support@grinium.com',
-      // No `homepage_banner` here — removed 2026-07-27 as dead (see the note in
+      // No `homepage_banner` here — it was dead (see the note in
       // admin-panel/settings-pool-info.html). Site notices are notices.banners, which
       // actually render. A pool that saved a value still has the orphan pool_config row;
       // nothing reads it, and it is no longer published in the public branding payload.
@@ -295,8 +295,8 @@ class PoolSettings {
       matomo_url: '',
       matomo_site_id: '',
       // custom_head_html / custom_body_html (raw HTML whose <script> nodes branding.js
-      // re-created so they ran, on every public page) were REMOVED 2026-10-03 — design
-      // §19.17 D22, Option B, Part C1. Not filtered: deleted. `<img onerror>` runs code, so a
+      // re-created so they ran, on every public page) are deleted — design
+      // script07_design_games.md §19.17 D22. Not filtered: deleted. `<img onerror>` runs code, so a
       // sanitiser would be a second thing to get right forever, and with a sign-in form on
       // every page there is no page left that may carry operator script. A row already stored
       // on a deployed pool is inert: RETIRED_KEYS below keeps it out of getSection() — so out
@@ -310,9 +310,9 @@ class PoolSettings {
       // Flat withdrawal fee (GRIN) deducted from every payout on every rail — recovers the
       // sender-paid on-chain network fee (~0.023 GRIN typical, weight-based not amount-based).
       // Must stay < min_withdrawal, and is never below MIN_WITHDRAWAL_FEE (0.04) — there is no
-      // "pool absorbs the fee" setting any more (2026-10-05).
+      // "pool absorbs the fee" setting.
       withdrawal_fee: 0.04,
-      // `auto_payout` + `payout_frequency` were REMOVED 2026-09-25 (impl doc D10, like D4): an
+      // No `auto_payout` + `payout_frequency` (impl doc D10, like D4): an
       // automatic-payout switch and schedule with a UI, read by nothing. Payouts are
       // miner-initiated by design — an ungated automatic trigger is what the ownership gate exists
       // to prevent. A pool that stored them keeps inert pool_config rows: getSection still merges
@@ -321,13 +321,13 @@ class PoolSettings {
       confirm_depth_testnet: 100,
       max_pending_withdrawals: 100,
       max_user_pending: 10,
-      // Change splitting (2026-10-05, impl doc §10.18): while the pool wallet holds fewer than this
+      // Change splitting (impl doc §10.18): while the pool wallet holds fewer than this
       // many spendable outputs, a payout's change is split into 2–3 outputs so the next payouts
       // find coins of their own instead of "another payment is ahead". 0 disables.
       payout_target_outputs: 8,
-      // `withdrawal_retry_delays` was REMOVED 2026-09-26: a Tor payout is tried once, so the retry
-      // ladder it configured is gone (it was also shadowed, audit §J9-8, and had no field). A stored
-      // row stays inert, like auto_payout above.
+      // No `withdrawal_retry_delays`: a Tor payout is tried once, so there is no retry ladder to
+      // configure (it was also shadowed, audit §J9-8, and had no field). A stored row stays
+      // inert, like auto_payout above.
       // Minutes a miner must wait after a reversed payout (slatepack expiry, Goblin failure, admin
       // cancel) before requesting another payout on ANY rail. A failed TOR payout does not start it
       // (it is refunded only on proof; see the scheduler's _assertNoRecentReversal). 0 disables.
@@ -339,9 +339,8 @@ class PoolSettings {
       // listener isn't answering over Tor now (probe = onion:80 SOCKS5 connect). Fails OPEN if
       // the pool box can't run the probe, so it never blocks every payout. ON by default.
       tor_preflight_gate: 'true',
-      // REMOVED 2026-09-26: tor_send_mode (the step-by-step Tor sender, F5, is deleted). Removed
-      // together with its field and validator, as F4 was; a stored row stays inert — getSection
-      // still merges it, the form never resends it, applyToConfig no longer reads it.
+      // No tor_send_mode: there is no step-by-step Tor sender. A stored row stays inert —
+      // getSection still merges it, the form never resends it, applyToConfig does not read it.
       // ── Goblin/Nostr payout rail (design §15). OFF by default. Relays + NIP-05 domains
       // are JSON arrays of strings; the domain list is the SSRF/typo-squat allowlist.
       nostr_payouts_enabled: 'false',
@@ -384,7 +383,7 @@ class PoolSettings {
       // Both are enforced server-side (auth.js _sessionPolicy / refreshAccessToken).
       session_timeout_hours: 1,
       session_absolute_hours: 12,
-      // `invite_codes_enabled` + `invite_codes` were REMOVED 2026-09-02 (audit §J9-8): the same
+      // No `invite_codes_enabled` / `invite_codes` (audit §J9-8): the same
       // unbuilt gated-membership idea as pool_info's whitelist keys, read by nothing.
       // Extra stratum passwords banned from the ownership gate, ON TOP of the hardcoded
       // seed in lib/owner-proof.js — additions-only: the seed and the structural rules
@@ -393,10 +392,9 @@ class PoolSettings {
       // Stored as a JSON array of lowercase strings.
       extra_banned_passwords: '[]',
       // Publish the network-map data feeds (/api/pool/topology + /api/network/peers)?
-      // ON by default since 2026-09-13 (was OFF): the map is a headline page in the public
-      // nav and sitemap, and with the feeds closed it rendered nothing useful — worse, until
-      // that date it rendered a SAMPLE globe that operators took for real data. Neither endpoint
-      // has ever returned an IP — no coordinate is resolved at all (an aggregate sits on its
+      // ON by default: the map is a headline page in the public
+      // nav and sitemap, and with the feeds closed it renders nothing useful. Neither endpoint
+      // returns an IP — no coordinate is resolved at all (an aggregate sits on its
       // country's centroid, and that country is published beside it; the one typed-in position
       // is a gateway's own, operator-declared on the Regions page) and peer IPs never leave
       // the DB — but both publish a per-country breakdown of who connects to this pool, so an
@@ -407,9 +405,9 @@ class PoolSettings {
       // k-anonymity floor applied when the above IS enabled: a country is omitted from the
       // public response unless it holds at least this many peers/miners. Rolled into an
       // "Other" bucket instead, so totals stay honest without naming the thin countries.
-      // Default 1 since 2026-09-13 (was 3) = no floor: a country lights up from its first
-      // miner. The old 3 meant a new pool's own country stayed dark until three rigs joined,
-      // which read as "the map is broken". Raise it on a pool where naming a one-miner country
+      // Default 1 = no floor: a country lights up from its first miner (a floor of 3 kept a
+      // new pool's own country dark until three rigs joined, which read as "the map is
+      // broken"). Raise it on a pool where naming a one-miner country
       // would point at a person. The SAME value floors the per-region miner counts on a
       // multi-region pool (/api/pool/stats/regions + history).
       network_map_min_bucket: 1,
@@ -434,8 +432,8 @@ class PoolSettings {
       // AND the recovery codes with no CLI means no way back into the panel.
       require_admin_totp: 'false',
     },
-    // The `alerts` section — nine keys, three of them live credentials — was REMOVED 2026-09-04
-    // (audit §J8-3, ruling §J13-2, decided in §J17). Every one of them was stored here, served
+    // There is no `alerts` section — nine keys, three of them live credentials — (audit §J8-3,
+    // ruling §J13-2, decided in §J17). Every one of them was stored here, served
     // back to the browser in cleartext and read by NOTHING: AlertDelivery takes its channels
     // from `config` (lib/alert-delivery.js:14-21), i.e. pool.json, and AlertMonitor takes its
     // thresholds from `config.alert_thresholds` — an OBJECT with eleven money keys, where this
@@ -447,7 +445,8 @@ class PoolSettings {
     // primitive, so making these keys live would turn a `secureAdmin` settings write into a
     // durable, restart-surviving beacon — a strictly worse thing to own than a missing feature.
     // Alerts are configured in pool.json, which needs root on the box. If this ever returns it
-    // goes through script07_design.md first, with §J13-2's three conditions met.
+    // must meet §J13-2's three conditions (script07_security_audit.md) and go through
+    // script07_design.md first.
     //
     // Orphan pool_config rows on an already-deployed pool are inert once the keys are gone.
     // Operator-authored content pages (HTML). Empty content = page disabled / hidden.
@@ -734,9 +733,9 @@ PASS      any-password-you-choose</code>
       donation_address: '',
       // Donor profiles + donor league (design §16 ranking, §18 reviewed profiles). Read ONLY
       // through donorSettings() in lib/donor-names.js, which bounds every value on read.
-      // `donor_censored_display` was REMOVED 2026-09-24 (§18 Part 3): names are pre-moderated,
-      // so there is no censored name to display. A row still stored for it is inert.
-      // `donor_name_blocklist` (the review queue's flag words) was RETIRED by Part C4 (§19.17.6):
+      // No `donor_censored_display`: names are pre-moderated (design §18), so there is no
+      // censored name to display. A row still stored for it is inert.
+      // `donor_name_blocklist` (the review queue's flag words) is retired (script07_design_games.md §19.17.6):
       // donor names are checked by the name rule against `names.blocked_words`, and the
       // operator's own entries were carried over once (retireDonorNameBlocklist below).
       donor_rank_window_days: 365,           // league window; 0 = lifetime
@@ -777,11 +776,11 @@ PASS      any-password-you-choose</code>
         { name: 'Grin Genesis Day', date: '01-15', pot_grin: 0, enabled: false },
       ]),
     },
-    // Games platform master switches (design §19 D12, §19.3), read by lib/games-link.js.
+    // Games platform master switches (script07_design_games.md §19 D12, script07_design_games.md §19.3), read by lib/games-link.js.
     //   mode   off     = /play/ answers 404 everywhere except its health check
     //          preview = /play/ works by direct URL, the public nav link stays HIDDEN
     //          on      = /play/ is live and the nav shows it (while the games service is up)
-    //   ON by default since Part C2 (§19.17.2, D30) — and still safe for a live pool, because
+    //   ON by default (script07_design_games.md §19.17.2, D30) — and still safe for a live pool, because
     //   this is only HALF the switch: what the pages see is the EFFECTIVE mode, the lower of
     //   this value and the games service's own launch state, which starts at `preview` on a
     //   fresh games DB and moves to `on` only from the games admin's Go live. So installing
@@ -796,7 +795,7 @@ PASS      any-password-you-choose</code>
       mode: 'on',
       chat_enabled: true,
     },
-    // Names (design §19.17.5, D28): the ONE blocked-word list for every public name a player
+    // Names (script07_design_games.md §19.17.5, D28): the ONE blocked-word list for every public name a player
     // types. Empty by default because the code seed (lib/name-rule.js SEED) always applies on
     // top; these are the operator's ADDITIONS, one per line, stored in the matching form, with an
     // optional `*` (match anywhere) or `=` (whole name only) prefix. Sent to the games service
@@ -864,13 +863,12 @@ PASS      any-password-you-choose</code>
   // are actually styled. Styled keys live in public_html/css/themes.css (+ the no-class
   // 'atomic' default in dashboard.css), and public-theme.js is what applies them.
   // 'dark' is the retired pre-mockup public default — still accepted for stored
-  // configs; the public pages normalise it to 'atomic' (since 2026-07 that default is
-  // the Reactor control-room skin). 'uranium' is the "Uranium Classic" theme (the
-  // pre-2026-07 uranium-lime default).
+  // configs; the public pages normalise it to 'atomic' (the Reactor control-room skin).
+  // 'uranium' is the "Uranium Classic" theme (the uranium-lime skin).
   //
   // 'cyber', 'gradient', 'matrix', 'naruto' and 'japan' are LEGACY ACCEPT-ONLY keys with
-  // no stylesheet anywhere. They were admin-panel palettes in js/theme.js, which nothing
-  // loaded after the 2026-06 admin rebuild and which was deleted in 2026-08. They stay in
+  // no stylesheet anywhere. They were admin-panel palettes in js/theme.js, which no page
+  // loads and which is deleted. They stay in
   // this list so an old stored config still validates instead of throwing at boot;
   // settings-common.js snaps such a value to a real theme in the picker. Do not add more.
   static THEME_KEYS = [
@@ -880,7 +878,7 @@ PASS      any-password-you-choose</code>
     'galaxy', 'winxp', 'aqua', 'comic',
   ];
 
-  // games.mode's allowed values (design §19 D12). lib/games-link.js reads the same list.
+  // games.mode's allowed values (script07_design_games.md §19 D12). lib/games-link.js reads the same list.
   static GAMES_MODES = ['off', 'preview', 'on'];
 
   // Validation rules per section
@@ -1031,7 +1029,7 @@ PASS      any-password-you-choose</code>
         return val;
       },
       // Every value below ends up building a <script> on every public page, so each is a
-      // strict pattern (design §19.17 D22). The script URLs used to accept anything
+      // strict pattern (script07_design_games.md §19.17 D22). A script URL must not accept anything
       // `new URL()` parses — javascript: and data: included.
       ga_tracking_id: (val) => {
         if (val && !ANALYTICS_PATTERNS.ga_tracking_id.test(String(val))) throw new Error('invalid GA tracking ID format (G- then letters/digits)');
@@ -1137,7 +1135,7 @@ PASS      any-password-you-choose</code>
       // a `number` row of +Inf that applyToConfig copied into config.min_withdrawal, where every
       // rail's `amount < minW` test refused forever. It survived restart and rendered as an EMPTY
       // field in the panel (JSON.stringify(Infinity) === 'null'), so it did not even look wrong.
-      // At least 1 GRIN (2026-10-05): it must stay above the withdrawal fee, which is now never
+      // At least 1 GRIN: it must stay above the withdrawal fee, which is never
       // below MIN_WITHDRAWAL_FEE — a floor at or under the fee makes every payout at it unpayable.
       min_withdrawal: (val) => {
         const n = parseFloat(val);
@@ -1169,7 +1167,7 @@ PASS      any-password-you-choose</code>
       // Upper bound is a sanity rail, not a policy: a fat-fingered 40 instead of 0.04 would
       // silently swallow a whole payout. The hard invariant (fee < min_withdrawal) is enforced
       // in validateConfig, which sees BOTH values — a per-field validator only sees its own.
-      // Floor = MIN_WITHDRAWAL_FEE (operator decision 2026-10-05: the fee is always charged; a
+      // Floor = MIN_WITHDRAWAL_FEE (operator decision: the fee is always charged; a
       // promotion runs at pool_fee_percent 0 instead). Number.isFinite, like min_withdrawal.
       withdrawal_fee: (val) => {
         const n = parseFloat(val);
@@ -1184,10 +1182,10 @@ PASS      any-password-you-choose</code>
         if (isNaN(n) || n < 0 || n > 1440) throw new Error('withdrawal_cooldown_minutes must be 0-1440');
         return n;
       },
-      // The two pending caps (2026-09-26). They had no validator: the form posts every field as
-      // text, so the first save stored '100' over the numeric default and the audit row named both
-      // keys as changed although nothing moved, and junk was stored as-is (the scheduler then fell
-      // back to its default without a word). Whole numbers only — Number(), not parseInt, so
+      // The two pending caps need a validator: the form posts every field as text, so without one
+      // the first save stores '100' over the numeric default and the audit row names both keys as
+      // changed although nothing moved, and junk is stored as-is (the scheduler then falls back
+      // to its default without a word). Whole numbers only — Number(), not parseInt, so
       // '12abc' is refused rather than read as 12. max_user_pending is not the per-address rule
       // (that is the hard one-pending check); it is only read by the unused canInitiateWithdrawal.
       max_pending_withdrawals: (val) => {
@@ -1350,7 +1348,7 @@ PASS      any-password-you-choose</code>
         return s;
       },
     },
-    // (no `alerts` validators — the section was removed, see the note in `defaults`)
+    // (no `alerts` validators — there is no such section, see the note in `defaults`)
     incentives: (() => {
       const percent = (name) => (val) => {
         const n = parseFloat(val);
@@ -1536,10 +1534,9 @@ PASS      any-password-you-choose</code>
         // can't be grepped for an address by harvesters; the frontend decodes them and
         // assembles the mailto: only on user interaction. See branding.js decodeEmail().
         contact_email_enc: b64(pool.contact_email),
-        // `homepage_banner` was published here until 2026-07-27 and nothing ever rendered
-        // it. Banners come from `announcements` further down (getActiveBanners()).
-        // `visibility` was published here until 2026-09-02 and no page ever read it; the key
-        // behind it is gone (§J9-1).
+        // No `homepage_banner` (nothing rendered it) — banners come from `announcements` further
+        // down (getActiveBanners()). No `visibility` (no page read it; the key behind it is
+        // gone, §J9-1).
         public_stratum_host: pool.public_stratum_host || '',
         founded_year: pool.founded_year || '',
         security_contact_enc: b64(pool.security_contact),
@@ -1597,7 +1594,7 @@ PASS      any-password-you-choose</code>
         structured_data_enabled: seo.structured_data_enabled === true || seo.structured_data_enabled === 'true',
         robots_noindex: seo.robots_noindex === true || seo.robots_noindex === 'true',
       },
-      // Provider-ID loaders only (design §19.17 D22): every field that reaches a <script> is
+      // Provider-ID loaders only (script07_design_games.md §19.17 D22): every field that reaches a <script> is
       // re-checked against its strict pattern here, and the two custom-HTML keys are gone.
       analytics: {
         provider: a.provider || 'none',
@@ -1679,8 +1676,8 @@ PASS      any-password-you-choose</code>
       .filter((b) => b.message.trim() !== '');
   }
 
-  // Linked content pages (the dynamic `pages` CMS table is the source of truth since
-  // 2026-06) as [{key, title}] for footer navigation. Excludes nav_location='none'
+  // Linked content pages (the dynamic `pages` CMS table is the source of truth)
+  // as [{key, title}] for footer navigation. Excludes nav_location='none'
   // (those are reachable by direct URL only, and stay out of the sitemap as well).
   // The sitemap calls PagesManager.listEnabled(), which applies the SAME three filters —
   // it differs only in also returning nav_location. Keep the two WHERE clauses in step.
@@ -1736,10 +1733,10 @@ PASS      any-password-you-choose</code>
       ? _flagBool(this.getSection('payout').dormancy_enabled) : null;
 
     const transaction = this.db.transaction(() => {
-      // Audit baseline (§J1-2). Before this pass, updateSection wrote NO admin_audit_log row
-      // while resetSection did — so restoring a section to defaults left a trail and *changing*
-      // it did not. Turning require_admin_totp off, moving pool_fee_percent, or widening the
-      // nostr_nip05_domains SSRF allowlist were all invisible.
+      // Audit baseline (§J1-2). updateSection must write an admin_audit_log row as resetSection
+      // does — otherwise restoring a section to defaults leaves a trail and *changing* it does
+      // not, and turning require_admin_totp off, moving pool_fee_percent, or widening the
+      // nostr_nip05_domains SSRF allowlist would be invisible.
       //
       // Read INSIDE the transaction, not before it: a baseline taken before BEGIN could be
       // invalidated by a concurrent admin write landing between the read and the transaction,
@@ -1881,7 +1878,7 @@ PASS      any-password-you-choose</code>
     return this.getAll();
   }
 
-  // Part C4 (design §19.17.6): `incentives.donor_name_blocklist` is retired into
+  // Design script07_design_games.md §19.17.6: `incentives.donor_name_blocklist` is retired into
   // `names.blocked_words`. The entries the operator added BEYOND the v1 starter list are carried
   // over ONCE: the old row is deleted in the same transaction as the merge, so its absence is the
   // "done" marker — a word the operator later deletes from Settings → Names never comes back.
@@ -1934,7 +1931,7 @@ PASS      any-password-you-choose</code>
     if (payout.withdrawal_fee !== undefined) {
       config.withdrawal_fee = payout.withdrawal_fee;
     }
-    // Floor first: a row stored before the 0.04 minimum (2026-10-05) may hold 0 or 0.02, and
+    // Floor first: a row stored before the 0.04 minimum existed may hold 0 or 0.02, and
     // applyToConfig runs on values the validator never saw. Raised, never rejected.
     if (!(Number(config.withdrawal_fee) >= MIN_WITHDRAWAL_FEE)) {
       console.warn(
@@ -1945,9 +1942,9 @@ PASS      any-password-you-choose</code>
     }
     // Cross-field guard, applied AFTER both are merged. The per-field validator can't see the
     // other value, and lowering min_withdrawal on its own can strand an already-stored fee above
-    // the new floor. A fee >= the floor makes an at-minimum payout net <= 0. The old fallback was
-    // 0 ("the pool absorbs it"), which no longer exists, so fall back to the minimum fee — the
-    // min_withdrawal validator keeps the floor above it, so that is always payable.
+    // the new floor. A fee >= the floor makes an at-minimum payout net <= 0. The fallback is the
+    // minimum fee, never 0 (there is no "pool absorbs it" setting) — the min_withdrawal
+    // validator keeps the floor above it, so that is always payable.
     if (config.withdrawal_fee >= config.min_withdrawal) {
       console.warn(
         `[settings] withdrawal_fee ${config.withdrawal_fee} is invalid against min_withdrawal ` +

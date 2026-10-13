@@ -53,8 +53,8 @@ function liveRigs(sessions) {
 }
 
 // ONE pass over the last seen_s of shares for every address, grouped by (address, rig).
-// This replaced two correlated subqueries PER LISTED ROW — COUNT(*) and MAX(created_at) over that
-// address's whole retained share history, i.e. the entire ~31 h table walked twice on every 30 s
+// Never two correlated subqueries PER LISTED ROW (COUNT(*) and MAX(created_at) over that
+// address's whole retained share history) — that walks the entire ~31 h table twice on every 30 s
 // refresh of a 500-row page, on the synchronous DB the stratum server shares (memory
 // project_pool_db_capacity: a scan there stalls share submission for every miner).
 // ⚠ The UPPER bound is load-bearing, not tidiness. With `created_at > ?` alone SQLite plans
@@ -120,10 +120,10 @@ function summarize(live, recent, now) {
   };
 }
 
-// Which accounts the admin list must show whatever their balance. The list is capped, and it used
-// to be simply the top N by balance — so a new miner (balance 0 until a block matures) could be
-// mining right now and not appear, and the status chips undercounted exactly the rows they exist
-// for. Priority, highest first:
+// Which accounts the admin list must show whatever their balance. The list is capped, and a cap
+// ranked by balance alone would hide a new miner (balance 0 until a block matures) who is mining
+// right now, so the status chips would undercount exactly the rows they exist for. Priority,
+// highest first:
 //   mined       PoW-backed: shared inside seen_s, or holds a MINING session. Ordered by Σdiff in the
 //               window, so if even these overflow the cap the biggest contributors stay listed.
 //   connecting  a session with no accepted share. LAST, and never above a balance row's slot by

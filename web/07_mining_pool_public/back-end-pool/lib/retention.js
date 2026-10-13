@@ -46,11 +46,11 @@ class RetentionManager {
 
     // Never prune at/above the oldest UNSETTLED block's PPLNS window. 'confirmed' counts as
     // unsettled: it has matured but not yet been distributed, and it still reads shares in
-    // [height - PPLNS, height]. Only 'immature' used to be considered here, which was fine
-    // while distribution kept up — but a block that stalls in 'confirmed' (node outage, a
-    // failing credit) could have its shares aged out from under it, and getSharesForDistribution
+    // [height - PPLNS, height]. Considering only 'immature' is fine while distribution
+    // keeps up — but a block that stalls in 'confirmed' (node outage, a
+    // failing credit) would have its shares aged out from under it, and getSharesForDistribution
     // returning empty makes rewards.js mark it 'paid' with the reward retained and the miners
-    // never credited. See audit §I9.
+    // never credited. See script07_security_audit_archive.md §I9.
     const imm = this.db.prepare(
       "SELECT MIN(height) AS h FROM blocks WHERE status IN ('immature', 'confirmed')"
     ).get();
@@ -129,14 +129,14 @@ class RetentionManager {
       result.alerts_deleted = r3.changes;
 
       // 4. Audit trail — miner-attributed rows pair a grin address with a coarsened origin
-      //    IP and previously accumulated forever. Pruned purely by age; no other table
+      //    IP and would otherwise accumulate forever. Pruned purely by age; no other table
       //    references admin_audit_log, so nothing breaks when rows leave.
       const auCut = now - auditKeepDays * 86400;
       const r4 = this.db.prepare('DELETE FROM admin_audit_log WHERE created_at < ?').run(auCut);
       result.audit_log_deleted = r4.changes;
 
       // 5. Goblin/Nostr replay-dedup ids (audit §J4-8). The bridge creates this table itself
-      //    and nothing ever pruned it: anyone can publish a kind-1059 event #p-tagged to the
+      //    and nothing else prunes it: anyone can publish a kind-1059 event #p-tagged to the
       //    pool's public key, and each one costs a PERMANENT row — the row is written before
       //    the wrap is decrypted, which is the right order (dedup ahead of an expensive nip44
       //    decrypt) but means undecryptable junk counts too. Unbounded growth on the same

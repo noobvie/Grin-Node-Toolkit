@@ -43,3 +43,11 @@ web/07_mining_pool_public/back-end-pool/lib/wallet-tor.js:isolation\stag,\sso\st
 web/07_mining_pool_public/back-end-pool/lib/wallet.js:v5\.4\.1\sand\sv5\.5\.0  STALE_TERM  evidence: the named params were checked identical in both versions
 web/07_mining_pool_public/back-end-pool/lib/wallet.js:previously\sissued\stoken  DIARY_DATE  false positive — describes token rotation, not history
 web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js:grin-wallet\sv5\.4\.1\swrites  STALE_TERM  upstream source citation (where kernel_excess is written) at the version read; not a claim about the shared pin
+web/07_mining_pool_public/back-end-pool/lib/ads.js:legacy\scode\sad\snever\sreaches  STALE_TERM  correct statement of the D22 rule (a stored legacy code row is never served), not a stale reference
+web/07_mining_pool_public/back-end-pool/lib/auth.js:previously\sissued\s\(or\sstolen\)  DIARY_DATE  false positive — describes refresh-token rotation, not history
+web/07_mining_pool_public/back-end-pool/lib/auth.js:previously\sissued\srefresh\stoken  DIARY_DATE  false positive — describes refresh-token rotation, not history
+web/07_mining_pool_public/back-end-pool/lib/db.js:one\sTor\sattempt,\sno\sretry\sladder  STALE_TERM  correct: names the legacy retry_reason column kept so old rows load
+web/07_mining_pool_public/back-end-pool/lib/db.js:written\sbefore\s2026-09-20  DIARY_DATE  evidence: identifies which stored rows the one-shot unit migration rescaled
+web/07_mining_pool_public/back-end-pool/lib/miners.js:deleted\sten$  DIARY_DATE  false positive — "ten minutes", the session sweeper timeout, not a date
+web/07_mining_pool_public/back-end-pool/lib/pool-settings.js:no\sretry\sladder\sto  STALE_TERM  correct: explains why withdrawal_retry_delays is absent
+web/07_mining_pool_public/back-end-pool/lib/pool-settings.js:js/theme\.js  STALE_TERM  correct: records why legacy theme keys are accept-only (their stylesheet source is deleted)

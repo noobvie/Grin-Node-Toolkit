@@ -298,9 +298,9 @@ class PostsManager {
     return true;
   }
 
-  // The starter post shipped with NO cover until 2026-07-27, and seedStarterPost() is
+  // The starter post originally shipped with NO cover, and seedStarterPost() is
   // one-shot (its marker, plus a bail-out if any post exists) — so on a pool that seeded
-  // before that date the post keeps cover_image = NULL and the blog card renders the 📝
+  // before the cover existed the post keeps cover_image = NULL and the blog card renders the 📝
   // placeholder instead of the artwork. Adding the field to the seed above only helps
   // brand-new installs, hence this one-time backfill.
   //

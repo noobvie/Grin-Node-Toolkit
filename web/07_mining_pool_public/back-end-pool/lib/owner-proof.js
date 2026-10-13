@@ -21,7 +21,7 @@ const geoip = require('./geoip');
 // trigger payouts for other people's addresses (each one burns a pool-paid network fee,
 // consumes a hot-wallet output, and force-moves coins the owner didn't ask to move).
 //
-// ── THE SET (design §17.2, replaced the 2-slot window on 2026-09-22) ──────────────────
+// ── THE SET (design §17.2) ───────────────────────────────────────────────────────────
 // Each (address, kind) owns up to PROOF_SET_MAX = 10 LIVE rows in `miner_proofs`. A value
 // already in the set refreshes its `last_seen_at`; a new one is inserted, evicting the
 // least-recently-SEEN live row when the set is full. `first_seen_at` never moves while a row is
@@ -35,7 +35,7 @@ const geoip = require('./geoip');
 // property; with ten slots per kind, different passwords on different sites all work.
 //
 // ── STORAGE ─────────────────────────────────────────────────────────────
-// Data minimisation (operator decision 2026-07-17): rows hold scrypt hashes, never a raw
+// Data minimisation (operator decision): rows hold scrypt hashes, never a raw
 // mining IP and never a raw password. ONE SALT PER ADDRESS (`miner_accounts.proof_salt`), so
 // a verify costs ONE scrypt whatever the set size — that is what makes a set of ten as cheap
 // as a window of two, and it is the whole reason the cap could be raised. Rows read
@@ -56,7 +56,7 @@ const geoip = require('./geoip');
 //
 // ⚠ PoW is a COST, not an identity. Anyone may mine to anyone's address, so "requires an
 // accepted share" narrows who can write to an address's proofs — it does not restrict it to
-// the owner. The 2026-08-26 audit (§J3) found three consequences, and all three answers are
+// the owner. Audit §J3 found three consequences, and all three answers are
 // still here; none should be removed without re-reading that section:
 //   · §J3-1 — both legs are written by ONE call on ONE share, so the AND-gate on the Goblin
 //     destination was never two factors. verifyOwnerProof therefore reports WHICH KIND of row
@@ -123,7 +123,7 @@ const normalizeIp = canonicalizeIp;
 
 // ─── Network-prefix coarsening (for the audit log) ──────────────────────────
 // The proof set stores scrypt hashes, so the DB holds no raw mining IP — but the
-// audit trail used to write the requester's FULL IP next to the grin address, re-creating
+// audit trail must not write the requester's FULL IP next to the grin address: that re-creates
 // exactly the (address, IP, time) linkage the hashing removed, and with no expiry.
 //
 // Hashing the audit IP too would destroy the log's purpose: incident response needs
@@ -425,17 +425,17 @@ function _upgradeV1Row(db, row, v2) {
 //     per address (and each guess forces a 16 MB scrypt — a CPU/mem-exhaustion lever).
 //   · per-ADDRESS (bare grin address) — counts only. Never denies. See below.
 //
-// WHY THE ADDRESS COUNTER NO LONGER DENIES (audit §J3-3). It used to, and that made the
+// WHY THE ADDRESS COUNTER DOES NOT DENY (audit §J3-3). Denying made the
 // anti-brute-force lock a griefing weapon aimed at the very people it protects: the eight
 // failures that armed it did not have to come from the person being locked out, so ~9
 // requests per 10-minute window from ONE address — under every rate bucket, from a target
 // list read straight off the public leaderboard — permanently denied a miner access to their
-// own balance, with no miner-facing appeal (the public cancel was removed in §E.1). Denial
-// is now keyed to the (address, origin) pair, so a stranger's failures can never refuse the
+// own balance, with no miner-facing appeal (there is no public cancel, §E.1). Denial
+// is keyed to the (address, origin) pair, so a stranger's failures can never refuse the
 // owner's attempt.
 //
 // The trade, stated so it is not rediscovered as a regression: an attacker with N source IPs
-// now gets 8 guesses per IP against one address instead of 8 in total. The per-IP cap of 20
+// gets 8 guesses per IP against one address instead of 8 in total. The per-IP cap of 20
 // still bounds each origin, so a dictionary run needs roughly one fresh IP per 20 guesses —
 // a real botnet — and what it buys is griefing, not theft (Tor pays the address's own onion,
 // a slatepack is encrypted to it, and the one rail that can redirect money now demands two
@@ -454,9 +454,9 @@ const LOCKOUT_MS = 5 * 60 * 1000;      // 5 min lockout once a window is exhaust
 const ATTACK_DELAY_MS = 2000;          // per-attempt delay while an address is under attack
 const _fails = new Map();              // key -> { count, first, lockedUntil }
 
-// Bounded, self-sweeping (audit §J3-6). Entries used to be created on every failure and
-// removed ONLY by a later success, with no expiry pass and no ceiling — so every key an
-// attacker touched once and abandoned stayed for the life of the process. Sweeping happens
+// Bounded, self-sweeping (audit §J3-6). Entries are created on every failure and removed by a
+// later success; without an expiry pass and a ceiling, every key an attacker touched once
+// and abandoned would stay for the life of the process. Sweeping happens
 // opportunistically on write rather than on a timer: this module is required by one-shot
 // scripts and test harnesses, and a module-level setInterval would keep those processes alive.
 const FAILS_SWEEP_MS = 60 * 1000;      // at most one sweep per minute
@@ -620,7 +620,7 @@ async function _captureProof(db, grinAddress, kind, value, now, mayDisplace, aud
   // this capture awaited the v1 checks above, a capture of the SAME value could have inserted
   // it, or rewritten the v1 row we matched as v2. Missing either sent this capture down the
   // insert path, where _makeRoom evicted an owner's proof for a row that already existed
-  // (Part 4 review: two NAT'd rigs reaching PROOF_MIN_SHARES together cost a full set two rows).
+  // (two NAT'd rigs reaching PROOF_MIN_SHARES together would cost a full set two rows).
   const rows = _proofRows(db, grinAddress, kind);
   const row = (preMatch && rows.find((r) => r.hash === preMatch.hash)) ||
               rows.find((r) => sameDigest(r.hash, v2)) || null;
@@ -649,7 +649,7 @@ async function _captureProof(db, grinAddress, kind, value, now, mayDisplace, aud
     // holds that value — the owner's old CGNAT or re-leased IP — launder it into an AGED leg
     // for the destination gate. A value returning to the live set is treated like any other
     // new value (a non-anchor one is re-inserted with first_seen_at = now), which is also what
-    // the 2-slot window did. The owner's other live proofs keep their ages (Part 4 review).
+    // the 2-slot window did. The owner's other live proofs keep their ages.
     db.prepare('UPDATE miner_proofs SET evicted_at = NULL, first_seen_at = ?, last_seen_at = ? WHERE id = ?')
       .run(now, now, row.id);
     _upgradeV1Row(db, row, v2);
@@ -714,8 +714,8 @@ async function _captureProof(db, grinAddress, kind, value, now, mayDisplace, aud
 // compressed IPv6 like `2001:db8::1`): the IP set needs the canonical form, the password set
 // the raw one. Plus one per legacy v1 row of every kind tried — up to 6 on a migrated account
 // that still holds its anchor/last/prev of both kinds, so the transitional ceiling is 8, above
-// the old window's 6, falling as captures rewrite v1 rows. §F2's per-IP throttle is sized
-// against this number — see audit §F2 and design §17.7 before changing it.
+// the old window's 6, falling as captures rewrite v1 rows. The per-IP throttle is sized against this number —
+// see script07_implementation.md §17.7 and script07_security_audit_archive.md §F2 before changing it.
 async function verifyOwnerProof(db, grinAddress, submitted, clientIp, opts) {
   const allowAnchor = !(opts && opts.allowAnchor === false);
   const cip = clientIp ? canonicalizeIp(clientIp) : null;
@@ -902,7 +902,7 @@ function migrateProofSet(db) {
 
       // Hash any pre-v1 PLAINTEXT value before opening the transaction: scryptSync is ~16 MB
       // and ~100 ms, and holding the write lock across it buys nothing. No VPS has ever held
-      // one of these — the column has stored hashes since 2026-07-17 — so this is a
+      // one of these — the column has only ever stored hashes — so this is a
       // correctness path, not a hot one.
       let salt = null;
       for (const e of plan) {

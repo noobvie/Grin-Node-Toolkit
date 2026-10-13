@@ -89,10 +89,9 @@ class MinerManager {
     if (session) {
       this.activeSessions.delete(sessionId);
       // is_online is per ADDRESS, sessions are per RIG. Flip it off only when this was the
-      // address's last live session — until 2026-09-21 every close wrote 0 unconditionally, so
-      // a two-rig miner read "Offline" (account page, admin lists) the moment either rig
-      // dropped or reconnected, while the other kept submitting. Nothing but the next login
-      // ever set it back.
+      // address's last live session — writing 0 on every close would make a two-rig miner read
+      // "Offline" (account page, admin lists) the moment either rig dropped or reconnected,
+      // while the other kept submitting, and nothing but the next login would set it back.
       if (!this.getSessionsByMiner(session.grinAddress).length) {
         this.updateMinerOnline(session.grinAddress, false);
       }
@@ -227,10 +226,8 @@ class MinerManager {
 
   // How many DIFFERENT stratum passwords are this address's live rigs using?
   //
-  // It used to matter because the store was a last-2 window: three rigs on three passwords
-  // overwrote each other, so which one worked depended on which rig last submitted a share.
   // The proof SET (design §17) holds ten per kind, so different passwords on different rigs
-  // are fine and the page says so. What this readout is for now is the CAP: a farm running
+  // are fine and the page says so. What this readout is for is the CAP: a farm running
   // more than PROOF_SET_MAX distinct passwords will find the least recently used ones dropping
   // off, and that is worth telling them before withdrawal day rather than after it.
   //

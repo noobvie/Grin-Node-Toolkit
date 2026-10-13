@@ -198,8 +198,8 @@ class AssetManager {
 }
 
 module.exports = AssetManager;
-// Shared with index.js's CMS media upload (POST /api/admin/media), which had no content check
-// at all and derived the stored extension from the client-declared MIME — audit §J10-1.
+// Shared with index.js's CMS media upload (POST /api/admin/media): the stored extension must
+// come from the detected bytes, never the client-declared MIME — audit §J10-1.
 module.exports.detectImage = detectImage;
 module.exports.WEBP_SNIFFER = WEBP_SNIFFER;
 // The binary signatures alone, for lib/donor-profiles.js (design §18.5): a donor banner must be

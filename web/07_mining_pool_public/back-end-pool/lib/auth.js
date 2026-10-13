@@ -51,9 +51,9 @@ class AuthManager {
 
     // Per-TOKEN code budget for the second login step, keyed on the twofa_token's jti.
     //
-    // The 2FA guess counter used to be per-IP only (ADMIN_2FA_FAIL_THRESHOLD in index.js),
-    // and the twofa_token was unlimited-use for its whole 300 s. An attacker who already
-    // holds the password could therefore mint one token, fan it out to N hosts, and spend
+    // A per-IP guess counter alone (ADMIN_2FA_FAIL_THRESHOLD in index.js) with an
+    // unlimited-use twofa_token (300 s) would let an attacker who already
+    // holds the password mint one token, fan it out to N hosts, and spend
     // 20 guesses per host — extra IPs bought extra guesses, so "mandatory 2FA" cost only
     // patience. Nothing made the attacker pay per ACCOUNT, which is the axis that matters.
     // Binding the budget to the token fixes the axis: N hosts now share 5 guesses, while an
@@ -101,7 +101,7 @@ class AuthManager {
 
   // opts.firstAdminOnly — refuse if an admin already exists, checked ATOMICALLY with the insert.
   //
-  // That check used to sit in index.js's /api/auth/register handler, ahead of
+  // That check must not sit in index.js's /api/auth/register handler ahead of
   // `await registerAdmin(...)`. The await is a ~300 ms bcrypt hash and it yields the event
   // loop, so two registrations posted concurrently in the pre-registration window both read
   // "0 admins", both proceeded, and — because they carried different usernames — the UNIQUE
@@ -625,8 +625,8 @@ class AuthManager {
 
   // Verify a 6-digit TOTP OR a one-time backup recovery code. BOTH are consumed on success.
   //
-  // Recovery codes were always single-use; TOTP codes were not. `totp.verify` compared against
-  // steps -1…+1 and returned, and nothing recorded that a step had been spent — so one observed
+  // Recovery codes are single-use by construction; a TOTP code is only so if the spent step is
+  // recorded. `totp.verify` compares against steps -1…+1 and returns, so on its own one observed
   // code (shoulder-surf, a screenshot in a support thread, a phishing page that harvests
   // password + code) stayed valid for its full ~90 s and could be replayed any number of times,
   // at /api/auth/login/totp, /api/admin/2fa/disable and /api/admin/2fa/recovery/regenerate in
@@ -842,8 +842,8 @@ class AuthManager {
   //
   // This is the WHOLE gate on every freshAdmin route — withdrawal retry/cancel, payout freeze,
   // dormancy send-payout, prize-pool topup, wallet adopt-identity — so its password check has
-  // to be at least as well defended as login()'s, and it was not defended at all: no pair
-  // lockout, no failure record, nothing but one audit row per attempt. A session thief holding
+  // to be at least as well defended as login()'s: without a pair lockout and a failure
+  // record there is nothing but one audit row per attempt. A session thief holding
   // a stolen access token could grind it at the `admin` bucket's 2400/min. Audit §J2-1.
   //
   // The pair lock is checked FIRST, before the bcrypt, for the same two reasons login() gives:

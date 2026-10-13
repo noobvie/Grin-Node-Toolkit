@@ -1,4 +1,4 @@
-// Process-wide route caches that more than one route file touches (H4 / I7).
+// Process-wide route caches that more than one route file touches.
 //
 // A `let` exported from a module cannot be reassigned by an importer, so the reassigned caches
 // live on this HOLDER object and every site writes `caches.topology = …` / reads

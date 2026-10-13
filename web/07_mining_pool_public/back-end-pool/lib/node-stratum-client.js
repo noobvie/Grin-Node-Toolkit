@@ -203,8 +203,8 @@ class NodeStratumClient {
   // JSON.parse — the node then logs nonces ending in zeros and rejects the share as Invalid
   // PoW). The node's serde wants a bare u64 number, so the quotes come off on the wire only.
   //
-  // ⚠ This used to be `.replace(/"nonce":"(\d+)"/, …)` over the whole serialised blob —
-  // NON-GLOBAL, so FIRST MATCH WINS — while handleSubmit forwarded `{ ...params }` verbatim,
+  // ⚠ Never `.replace(/"nonce":"(\d+)"/, …)` over the whole serialised blob — it is
+  // NON-GLOBAL, so FIRST MATCH WINS — and handleSubmit forwards `{ ...params }` verbatim,
   // every miner-invented key included, in the miner's own insertion order. A nested object
   // keyed `nonce` holding a quoted number therefore satisfied this pattern while being
   // invisible to the parse-side regex, so a miner-chosen key decided what the node parsed

@@ -216,7 +216,7 @@ class HashrateTracker {
   // SUM(gps × window_seconds) / totalWindowSeconds is the time-weighted average GPS across the
   // whole window (gaps count as zero), rewarding sustained mining rather than a peak burst.
   // ── §J12-1 ────────────────────────────────────────────────────────────────────────────────
-  // This used to aggregate the RAW hashrate_history table:
+  // Aggregating the RAW hashrate_history table directly is the trap:
   //
   //     WHERE recorded_at > ? GROUP BY grin_address
   //
@@ -782,7 +782,7 @@ class HashrateTracker {
   //   Counts are MAX, not AVG, on purpose: the hourly value is already "distinct miners active
   //   that hour", and averaging it across a day counts every idle hour as a zero — the live pool
   //   showed 2 miners for 3 hours of a 16-hour day and the Month/Year/All charts rounded
-  //   6/16 to 0 miners for that day while the Day chart showed 2 (2026-09-20). "Online" at a
+  //   6/16 to 0 miners for that day while the Day chart showed 2. "Online" at a
   //   coarser bucket means the busiest hour in it; the frontend labels it as the peak.
   //   worker_count is NULL for hours rolled up before the column existed (MAX of all-NULL is
   //   NULL) — the chart draws those as a gap, never as 0.
@@ -1079,7 +1079,7 @@ class HashrateTracker {
         FROM withdrawals WHERE status = 'confirmed' AND grin_address != 'pool_fee'
       `).get();
       // The operator's own take, as actually sent out of the pool_fee bucket (published by
-      // operator decision 2026-10-05, beside — never inside — what miners were paid).
+      // operator decision, beside — never inside — what miners were paid).
       const opw = this.db.prepare(`
         SELECT COALESCE(SUM(amount), 0) AS s, COUNT(*) AS n
         FROM withdrawals WHERE status = 'confirmed' AND grin_address = 'pool_fee'

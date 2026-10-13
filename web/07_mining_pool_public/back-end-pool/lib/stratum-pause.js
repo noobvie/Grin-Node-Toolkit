@@ -7,7 +7,7 @@
 // Split of responsibilities:
 //   · lib/stratum-server.js owns the MECHANISM: pause() / resume() / acceptState / inflight.
 //   · this module owns everything else: the single-row `stratum_control` table (lib/db.js), the
-//     caps (§21.7), the transition guard (§21.2.1), the one 15 s tick (§21.6), the boot re-derive
+//     caps (§21.7), the transition guard (§21.2 step 1), the one 15 s tick (§21.6), the boot re-derive
 //     (§21.5), the audit rows (§21.10) and the stratum_bind_failed alert (§21.11).
 //
 // ⚠ The state is deliberately NOT a pool_config key (§21.1): the section Save, the section
@@ -84,7 +84,7 @@ class StratumPause {
     this.alertMonitor = alertMonitor || null;
     this.row = emptyRow();
     // Result of the LAST write attempt. false = the in-memory state is ahead of the DB, so a
-    // restart would re-derive something else (§21.2.2 — "will NOT survive a restart").
+    // restart would re-derive something else (§21.2 step 2 — "will NOT survive a restart").
     this.persisted = true;
     this._transition = null;
     this._timer = null;
@@ -334,7 +334,7 @@ class StratumPause {
 
   // ─── internals ────────────────────────────────────────────────────────────────────────────
 
-  // §21.2.1: at most one transition at a time. The check-and-set runs synchronously (before the
+  // §21.2 step 1: at most one transition at a time. The check-and-set runs synchronously (before the
   // first await), so two calls in one tick cannot both pass it.
   async _exclusive(fn) {
     if (this._transition) {
@@ -352,7 +352,7 @@ class StratumPause {
   async _doPause({ source, reason, by, until, action, adminId, ip, extra }) {
     const since = this._now();
     Object.assign(this.row, { paused: 1, source, reason, paused_by: by || null, since, settled_at: null, until });
-    // Persist FIRST (§21.2.2): a crash at any later step then boots paused. A failed write does
+    // Persist FIRST (§21.2 step 2): a crash at any later step then boots paused. A failed write does
     // NOT stop the pause — DB trouble is one of the reasons to pause.
     const persistedAtStart = this._persist();
     this._changed();
@@ -496,7 +496,7 @@ function isoZ(s) {
   return s == null ? null : new Date(s * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
-// ─── HTTP request parsing (design §21.10) — used by the admin routes in index.js ─────────────
+// ─── HTTP request parsing (design §21.10) — used by the admin routes in routes/ ─────────────
 
 // An operator-typed window time. Zone-qualified ISO-8601 ONLY (`Z` or `±hh:mm`): a zone-less
 // string is REFUSED, because Date.parse reads one as the SERVER's local time — a window typed as

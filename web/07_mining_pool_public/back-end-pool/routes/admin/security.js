@@ -1,5 +1,4 @@
-// /api/admin/audit-log, security/*, alerts/*, me, _authcheck. Moved verbatim out of routes/index.js
-// (code-layout refactor P8); registrations stay at 2-space indent and write FULL paths.
+// /api/admin/audit-log, security/*, alerts/*, me, _authcheck. Registrations stay at 2-space indent and write FULL paths.
 
 const express = require('express');
 const { requireAdmin } = require('../../lib/auth-middleware');
@@ -157,10 +156,10 @@ module.exports = function createAdminSecurityRoutes(ctx, guards) {
       // non-numeric one binds as NaN and throws — so ?limit=-1 quietly returned the whole
       // audit table. Same idiom as /api/admin/withdrawals.
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
-      // The action list MUST match what the writers actually emit. It previously asked for
+      // The action list MUST match what the writers actually emit. Asking for
       // 'login_failure' while the login route writes 'login_failed' (and the 2FA step writes
-      // 'login_2fa_failed'), so this endpoint returned successes and auto-bans only — the
-      // panel's "Failed login" row could never appear and the operator had no way to see a
+      // 'login_2fa_failed'), so this endpoint would return successes and auto-bans only — the
+      // panel's "Failed login" row could never appear and the operator would have no way to see a
       // brute-force attempt. 'login_failure' is kept for rows written by older builds.
       //
       // Username comes from the audit row's details when admin_id is NULL, which is the case

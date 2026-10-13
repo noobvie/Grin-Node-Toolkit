@@ -63,7 +63,7 @@ class ShareValidator {
 
   // Synchronous on purpose (better-sqlite3 is). This was declared `async` with no caller
   // awaiting it, so GET /api/account/:addr/shares serialised the Promise and answered `{}`
-  // for every address — a dead public endpoint nobody consumed (found 2026-09-21).
+  // for every address — a dead public endpoint nobody consumed.
   getSharesForMiner(grinAddress, limit = 100, offset = 0) {
     try {
       const stmt = this.db.prepare(`
@@ -86,12 +86,12 @@ class ShareValidator {
   // are two different addresses, so one's valid share can never be rejected as the other's
   // duplicate even when both use the default worker name.
   //
-  // ⚠ `workerName` is accepted but DELIBERATELY NOT HASHED (audit §J6-1). It used to be in the
-  // key, justified as the cross-miner-collision guard — but grinAddress already was that guard,
-  // and the worker label is whatever the miner types after the dot. Including it meant one
-  // solved (pre_pow, nonce, pow) re-submitted under N rig labels inserted N times and multiplied
+  // ⚠ `workerName` is accepted but DELIBERATELY NOT HASHED (audit §J6-1). Putting it in the
+  // key was once justified as the cross-miner-collision guard — but grinAddress already was that guard,
+  // and the worker label is whatever the miner types after the dot. Including it would let one
+  // solved (pre_pow, nonce, pow) re-submitted under N rig labels insert N times and multiply
   // that address's PPLNS weight N-fold for one unit of real work, from one socket, inside the
-  // token bucket. That is the SAME defect the 2026-07-17 pre_pow fix closed, re-entered through
+  // token bucket. That is the SAME defect the pre_pow dedup key closed (verified 2026-07-17), re-entered through
   // a second miner-chosen field. The parameter stays so call sites and tests keep their shape,
   // and shares.worker_name is still written — as attribution, never as part of the uniqueness
   // decision. Do not put it back.

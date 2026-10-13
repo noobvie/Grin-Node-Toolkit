@@ -1,9 +1,9 @@
 // /api/account/* — the address-as-identity miner surface: public reads (summary, shares,
 // workers, hashrate, ledger, payout history, earnings, Tor check) and the owner-proof-gated
 // writes (payouts, payment proofs, Goblin destination, donor profile).
-// Moved verbatim out of routes/index.js (code-layout refactor P5); registrations stay at 2-space
+// Registrations stay at 2-space
 // indent and write FULL paths. Instances/state come from ctx. The `/api/account` address shape
-// gate (app.use) stays in routes/index.js, mounted before this file (H7).
+// gate (app.use) stays in routes/index.js, mounted before this file.
 
 const express = require('express');
 const multer = require('multer');
@@ -35,7 +35,7 @@ module.exports = function createAccountRoutes(ctx) {
     }
   });
 
-  // REMOVED (2026-07-28): GET /api/account/:addr/balance — every field it returned
+  // Deliberately absent: GET /api/account/:addr/balance — every field it returned
   // (balance, balance_locked, their sum) is already in GET /api/account/:addr, which is what
   // the account page actually calls. Nothing in public_html/ or the admin panel referenced it.
   // A second, undocumented way to read the same number is one more surface to keep honest.
@@ -213,9 +213,9 @@ module.exports = function createAccountRoutes(ctx) {
         has_recorded_ip: !!(ipSet.live || ipSet.has_anchor),
         has_recorded_pass: !!(passSet.live || passSet.has_anchor),
         // How many mining IPs and rig passwords are on record for this address, against the
-        // cap (design §17.2 #7). Replaced the `evidence` object, which reported WHEN a proof
-        // last changed so the page could warn about it: with ten slots per kind a second site
-        // no longer pushes the first one out, so a new value beside the old ones is ordinary
+        // cap (design §17.2 #7). Not an `evidence` object that reports WHEN a proof
+        // last changed so the page can warn about it: with ten slots per kind a second site
+        // does not push the first one out, so a new value beside the old ones is ordinary
         // operation, not an alarm. What a miner actually needs is the count — "are all three
         // of my rigs on record?" — and when one was last added.
         proofs,
@@ -225,7 +225,7 @@ module.exports = function createAccountRoutes(ctx) {
         // (audit §J3-5), and since the tag is per RIG the reading is too — `workers` names the
         // donating rigs. Zeros while the operator has donations off (nothing moves).
         // The v1 aliases `donation_percent` (= pct_max) and `donor_name` / `donor_name_state`
-        // were dropped by §18 Part 5 once the account page read `donation` and `donor_profile`
+        // were dropped once the account page read `donation` and `donor_profile`
         // instead, as §18.3 planned. They were read by no other page.
         donation: donation,
         // Design §18.6 — the pre-moderated nickname + banner (see donorProfile above).
@@ -296,7 +296,7 @@ module.exports = function createAccountRoutes(ctx) {
     }
   });
 
-  // REMOVED (2026-07-17): POST /api/account/:addr/min-payout — the per-account payout threshold
+  // Deliberately absent: POST /api/account/:addr/min-payout — the per-account payout threshold
   // was an auto-payout-era relic. Withdrawals are miner-initiated with an explicit amount, so
   // only the pool-wide config.min_withdrawal floor applies (enforced in withdrawal-scheduler).
   // The miner_accounts.min_payout column stays in the schema but is read by nothing.
@@ -316,9 +316,9 @@ module.exports = function createAccountRoutes(ctx) {
   //   out = payout LOCKS (the full gross amount, fee included) + debits that draw on spendable
   //         (donations, dormant sweep, admin manual payout) + non-payout reversals (clawbacks)
   // The settling debits are neutral here — they only drain `balance_locked`, which the lock
-  // already showed leaving. Until 2026-09-24 this was inverted (the lock hidden, the settling
-  // debit shown): a payout that SUCCEEDED balanced by luck, but one that FAILED showed only its
-  // return, so Σ in outran Σ out by every failed payout and the balance looked unexplained.
+  // already showed leaving. Inverting this (the lock hidden, the settling
+  // debit shown) balances by luck: a payout that SUCCEEDS nets out, but one that FAILS shows only its
+  // return, so Σ in outruns Σ out by every failed payout and the balance looks unexplained.
   // Discriminator: a settling 'withdrawal' debit is the only debit that lowers balance_locked
   // (_releaseLockAndDebit); the admin manual payout's debit leaves it equal. 'withdrawal_fee'
   // debits are written ONLY by _releaseLockAndDebit, so they are always settling.
@@ -425,10 +425,10 @@ module.exports = function createAccountRoutes(ctx) {
         // now come from POST /api/account/:addr/withdrawals/proofs, behind the same ownership
         // proof a withdrawal needs. The flag stays so an accounting export still says which
         // payouts HAVE a proof to fetch.
-        // The miner's own terms, not the pool's costs (2026-10-05): `withdrawal_fee` is the flat
+        // The miner's own terms, not the pool's costs: `withdrawal_fee` is the flat
         // fee they were charged and `received` what reached their wallet. The REAL on-chain fee
-        // (withdrawals.fee) is the pool's expense, paid from the pool wallet — it used to sit in
-        // a `fee` column here and read as a second, smaller fee contradicting the one charged.
+        // (withdrawals.fee) is the pool's expense, paid from the pool wallet — it must NOT sit in
+        // a `fee` column here, where it reads as a second, smaller fee contradicting the one charged.
         // Both are blank unless the payout was paid: a failed or expired one charged nothing.
         const lines = ['id,requested_at_utc,confirmed_at_utc,method,status,amount,withdrawal_fee,received,has_kernel_proof'];
         for (const r of rows) {
@@ -464,7 +464,7 @@ module.exports = function createAccountRoutes(ctx) {
       // error behind it, which can carry pool-wallet figures — is admin-only and never selected here.
       // fee_charged = the flat withdrawal fee the miner pays (the account page's "Withdrawal fee"
       // column); fee = the REAL on-chain fee the pool wallet paid, kept for API compatibility but
-      // no longer shown to the miner — it is the pool's cost, not theirs.
+      // not shown to the miner — it is the pool's cost, not theirs.
       const rows = db.prepare(
         `SELECT id, amount, fee, fee_charged, method, status, fail_code, created_at, confirmed_at, kernel_excess, payment_proof
          FROM withdrawals WHERE grin_address = ?
@@ -488,13 +488,13 @@ module.exports = function createAccountRoutes(ctx) {
   // address ↔ on-chain-transaction index. Nothing else the pool publishes is as durable: a
   // balance changes, a kernel is in the chain forever.
   //
-  // So the kernel is now the ONE field on the account page that costs an ownership proof — the
+  // So the kernel is the ONE field on the account page that costs an ownership proof — the
   // same proof (recent mining IP or rig password) a withdrawal needs, verified by the same
   // function, audited on both paths, and on the same `withdraw` bucket. It is a POST because
   // the proof travels in a body, never in a URL that lands in an access log.
   //
   // Deliberately NOT on the loose `public` bucket: verifyOwnerProof runs scrypt (16 MB), so a
-  // public-bucket proof endpoint is a CPU lever — that is §F2, and this route must not re-open it.
+  // public-bucket proof endpoint is a CPU lever — that is script07_security_audit_archive.md §F2, and this route must not re-open it.
   router.post('/api/account/:addr/withdrawals/proofs', rateLimiter.middleware('withdraw'), async (req, res) => {
     try {
       const { addr } = req.params;
@@ -660,7 +660,7 @@ module.exports = function createAccountRoutes(ctx) {
   });
 
   // Miner-initiated withdrawal (address-as-identity). Two rails, BOTH ownership-gated
-  // (operator decision 2026-07-17 — "every money action goes behind the gate"): even though
+  // (operator decision — "every money action goes behind the gate"): even though
   // neither rail can steal (Tor pays only to the address's own wallet; a slatepack is encrypted
   // to the address), an ungated trigger let anyone reading the public leaderboard force payouts
   // for other people's addresses — burning pool-paid network fees, consuming hot-wallet outputs
@@ -682,8 +682,8 @@ module.exports = function createAccountRoutes(ctx) {
 
       if (method === 'tor') {
         // Cheap admission checks FIRST — audit §J12-12. The pre-flight probe below builds up to
-        // two fresh Tor circuits (≤~32 s worst case at the 8 s default), and it used to run
-        // before any of this, so a miner holding one valid proof could force 20 circuit builds
+        // two fresh Tor circuits (≤~32 s worst case at the 8 s default), and it must not run
+        // before any of this, or a miner holding one valid proof could force 20 circuit builds
         // a minute at the `withdraw`
         // bucket while every withdrawal they asked for would have been refused anyway. This is
         // an early refusal, not the gate: createWithdrawal repeats all of it authoritatively
@@ -697,7 +697,7 @@ module.exports = function createAccountRoutes(ctx) {
           return res.status(e.code && e.code < 600 ? e.code : 400).json({ error: e.message });
         }
 
-        // Tor pause (anti-abuse, 2026-09-26): 5 counted failed Tor payouts in 24 h pause Tor for this
+        // Tor pause (anti-abuse): 5 counted failed Tor payouts in 24 h pause Tor for this
         // address for 24 h from the 5th. Checked BEFORE the pre-flight probe, so a paused address
         // cannot make the pool build Tor circuits either; nothing is locked. Slatepack is not
         // paused — the page shows its offer beside the pause line. createWithdrawal checks again.
@@ -715,7 +715,7 @@ module.exports = function createAccountRoutes(ctx) {
           });
         }
 
-        // "Another payment is ahead" (2026-10-05): other payouts hold the wallet's spendable coins,
+        // "Another payment is ahead": other payouts hold the wallet's spendable coins,
         // so this one would fail at send. Refused here, before the probe and before any lock —
         // nothing is deducted, and the miner is told how many payments are ahead and how long.
         // Fails open on an unreadable wallet; the send-time NotEnoughFunds path stays the authority.
@@ -741,9 +741,9 @@ module.exports = function createAccountRoutes(ctx) {
           // The requester may have LEFT while that ran. The probe can take ~32 s at the defaults
           // and nginx gives /api/ 30 s — past that it has already shown the browser a 504
           // ("Withdrawal failed") and closed our socket, but Express still runs this handler, so
-          // it used to lock the balance and queue a payout the miner had just been told failed.
+          // it would lock the balance and queue a payout the miner has just been told failed.
           // res.destroyed, NOT req.destroyed: Node ≥ 16 sets the latter for every request once
-          // its body is read (scripts/test-payout-rails.js proves both). (Review fix, Part 5.)
+          // its body is read (scripts/test-payout-rails.js proves both).
           if (res.destroyed) {
             auditOwnerProof(db, { action: 'withdraw_tor', grinAddress: addr, ip: reqIp, ok: false, details: { reason: 'requester_gone', probe: reach.reason } });
             console.warn(`[tor-preflight] requester left during the probe (${reach.reason || 'unknown'}) — no withdrawal created`);
@@ -841,8 +841,8 @@ module.exports = function createAccountRoutes(ctx) {
   });
 
   // Show a pending slatepack payout's S1 again — the miner closed the tab, reloaded, or never
-  // copied it. Before this, the S1 lived only in the create response, so a lost tab meant waiting
-  // out the TTL and the post-reversal cooldown (~1 h) even when the wallet already held a valid
+  // copied it. Without this, the S1 lives only in the create response, so a lost tab means waiting
+  // out the TTL and the post-reversal cooldown (~1 h) even when the wallet already holds a valid
   // response. It moves no money and creates nothing: the SAME stored S1 is returned, never a new
   // slate, so re-fetching cannot double anything.
   //
@@ -914,7 +914,7 @@ module.exports = function createAccountRoutes(ctx) {
   // where the money goes — a leaked first-ever rig password must not be a permanent key to
   // somebody else's payout destination.
   //
-  // PURPOSE (design §18.6, 2026-09-24). The same gate guards a donor-profile change, which speaks
+  // PURPOSE (design §18.6). The same gate guards a donor-profile change, which speaks
   // for the address on a public page. `purpose` picks the WORDING only — the rules are identical
   // — so a donor is never told they are "changing a payout destination". The 'destination' texts
   // are the pre-§18 strings, unchanged byte for byte.
@@ -950,7 +950,7 @@ module.exports = function createAccountRoutes(ctx) {
     const minAgeSec = Math.max(MIN_PROOF_AGE_SEC, (Math.max(0, Number(cooldownH) || 0) * 3600));
     // A leg is acceptable only from a LIVE row of the proof set (never an evicted anchor), and
     // only once it has aged — age is first_seen_at, which a refresh never moves (design §17.2
-    // #2) and a returning evicted anchor restarts (§17.7), so an anchor cannot be re-activated
+    // #2) and a returning evicted anchor restarts (script07_implementation.md §17.7), so an anchor cannot be re-activated
     // into an aged leg.
     // age_seconds === null means the row predates the timestamp columns; treat an unknown
     // age as OLD, not as fresh — those rows were written before this attack was reachable,
@@ -978,7 +978,7 @@ module.exports = function createAccountRoutes(ctx) {
     // Checked in order so a wrong IP costs one failed attempt, not two.
     // A leg that VERIFIED but as the other kind (an IP in the password box, or the reverse) is
     // refused as `wrong_kind`: the verifier's own reason there is its success code, `match`,
-    // which read as `ok:false, reason:'match'` in the response and the audit row (§18.11 Part 6).
+    // which read as `ok:false, reason:'match'` in the response and the audit row (script07_implementation.md §18.11).
     const ipProof = await verifyOwnerProof(db, addr, ipRaw, reqIp);
     if (!ipProof.ok || ipProof.method !== 'ip') {
       return deny('ip', ipProof.ok ? 'wrong_kind' : (ipProof.reason || 'ip_no_match'));
@@ -1125,9 +1125,9 @@ module.exports = function createAccountRoutes(ctx) {
     }
   });
 
-  // ─── Donor profile — nickname + banner (design §18.4–§18.6, names §19.17.6) ──────────────
+  // ─── Donor profile — nickname + banner (design §18.4–§18.6) ──────────────
   // A donor sets a public name and a banner (the banner shows only for the top N of the league).
-  // A NAME is checked automatically and goes live at once (Part C4): the name rule with the donor
+  // A NAME is checked automatically and goes live at once (script07_design_games.md §19.17.6): the name rule with the donor
   // shape, banned names, "taken", one change per 7 days. A BANNER is still PRE-MODERATED: it
   // becomes a pending donor_requests row that nothing public reads until an admin approves it.
   //
@@ -1145,7 +1145,7 @@ module.exports = function createAccountRoutes(ctx) {
     // read (and dropped) before the 413 goes out, so the body's total size is bounded by nginx
     // instead: the public `location /api/` sets no client_max_body_size, so nginx's 1 MB default
     // applies. That fits a 300 KB banner plus multipart overhead. Verified with a fake request
-    // stream 2026-09-24.
+    // stream.
     // The +1: busboy trips LIMIT_FILE_SIZE when a file REACHES the limit, so a limit of exactly
     // MAX_BANNER_BYTES refused a file of exactly 300 KB, which the rule allows. With +1, 300 KB
     // reaches validateBanner (the precise check) and 300 KB + 1 is refused here.
@@ -1159,7 +1159,7 @@ module.exports = function createAccountRoutes(ctx) {
     not_a_donor: [409, "A donor profile unlocks after your first donation. Add a donateN tag to a rig's worker name (for example rig01-donate10); once that rig has earned a share of a matured block, you can set your name and banner here."],
     conflict: [409, 'Another change to this profile was saved at the same moment. Reload the page and try again.'],
     donations_off: [503, 'Donations are switched off on this pool, so donor profiles cannot be changed right now.'],
-    // Part C4 — the name answers. not_allowed (a reserved or blocked word) and unavailable (banned
+    // The name answers. not_allowed (a reserved or blocked word) and unavailable (banned
     // OR taken) are generic on purpose: which list hit, and banned vs taken, is the admin's.
     name_not_allowed: [400, DonorProfiles.NAME_TEXT.name_not_allowed],
     name_unavailable: [409, DonorProfiles.NAME_TEXT.name_unavailable],
@@ -1281,8 +1281,8 @@ module.exports = function createAccountRoutes(ctx) {
     }
   });
 
-  // Public cancel REMOVED 2026-07-17 (operator decision). Both parked states self-recover —
-  // Tor auto-reverses after max retries, slatepack auto-refunds via TTL expiry — so a public
+  // No public cancel (operator decision). Both parked states self-recover —
+  // a failed Tor payout is refunded at once, slatepack auto-refunds via TTL expiry — so a public
   // cancel was pure abuse surface: in Grin a "failed" send may actually have posted, and a
   // late cancel reversing the lock would double-pay. Operator support cases go through the
   // admin route (/api/admin/withdrawals/:id/cancel, step-up gated, on the payments page).

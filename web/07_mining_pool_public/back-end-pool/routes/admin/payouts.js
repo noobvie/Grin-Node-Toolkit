@@ -2,9 +2,9 @@
 // cancel), the payout kill-switch, wallet ↔ ledger reconciliation, abandoned-balance disposition,
 // operator revenue, the wallet-send audit + wallet-identity switch, the financial CSV exports and
 // the payout-request audit. Every money-moving POST is freshAdmin (step-up).
-// Moved verbatim out of routes/index.js (code-layout refactor P6); registrations stay at 2-space
+// Registrations stay at 2-space
 // indent and write FULL paths. Instances/state come from ctx; the guard chains are the ONE
-// createGuards(ctx) instance routes/index.js built (I7), handed in as `guards`.
+// createGuards(ctx) instance routes/index.js built, handed in as `guards`.
 
 const express = require('express');
 const { REVENUE_ADDRESS_HOLD_S } = require('../../lib/config');
@@ -23,7 +23,7 @@ module.exports = function createAdminPayoutsRoutes(ctx, guards) {
   const { secureAdmin, freshAdmin } = guards;
   const router = express.Router();
 
-  // REMOVED: /api/test/initiate-withdrawal endpoint
+  // Deliberately absent: /api/test/initiate-withdrawal endpoint
   // Reason: Test endpoint disabled in production. Allowed admin to initiate arbitrary withdrawals.
   // Use /api/admin/withdrawals to view and manage withdrawal scheduler instead.
   // For testing: drive withdrawalScheduler.sendWithdrawal() directly in backend tests.
@@ -46,7 +46,7 @@ module.exports = function createAdminPayoutsRoutes(ctx, guards) {
       // (withdrawal-scheduler chainStateOf). Admin-only: no public route carries it.
       const now = Math.floor(Date.now() / 1000);
       const chainState = (r) => (withdrawalScheduler ? withdrawalScheduler.chainStateOf(r, now) : null);
-      // tor_final_slate (the step-by-step Tor send, deleted 2026-09-26; nothing writes it now) can
+      // tor_final_slate (the step-by-step Tor send, deleted; nothing writes it now) can
       // hold a complete signed transaction on an old row — never served. tor_step (equally inert)
       // stays. slatepack_s1 (the manual rail's stored S1) is
       // served by exactly one route — the owner's ownership-gated re-fetch — and not here either.
@@ -112,7 +112,7 @@ module.exports = function createAdminPayoutsRoutes(ctx, guards) {
   // Funds model (see withdrawal-scheduler.js): tor_checking / tor_held keep the amount in
   // balance_locked; tor_failed has already reversed it back to spendable balance.
 
-  // REMOVED 2026-09-26: re-queuing a Tor payout. It re-sent a payout on the operator's click —
+  // Deliberately absent: re-queuing a Tor payout. It re-sent a payout on the operator's click —
   // for a tor_failed row after re-locking the balance, for a retry_scheduled one as-is — and a
   // refunded miner now just requests again. Kept as a 410 so a stale admin page says why instead
   // of failing obscurely; nothing else ever used it (the Slatepack / Goblin rails have no retry).
@@ -176,7 +176,7 @@ module.exports = function createAdminPayoutsRoutes(ctx, guards) {
   // Cancel a never-sent withdrawal (tor_checking). tor_held is deliberately NOT cancellable (its one
   // send may have landed — see force-refund above), and neither is a legacy retry_scheduled row:
   // cancelling refunded it with no wallet check, and the startup migration settles those.
-  // tor_failed is not cancellable either (2026-09-27, operator decision): it was refunded when it
+  // tor_failed is not cancellable either (operator decision): it was refunded when it
   // failed, so there is nothing to return. Cancel only relabelled it 'cancelled', and four readers
   // key on 'tor_failed' — auditWalletSends (counts 'cancelled' as recorded, hiding a double pay),
   // the Tor pause, the pool-side payout_failed alert and _assertNoRecentReversal's exclusion.
@@ -403,7 +403,7 @@ module.exports = function createAdminPayoutsRoutes(ctx, guards) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // ─── Operator revenue (2026-10-05) ──────────────────────────────────────────
+  // ─── Operator revenue ──────────────────────────────────────────
   // The pool_fee bucket had no way out: the account page refuses the pseudo-address, no admin
   // route debited it, and a raw `grin-wallet send` from the pool wallet drops the wallet without
   // touching the ledger — reconciliation then reads a coverage shortfall and freezes every miner
@@ -643,7 +643,7 @@ module.exports = function createAdminPayoutsRoutes(ctx, guards) {
     }
   });
 
-  // Operator revenue statement, one row per UTC day (2026-10-05) — the export an accountant asks
+  // Operator revenue statement, one row per UTC day — the export an accountant asks
   // for. fee-revenue.csv above is per BLOCK and multiplies by TODAY's fee %, so it is an estimate;
   // this one reads what was actually booked:
   //   income      pool_fee credits from block rewards + flat withdrawal fees (the ledger)

@@ -1,6 +1,6 @@
 // The explorer key this pool's links use — shared by routes/pool.js (stats, pool-info) and the
 // admin blocks route. Stateless: each caller builds its own copy from the same ctx, so there is
-// no cache and nothing to keep to one home (I7).
+// no cache and nothing to keep to one home.
 const explorers = require('../../lib/explorers');
 
 module.exports = function createCurrentExplorerKey(ctx) {

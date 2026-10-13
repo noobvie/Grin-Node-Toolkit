@@ -1,5 +1,4 @@
-// CSV streaming helpers for the admin exports (H4). Moved VERBATIM from routes/index.js (P2).
-// Stateless apart from the rateLimiter binding adminCsvGate needs, hence a factory.
+// CSV streaming helpers for the admin exports. Stateless apart from the rateLimiter binding adminCsvGate needs, hence a factory.
 
 module.exports = function createCsv(ctx) {
   const { rateLimiter } = ctx;
@@ -12,9 +11,9 @@ module.exports = function createCsv(ctx) {
     const s = v === null || v === undefined ? '' : String(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  // STREAMED, not accumulated (audit §J12-5). This used to build one string in memory by
-  // map+join over every row before writing a byte — on tables that are never pruned, from a
-  // handler with no row cap, on the 2400/min `admin` bucket. res.write per row lets Node's
+  // STREAMED, not accumulated (audit §J12-5). Building one string in memory by
+  // map+join over every row before writing a byte is unbounded — tables that are never pruned, a
+  // handler with no row cap, the 2400/min `admin` bucket. res.write per row lets Node's
   // own backpressure bound the peak instead of the row count deciding it.
   const sendCsv = (res, filename, header, rows, note = '') => {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -29,7 +28,7 @@ module.exports = function createCsv(ctx) {
   };
 
   // Row cap + cursor for the two POOL-WIDE admin exports. The public, per-address exports have
-  // had `CSV_MAX_ROWS = 50000` and a dedicated 10/min `export` bucket since §C1; the pool-wide
+  // had `CSV_MAX_ROWS = 50000` and a dedicated 10/min `export` bucket since script07_security_audit_archive.md §C1; the pool-wide
   // ones — over `withdrawals` and `blocks`, neither of which is ever pruned — had neither, and
   // rode the bucket the polling dashboard needs kept loose. An operator who genuinely wants the
   // whole ledger pages with `?before=<cursor>`; truncation and the next cursor are reported as

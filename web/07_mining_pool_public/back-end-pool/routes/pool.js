@@ -1,6 +1,6 @@
 // /api/pool/*, /api/stratum/*, /api/network/*, /api/config/* — the public read APIs behind the dashboard,
 // miners-stats, blocks, payments, network-map and connect pages.
-// Moved verbatim out of routes/index.js (code-layout refactor P4); registrations stay at 2-space
+// Registrations stay at 2-space
 // indent and write FULL paths. Instances/state come from ctx.
 
 const express = require('express');
@@ -84,8 +84,8 @@ module.exports = function createPoolRoutes(ctx, app) {
         active_workers: (sstats.sessions || []).length,
         share_quality: sq,
         // admin-shell.js decoratePoolIdentity() reads these two to prime its explorer links and
-        // the testnet pill. `network` was read there but never sent until 2026-09-24, so the
-        // admin panel assumed mainnet on every pool. Both are already public (pool-info).
+        // the testnet pill. `network` is read there and must be sent, or the
+        // admin panel assumes mainnet on every pool. Both are already public (pool-info).
         network: config.network || 'mainnet',
         explorer: currentExplorerKey(),
         // Stratum intake (design §21.9): { accepting, paused_since, resumes_at, planned }, ISO Z.
@@ -101,9 +101,9 @@ module.exports = function createPoolRoutes(ctx, app) {
   // up/down + node peer count + sync flag only. NEVER exposes wallet balances or addresses
   // (those stay on the admin-only /api/admin/health/* endpoints).
   //
-  // SERVER-SIDE cached, 15 s, with in-flight dedup. It used to set `Cache-Control: max-age=15`
-  // and nothing else — a hint to the client, which costs an attacker one header to ignore and
-  // which nothing on the box consults (audit §J12-2). Every hit made TWO upstream calls: the
+  // SERVER-SIDE cached, 15 s, with in-flight dedup. `Cache-Control: max-age=15` on its own
+  // would be only a hint to the client, which costs an attacker one header to ignore and
+  // which nothing on the box consults (audit §J12-2). Without the cache every hit makes TWO upstream calls: the
   // node Owner API and the wallet Owner API (AES-GCM over the ECDH session). At the ~10 req/s
   // nginx allows from one host that is 10 node calls and 10 wallet calls a second from an
   // unauthenticated client — against the same singleton WalletAPI whose session the payout
@@ -208,7 +208,7 @@ module.exports = function createPoolRoutes(ctx, app) {
       const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
       const status = req.query.status;
       const valid = ['immature', 'confirmed', 'paid', 'orphaned'];
-      // Explicit columns since 2026-07-28 (was `SELECT *`): `nonce` is the winning solution's
+      // Explicit columns (never `SELECT *`): `nonce` is the winning solution's
       // nonce and `id`/`created_at` are internal row bookkeeping — none of the three is read by
       // blocks.html or the reactor fuel-rods, and publishing the nonce serves no verifier (the
       // block hash already anchors the find on any chain explorer). Everything the two consumers
@@ -223,7 +223,7 @@ module.exports = function createPoolRoutes(ctx, app) {
       else if (status && valid.includes(status)) { sql += ' WHERE status = ?'; params.push(status); }
       sql += ' ORDER BY height DESC LIMIT ? OFFSET ?';
       params.push(limit, offset);
-      // found_by MASKED since 2026-09-02 (audit §J11-1). blocks.html already displayed only
+      // found_by MASKED (audit §J11-1). blocks.html already displayed only
       // shortAddr(found_by) — the full value went out solely in the row's `title` tooltip — but
       // this route is offset-paged with no upper bound over a table that is never pruned, so it
       // was the cheapest walk of every full address the pool has ever seen, and that walk is
@@ -253,7 +253,7 @@ module.exports = function createPoolRoutes(ctx, app) {
     }
   });
 
-  // Balance distribution across accounts, richest first. Addresses are MASKED here (2026-07-28):
+  // Balance distribution across accounts, richest first. Addresses are MASKED here:
   // unmasked this was a public rich-list — a full address paired with a balance, sorted so the
   // largest balances come first, which is a targeting list, not transparency. The distribution
   // itself is legitimate pool-health data, and it survives masking intact; the address→balance
@@ -307,8 +307,8 @@ module.exports = function createPoolRoutes(ctx, app) {
       `).all(cutoff, limit);
       const total = db.prepare(
         "SELECT COUNT(*) AS n FROM blocks WHERE status != 'orphaned' AND found_at > ?").get(cutoff);
-      // MASKED since 2026-09-02 (audit §J11-1). This is a full address paired with a lifetime
-      // reward total and sorted descending — byte for byte the shape §C1 masked on
+      // MASKED (audit §J11-1). This is a full address paired with a lifetime
+      // reward total and sorted descending — byte for byte the shape script07_security_audit_archive.md §C1 masked on
       // `/api/pool/miners`, published at ten times the row cap and over a 10-year window.
       res.json({
         days,
@@ -322,16 +322,16 @@ module.exports = function createPoolRoutes(ctx, app) {
 
 
   // Recent confirmed payouts (public payout teletype + payment-history table). Explicit column
-  // list since 2026-07-28: `SELECT *` published the whole withdrawals row, which carries the
+  // list (never `SELECT *`): it would publish the whole withdrawals row, which carries the
   // pool's operational internals — slate_id, tor_check_result, retry_count, next_retry_at,
   // cancel_reason, cancelled_by. Those describe how the pool's payout machinery and a miner's
   // wallet behaved, are read by nothing public, and read as a per-miner reliability record.
-  // grin_address was FULL until 2026-09-02 (address-as-identity, and both consumers deep-linked
-  // the row to /account-settings.html?addr=); it is MASKED now — see the note at the query —
-  // and neither consumer links the row any more.
+  // grin_address is MASKED (address-as-identity once let both consumers deep-link
+  // the row to /account-settings.html?addr=) — see the note at the query —
+  // and neither consumer links the row.
   //
-  // `kernel_excess` — the payout's Tx ID, i.e. its on-chain kernel excess — was dropped from this
-  // feed 2026-09-02 (audit §J11-2) and RE-PUBLISHED 2026-09-25 by operator decision, so
+  // `kernel_excess` — the payout's Tx ID, i.e. its on-chain kernel excess — is published in this
+  // feed by operator decision (audit §J11-2 had withheld it), so
   // payment-history.html P-05 can carry a Tx ID column linking each payout to the chain explorer
   // (the 2miners-style public payments list). The operator accepted the cost: a masked address +
   // amount + time beside a kernel lets a chain analyst tag that kernel as this pool's payout, and
@@ -352,14 +352,14 @@ module.exports = function createPoolRoutes(ctx, app) {
         FROM withdrawals WHERE status = 'confirmed'
         ORDER BY confirmed_at DESC LIMIT ?
       `);
-      // MASKED since 2026-09-02 (audit §J11-1). Both consumers already truncated for display —
+      // MASKED (audit §J11-1). Both consumers already truncated for display —
       // the homepage teletype calls truncAddr(), payment-history.html renders truncAddr() with
       // the full value in a `title` — so nothing on screen changes; what goes away is the
       // machine-readable full-address list behind them.
       // has_kernel_proof ("seen mined") stays beside the kernel and keeps its old meaning (any
       // non-empty kernel on record): the homepage teletype and the P-05 status badge read the
       // boolean, so a shape-rejected value hides the link without un-mining the row.
-      // Operator revenue withdrawals are listed too (operator decision 2026-10-05: the pool's own
+      // Operator revenue withdrawals are listed too (operator decision: the pool's own
       // take is published beside the miners' payouts). Their grin_address is the 'pool_fee'
       // bucket, which masks to nonsense, and their destination is the operator's private wallet —
       // so neither is emitted: the row says `operator: true` and a fixed label instead.
@@ -470,7 +470,7 @@ module.exports = function createPoolRoutes(ctx, app) {
     }
   });
 
-  // Donor wall — design §16.6/§16.7 (Part 4, 2026-09-21). The league: every address with a
+  // Donor wall — design §16.6/§16.7. The league: every address with a
   // donation debit inside the ranking window, scored GRIN-in-window × loyalty multiplier
   // (distinct months with a debit, +P %/month, capped) and ranked; a capped "past donors"
   // strip for the ones with nothing in the window (a thank-you is not revoked because the
@@ -484,7 +484,7 @@ module.exports = function createPoolRoutes(ctx, app) {
   // unexpired name reaches a card (lib/donor-profiles.js publicProfiles, read inside donorWall);
   // `name` is null for everything but `shown`. No pending text, reject reason or decider ever
   // leaves this route (scripts/test-public-leakage.js §9, scripts/test-donor-league.js).
-  // Banners (§18 Part 4): approved + unexpired, and only on league cards ranked ≤
+  // Banners (design §18): approved + unexpired, and only on league cards ranked ≤
   // donor_banner_slots — the slot rule lives in donorWall, not here.
   //
   // The live readings (rigs_donating, pct_min/pct_max, active_donors) are gated on
@@ -553,11 +553,11 @@ module.exports = function createPoolRoutes(ctx, app) {
   //  · luck_100_pct      = mean over last 100 blocks of (round_shares / network_difficulty) × 100
   //    (UNDER 100% = luckier than expected; uses captured per-block columns, NULL rows skipped)
   //
-  //    This ratio used to be the other way up here, which made "luck" mean the OPPOSITE of
+  //    This ratio must not be the other way up, or "luck" means the OPPOSITE of
   //    what it means everywhere else on the same site: BlockManager.getBlocksHistory and both
   //    blocks tables compute shares ÷ difficulty (the 2miners convention, and the one the
-  //    public blocks page spells out in prose), so one page rendered "luck 87%" as a good
-  //    round while the dashboard rendered "luck 87%" as a bad one. One convention, and it is
+  //    public blocks page spells out in prose), so one page renders "luck 87%" as a good
+  //    round while the dashboard renders "luck 87%" as a bad one. One convention, and it is
   //    the documented one.
   // Current network difficulty is cached ~60s to avoid hammering the node.
   //
@@ -786,7 +786,7 @@ module.exports = function createPoolRoutes(ctx, app) {
     }
   });
 
-  // ─── Network-map exposure gate (access.network_map_public, ON by default since 2026-09-13) ──
+  // ─── Network-map exposure gate (access.network_map_public, ON by default) ──
   // Guards the two feeds behind /network-map.html. Neither has ever returned an IP — peer IPs
   // never leave the DB and no coordinate is ever resolved: an aggregate marker sits on its
   // country's exact centroid (geoip.countryCentroid) and the country itself is published beside
@@ -794,8 +794,8 @@ module.exports = function createPoolRoutes(ctx, app) {
   // both publish a per-country breakdown of who mines here / who this node peers with, and on
   // a small pool a country with one entry names one person. Disabled → 404 (not 403: a 403
   // confirms the feature exists and is merely switched off). network-map.js treats a failed
-  // fetch as "not published": bare globe, zeroed placards, a note — no sample data (removed
-  // 2026-09-13 after it was twice mistaken for the pool's real footprint).
+  // fetch as "not published": bare globe, zeroed placards, a note — no sample data (it was
+  // twice mistaken for the pool's real footprint).
   const networkMapPublic = () => {
     try {
       const a = poolSettings.getSection('access');
@@ -843,7 +843,7 @@ module.exports = function createPoolRoutes(ctx, app) {
   //     would hide nothing and could only land the dot in the wrong country. The map draws
   //     miner countries as a filled polygon; the centroid is just the label/hover anchor.
   //     Exact per-miner coordinates are never resolved or stored — country is all we hold.
-  //     ONE exception, since 2026-09-21: a GATEWAY carries the operator-declared lat/lng
+  //     ONE exception: a GATEWAY carries the operator-declared lat/lng
   //     from its pool_locations row when set. A gateway is the pool's own published server,
   //     not a person — its stratum hostname is on the connect grid and geolocatable by
   //     anyone — and the centroid rule drew "Los Angeles" and "New York" 140 km apart in
@@ -1048,8 +1048,8 @@ module.exports = function createPoolRoutes(ctx, app) {
       // stratum directly — e.g. region 'main' labelled "New York"), the hub IS that gateway's
       // box: it takes that gateway's position (operator pin, or its already-nudged centroid) and
       // the gateway is flagged `is_hub` so the client draws ONE marker and no hub→itself link.
-      // Before 2026-09-26 the hub took its own centroid-ring slot instead — Kansas for a US box —
-      // 1.6° from its own gateway, and every gateway link converged on a spot where nothing runs.
+      // The hub does not take its own centroid-ring slot — that would be Kansas for a US box —
+      // 1.6° from its own gateway, with every gateway link converging on a spot where nothing runs.
       // An unpublished own row still lends its pin. Either applies only when its country agrees
       // with hubCc: an explicit hub_country_code naming another country wins.
       const ownGw = gwByRegion[config.region] || null;
@@ -1232,7 +1232,7 @@ module.exports = function createPoolRoutes(ctx, app) {
 
       // Active reachability: TCP-dial each declared stratum_url in the BACKGROUND. This is the
       // only signal that covers a region with no WireGuard peer at all — a declared/seeded
-      // endpoint pointing at nothing (never paired, DNS not up, gateway not built) used to read
+      // endpoint pointing at nothing (never paired, DNS not up, gateway not built) would read
       // as 'idle' blue, i.e. "ready, just quiet", when a miner pointing a rig there gets a
       // refused connection. Kicked here, read from cache; the first hit after boot legitimately
       // has no verdict and reports 'checking'.
@@ -1299,7 +1299,7 @@ module.exports = function createPoolRoutes(ctx, app) {
       }
       out.sort((x, y) => y.hashrate_gps - x.hashrate_gps);
 
-      // ── k-anonymity floor on the per-region counts (audit §J11-5, 2026-09-02) ──────────────
+      // ── k-anonymity floor on the per-region counts (audit §J11-5) ──────────────
       // The same floor `/api/pool/topology` and `/api/network/peers` apply to their COUNTRY
       // breakdowns, applied here to the REGION breakdown — which had neither the floor nor the
       // network-map gate. Each region carries an operator-declared country, so on a multi-region
@@ -1444,7 +1444,7 @@ module.exports = function createPoolRoutes(ctx, app) {
     try {
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 500, 1), 1000);
       const windowMinutes = Math.min(parseInt(req.query.window || 1440, 10) || 1440, 1440);
-      // MASKED since 2026-09-02 (audit §J11-1). The tracker keeps the full address for internal
+      // MASKED (audit §J11-1). The tracker keeps the full address for internal
       // callers; only this public projection truncates.
       // Explicit projection: the tracker row is internal and may grow. Rig COUNT only — worker
       // names are not published here (they are the miner's own labels, often hostnames).
@@ -1471,7 +1471,7 @@ module.exports = function createPoolRoutes(ctx, app) {
     try {
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 500, 1), 1000);
       const days = Math.min(parseInt(req.query.days || 30, 10) || 30, 90);
-      // MASKED since 2026-09-02 (audit §J11-1) — see /api/stratum/top-miners above.
+      // MASKED (audit §J11-1) — see /api/stratum/top-miners above.
       const miners = hashrateTracker.getTopAvgHashrate(days, limit)
         .map((m) => ({ ...m, grin_address: maskAddr(m.grin_address) }));
       res.json({ days, top_miners: miners });

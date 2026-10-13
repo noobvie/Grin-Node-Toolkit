@@ -59,7 +59,7 @@ app.set('trust proxy', 'loopback');
 // pool's vhost is the one toolkit vhost that does not also set `server_tokens off` — the
 // nginx half of that pair is §J16's.
 app.disable('x-powered-by');
-// Games platform internal routes (/internal/games/*, design §19.3) — all logic in
+// Games platform internal routes (/internal/games/*, script07_design_games.md §19.3) — all logic in
 // lib/games-link.js. Mounted BEFORE express.json() and every rate limiter on purpose: the link
 // secret is checked before any body is parsed, and every games call comes from 127.0.0.1, so a
 // per-IP bucket would be one bucket for every player (D7). attach() in routes/index.js wires it up.
@@ -73,7 +73,7 @@ app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-XSS-Protection', '1; mode=block');
-  // Strict script-src: no 'unsafe-inline' (code-layout refactor F7, 2026-10-12). Pages carry no
+  // Strict script-src: no 'unsafe-inline'. Pages carry no
   // inline <script> and no on*= handler — every page script is an external file. A Report-Only
   // twin ran beside this line until a browse of every public + admin page logged no violation.
   // style-src keeps 'unsafe-inline' on purpose (out of scope). Pinned in test-csp-report-only.js.
@@ -184,7 +184,7 @@ let mediaUpload = null;      // configured multer instance for image uploads
 // reported by /api/network/peers so the page can say "mainnet + testnet" vs "mainnet only").
 let _peerSensorNets = { main: false, test: false };
 
-// The name rule's context for a donor name (design §19.17.6, Part C4): the operator's
+// The name rule's context for a donor name (script07_design_games.md §19.17.6): the operator's
 // `names.blocked_words` and the pool's name, read per call so a Settings → Names save applies
 // to the next submit. Unreadable → '' and the code seed in lib/name-rule.js still applies
 // (fail open to the seed, as the games side does with its last good copy).
@@ -217,18 +217,18 @@ async function initializePool() {
     // Config integrity (audit §J9-6). Runs AFTER initDb so a mismatch can be recorded in the
     // alerts table instead of only in the journal — AlertMonitor does not exist this early.
     //
-    // Three things were wrong and are fixed here:
+    // Three hazards this check avoids:
     //  1. The baseline was rewritten UNCONDITIONALLY, outside the mismatch branch. The warning
     //     appeared once and the tampered value became the new truth; restart twice and the pool
-    //     reports clean. It now refuses to overwrite a mismatched baseline — the alert stands
+    //     reports clean. It refuses to overwrite a mismatched baseline — the alert stands
     //     until a human replaces the file — and writes the observed hash to `.new` beside it.
     //  2. It hashed the MERGED config object, so the systemd PORT/HOST env and every per-network
     //     default were inside the hash: a unit-file edit or a toolkit upgrade that adds a default
     //     key tripped it. A detector that cries wolf on routine maintenance is one the operator
-    //     learns to ignore, which makes (1) worse rather than being a separate problem. It now
+    //     learns to ignore, which makes (1) worse rather than being a separate problem. It
     //     hashes the RAW BYTES of the file it claims to be watching.
     //  3. The baseline lived in the app directory while the config lives in /opt/grin/conf, so a
-    //     redeploy dropped it and `existsSync` turned the check into a silent no-op. It now sits
+    //     redeploy dropped it and `existsSync` turned the check into a silent no-op. It sits
     //     beside the config it describes.
     //
     // Still NOT covered, deliberately: the `pool_config` table, where every runtime money value
@@ -298,12 +298,12 @@ async function initializePool() {
     assetManager = new AssetManager(config, db);
     console.log(`[${new Date().toISOString()}] Pool settings and asset managers initialized`);
 
-    // Part C4 (design §19.17.6): donor names are auto-checked. Both steps are idempotent and run
+    // script07_design_games.md §19.17.6: donor names are auto-checked. Both steps are idempotent and run
     // at every start, in this order — the carried words must apply to the pending names:
     //   1. the retired `donor_name_blocklist` → `names.blocked_words` (the operator's own
     //      entries, once; the old row's deletion is the marker);
     //   2. every PENDING donor name through the check → approved or rejected (nothing writes a
-    //      pending name any more, so after the first start there are none). Approved names stay.
+    //      pending name, so after the first start there are none). Approved names stay.
     // A failure is logged, never fatal: mining does not wait for donor names. Pending names left
     // by a failed run stay pending and are retried at the next start.
     try {
@@ -334,9 +334,9 @@ async function initializePool() {
     // subsuming the old plaintext-hash upgrade and the anchor backfill. MUST stay synchronous
     // and MUST run BEFORE stratumServer.start() below: an account that reached its first
     // post-upgrade capture with an EMPTY set would anchor to whoever mined that share, not to
-    // the owner. It used to sit ~130 lines further down, after `await nostrBridge.start()` —
-    // so with Nostr payouts on, the listener was accepting shares for as long as the relays
-    // took to answer (Part 4 review; the §J3 backfill had the same placement). Idempotent — it
+    // the owner. It must run BEFORE `await nostrBridge.start()` (below): after it,
+    // with Nostr payouts on, the listener accepts shares for as long as the relays
+    // take to answer (the §J3 backfill has the same constraint). Idempotent — it
     // NULLs the columns it copied, so a second start finds nothing to do.
     migrateProofSet(db);
 
@@ -389,7 +389,7 @@ async function initializePool() {
     if (blockMonitor.grinNode) blockManager.setNodeApi(blockMonitor.grinNode);
 
     // Pass BlockMonitor's node client: RewardDistributor re-verifies each block against the
-    // chain immediately before crediting, and that check is a no-op without it (audit §I3).
+    // chain immediately before crediting, and that check is a no-op without it (script07_security_audit_archive.md §I3).
     rewardDistributor = new RewardDistributor(config, blockMonitor.grinNode);
     blockMonitor.setRewardDistributor(rewardDistributor);
     console.log(`[${new Date().toISOString()}] Reward distributor initialized (PPLNS window: 60 blocks)`);
@@ -428,11 +428,11 @@ async function initializePool() {
     try { fs.mkdirSync(uploadsDir, { recursive: true }); }
     catch (e) { console.error(`[media] could not create uploads dir ${uploadsDir}: ${e.message}`); }
     // Declared-MIME gate only — cheap and spoofable. The decisive check is the magic-byte
-    // sniff in the route handler; see §A and audit §J10-1. Until 2026-09-02 this map ALSO
-    // chose the stored extension, so `Content-Type: image/svg+xml` on a file of arbitrary
-    // bytes wrote a `.svg` that nginx then served as image/svg+xml — the exact defect §A
-    // fixed on the branding-asset endpoint, never applied to this one. The serve-time
-    // sandbox CSP on /uploads/ was the only thing left standing between it and stored XSS.
+    // sniff in the route handler; see §A and audit §J10-1. This map must NOT also
+    // choose the stored extension: `Content-Type: image/svg+xml` on a file of arbitrary
+    // bytes would write a `.svg` that nginx serves as image/svg+xml — the exact defect §A
+    // closed on the branding-asset endpoint. The serve-time
+    // sandbox CSP on /uploads/ is the only other thing between it and stored XSS.
     const ALLOWED_IMG = { 'image/jpeg': 1, 'image/png': 1, 'image/gif': 1, 'image/webp': 1, 'image/svg+xml': 1 };
     mediaUpload = multer({
       // memoryStorage, like the asset endpoint: nothing untrusted reaches disk until the
@@ -455,7 +455,7 @@ async function initializePool() {
     }, 24 * 3600 * 1000);
     setInterval(() => {
       // Reveal first, then commit: a draw commits to a seed block ~10 blocks ahead of the tip
-      // and is only resolved once the chain reaches it (audit §I8), so every tick settles what
+      // and is only resolved once the chain reaches it (script07_security_audit_archive.md §I8), so every tick settles what
       // the previous one committed before opening anything new.
       lotteryManager.resolveCommittedDraws()
         .catch((e) => console.error(`[Lottery] reveal tick failed: ${e.message}`))
@@ -655,9 +655,9 @@ async function initializePool() {
     poolstatsReporter.start();
 
     // Initialize rate limiter. Do NOT provide an inline fallback here: rate-limiter.js
-    // owns the defaults (public 1200 / auth 200 / api 600 / admin 2400 — the 2026-06
-    // "loosen now" posture). An earlier fallback object here (admin: 10/min) silently
-    // overrode those via Object.assign and 429'd the admin settings pages.
+    // owns the defaults (public 1200 / auth 200 / api 600 / admin 2400 — the "loosen now"
+    // posture). A fallback object here (admin: 10/min) would silently
+    // override those via Object.assign and 429 the admin settings pages.
     rateLimiter = new RateLimiter({
       rate_limits: config.rate_limits
     });

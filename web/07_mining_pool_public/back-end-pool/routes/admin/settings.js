@@ -1,5 +1,4 @@
-// /api/admin/settings* and /api/admin/database*. Moved verbatim out of routes/index.js (code-layout refactor P9);
-// registrations stay at 2-space indent and write FULL paths.
+// /api/admin/settings* and /api/admin/database*. Registrations stay at 2-space indent and write FULL paths.
 
 const express = require('express');
 const caches = require('../_shared/caches');
@@ -41,9 +40,9 @@ module.exports = function createAdminSettingsRoutes(ctx, guards) {
   //               bonus, streak, lottery pots, the % of pool fee diverted to the prize pool)
   //   database    retention windows that DELETE the money trail — balance_log_keep_days and
   //               audit_log_keep_days prune the ledger and the admin audit log
-  //   games       turns a public feature and a public CHAT on for the live pool (design §19.11:
+  //   games       turns a public feature and a public CHAT on for the live pool (script07_design_games.md §19.11:
   //               every games-settings write is step-up)
-  //   names       the blocked-word list every public name is checked against (design §19.17.5):
+  //   names       the blocked-word list every public name is checked against (script07_design_games.md §19.17.5):
   //               emptying it is how a stolen session would let offensive names go live unseen
   const STEP_UP_SETTINGS_SECTIONS = new Set(['payout', 'access', 'incentives', 'database', 'games', 'names']);
 
@@ -64,12 +63,12 @@ module.exports = function createAdminSettingsRoutes(ctx, guards) {
   // than freshAdmin for this write. Do not "tidy" them out as branding fields.
   const STEP_UP_SETTINGS_KEYS = new Set([
     'pool_fee_percent',   // the pool's cut of every block
-    // 'address_whitelist' / 'max_miners' / 'pool_visibility' were gated here until 2026-09-02.
+    // 'address_whitelist' / 'max_miners' / 'pool_visibility' are not listed here.
     // The keys are gone (audit §J9-1): nothing enforced them, and the step-up gate on a key no
     // consumer reads is the strongest signal the surface can give that a control is real.
     // 'custom_head_html' / 'custom_body_html' (raw HTML whose <script> nodes branding.js
-    // re-created so they ran) were gated here until 2026-10-03. They are not merely un-gated:
-    // the keys are DELETED (design §19.17 D22, Option B) and updateSection() refuses a write
+    // re-created so they ran) are not gated here either. They are not merely un-gated:
+    // the keys are DELETED (script07_design_games.md §19.17 D22, Option B) and updateSection() refuses a write
     // to either, so there is nothing left for step-up to protect.
     // analytics — third-party script ORIGINS, loaded as <script src> by the matching provider.
     'plausible_src',
@@ -137,7 +136,7 @@ module.exports = function createAdminSettingsRoutes(ctx, guards) {
     try {
       const sectionGated = STEP_UP_SETTINGS_SECTIONS.has(req.params.section);
       if (sectionGated || criticalSettingChanged(req.params.section, req.body)) {
-        // Freshness + mandatory-2FA, both halves (audit §I7). Keep the section-specific
+        // Freshness + mandatory-2FA, both halves (script07_security_audit_archive.md §I7). Keep the section-specific
         // wording on the freshness refusal — the operator needs to know WHY they are being
         // challenged for what may look like a cosmetic save.
         if (!authManager.isTokenFresh(req.token, STEP_UP_MAX_AGE_S)) {
@@ -163,8 +162,8 @@ module.exports = function createAdminSettingsRoutes(ctx, guards) {
           totp_enrollment_required: true
         });
       }
-      // (The donor-name rescan that ran here on a changed word list was removed in design §18
-      // Part 3: names are pre-moderated, so the list only flags queued names at read time.)
+      // (There is no donor-name rescan here on a changed word list:
+      // the list only flags queued names at read time.)
       const updated = poolSettings.updateSection(req.params.section, req.body, req.user.user_id);
       invalidateBranding();   // §J12-8: /api/public/branding is memoised; an edit must show at once
       res.json({ success: true, section: req.params.section, data: updated });

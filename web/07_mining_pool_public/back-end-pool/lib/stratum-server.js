@@ -53,8 +53,8 @@ const MSG_RATE_PER_SEC  = 25;
 const MSG_BURST         = 100;
 
 // Consecutive node-rejected submits, with no accept in between, before the socket is dropped
-// (audit §J6-5). Nothing used to penalise a session that produced only rejects: `session.rejected`
-// was counted and then only ever DISPLAYED, and banMiner has exactly one caller (the admin route).
+// (audit §J6-5). Without this nothing penalises a session that produces only rejects: `session.rejected`
+// is counted and only DISPLAYED, and banMiner has exactly one caller (the admin route).
 // Every such submit costs the Grin node a full Cuckatoo verification and writes a log line, so one
 // address inside the documented budget (25 msg/s × 320 conns) could force ~8,000 PoW verifications
 // and ~1 MB/s of journal per second. A real rig's reject rate is ~1%, so 50 IN A ROW never happens
@@ -160,9 +160,9 @@ class StratumServer {
   // `minerManager` is the process-wide session registry. index.js MUST pass its own instance:
   // the HTTP side (/api/pool/stats, the account page's per-worker online flag and stale/reject
   // columns, the network map, the poolstats feed, HashrateTracker) all read sessions from the
-  // instance index.js holds, and the sessions are created HERE, on login. Until 2026-09-20 this
-  // constructor made a private `new MinerManager(config)` while index.js made another, so the
-  // API's copy never held a session: eight rigs mining showed "MINERS ONLINE 0", "0 UNITS", and
+  // instance index.js holds, and the sessions are created HERE, on login. This
+  // constructor must NOT make a private `new MinerManager(config)` beside index.js's: the
+  // API's copy would never hold a session — eight rigs mining showed "MINERS ONLINE 0", "0 UNITS", and
   // every worker on the account page as dropped with stale/reject "–" — with shares accepted
   // the whole time, because the stratum side was reading its own, populated, copy. The
   // fallback below exists only for standalone construction (tests); it is not a second registry.
@@ -216,7 +216,7 @@ class StratumServer {
     this.acceptState = 'accepting';
     // Submits between "passed validation" and "answered" (the async IIFE in handleSubmit).
     // Entries are { isBlock, startedAt }; `isBlock` flips once the node reports a block hash.
-    // pause() waits on this — it is what "settled" means (§21.2.4).
+    // pause() waits on this — it is what "settled" means (§21.2 step 4).
     this.inflight = new Set();
     this._inflightWaiters = [];
     this._pruneTimer = null;
@@ -255,7 +255,7 @@ class StratumServer {
   // runs in this one tick, so every port is CLAIMED in boundPorts before any bind settles — a
   // bindRegionListener racing a resume finds its port claimed and cannot double-bind (§21.4).
   // A port this process already holds is a no-op (already:true), which is what makes a second
-  // resume a "re-bind only what is missing" (§21.3.5).
+  // resume a "re-bind only what is missing" (§21.3).
   // Resolves to [{ port, host, region, bound, already, error }] — one per listener, the REAL
   // outcome of each bind, never an unconditional success.
   _bindAll() {
@@ -583,8 +583,8 @@ class StratumServer {
     // but only on a REGION listener; see the PROXY phase below.
     let ip = socket.remoteAddress || 'unknown';
     // The address observed at ACCEPT time, frozen. This is the key the per-IP cap counts, and it
-    // must never move (audit §J6-3b): `cleanup` used to decrement `this.connectionsByIp.get(ip)`
-    // — the MUTABLE binding — so a connection whose `ip` had been rewritten decremented a key
+    // must never move (audit §J6-3b): `cleanup` must not decrement `this.connectionsByIp.get(ip)`
+    // — the MUTABLE binding — or a connection whose `ip` had been rewritten decremented a key
     // holding nothing and left the real address counted for the life of the process. 320
     // connect-header-disconnect cycles then permanently exhausted one source address's budget,
     // which is self-inflicted for a lone attacker and a denial of service against everyone else
@@ -695,8 +695,8 @@ class StratumServer {
       }
 
       for (const line of lines) {
-        // Spend a token for EVERY frame, including blank/whitespace-only ones — the skip used to
-        // sit above this and blank frames were therefore free (audit §J6-8). Combined with the
+        // Spend a token for EVERY frame, including blank/whitespace-only ones — a skip placed
+        // above this would make blank frames free (audit §J6-8). Combined with the
         // pre-login deadline above, a socket can no longer be held open indefinitely for one byte.
         //
         // Refill and spend one message token; disconnect a flooder. Legit miners
@@ -772,7 +772,7 @@ class StratumServer {
   }
 
   handleMessage(socket, msg, ip, setSession, getSession, region) {
-    // Paused (§21.2.4): pause() stops reading every socket, but a frame already parsed from the
+    // Paused (§21.2 step 4): pause() stops reading every socket, but a frame already parsed from the
     // same chunk can still land here. Refuse it — a REJECTION, never an ack (decision 3) — and do
     // NOT _stat it: checkStratumHealth sums the session counters, and a pause must not fire
     // high_rejection_rate. A login is refused too, so no session is created on a closing pool.
@@ -913,7 +913,7 @@ class StratumServer {
     // whatever SystemMaxUse/MaxRetentionSec say, which on an untuned box is months.
     //
     // The IP is kept whole on purpose, and the address is masked instead: the full IP is how an
-    // operator identifies and `ufw deny`s an abusive rig, and coarsening it (§G1's choice for
+    // operator identifies and `ufw deny`s an abusive rig, and coarsening it (script07_security_audit_archive.md §G1's choice for
     // the DB) would remove that with no replacement. Masking the address instead breaks the
     // linkage — which is the actual defect — while leaving the ban workflow intact. The worker
     // name stays: it is operator-supplied, not an identity.
@@ -978,9 +978,8 @@ class StratumServer {
     // Look up the job this submit references ONCE: we need both its node job_id (to translate
     // for the upstream node) and its pre_pow (the dedup key — see below).
     // isValidJob() now asks jobIdMap itself, so a valid job_id ALWAYS has an entry here and there
-    // are no fallbacks left (audit §J6-10). The two that used to sit here were documented as
-    // unreachable and were not: the second degraded `workId` to `String(job_id)`, i.e. made the
-    // dedup key the miner's own integer — the exact state the 2026-07-17 pre_pow fix removed.
+    // are no fallbacks left (audit §J6-10). Do not re-add fallbacks: the second would degrade `workId` to `String(job_id)`, i.e. make the
+    // dedup key the miner's own integer — the exact state the pre_pow dedup key removed.
     const jobEntry = this.jobIdMap.get(job_id);
     if (!jobEntry || !jobEntry.pre_pow) {
       this._stat(sessionId, 'stale');
@@ -1011,7 +1010,7 @@ class StratumServer {
     // returns accepted:false and we reject the share (the miner resubmits) rather than crediting
     // unvalidated work.
     //
-    // Tracked in this.inflight from here until the reply is written (design §21.2.4): a stratum
+    // Tracked in this.inflight from here until the reply is written (design §21.2 step 4): a stratum
     // pause waits on this set, and "settled" means it is empty.
     const inflightEntry = { isBlock: false, startedAt: Date.now() };
     this.inflight.add(inflightEntry);
@@ -1022,8 +1021,8 @@ class StratumServer {
         // its unknown ids as stale (see jobIdMap in the constructor).
         //
         // Build the node payload from the five KNOWN fields rather than spreading `params`
-        // (audit §J6-11). The old `{ ...params, job_id }` forwarded every key the miner
-        // invented, in the miner's own insertion order, onto the single upstream socket every
+        // (audit §J6-11). Spreading `{ ...params, job_id }` would forward every key the miner
+        // invents, in the miner's own insertion order, onto the single upstream socket every
         // miner's shares share — which is what let a decoy `nonce` key win the send-side
         // quote-stripping replacement, and what would turn one crafted frame into a pool-wide
         // outage if grin's stratum ever dropped a connection on a malformed message rather than
@@ -1096,8 +1095,8 @@ class StratumServer {
       //   · PROOF_MIN_SHARES-th   → capture again, now permitted to add to a non-empty set.
       // A value already on record only refreshes its last-seen stamp (design §17), so a rig
       // reconnecting from a known IP costs one UPDATE and writes no audit row — that path is
-      // why honest multi-site churn is now silent where the old 2-slot window raised an alarm
-      // for it. `session.acceptedShares`, never `shareCount`: the latter counts the whole
+      // why honest multi-site churn is silent (a fixed 2-slot window would raise an alarm
+      // for it). `session.acceptedShares`, never `shareCount`: the latter counts the whole
       // address, so a bare-login attacker would ride the victim's own mining to the threshold
       // (§J3 self-review).
       if (!session.evidenceDone &&
@@ -1116,8 +1115,8 @@ class StratumServer {
         // Model C every region's submits arrive here, so the central box is the sole crediter.
         if (this.blockManager) {
           // ⚠ creditBlock does NOT throw — it catches internally and returns {success:false}
-          // (blocks.js). This try/catch therefore never fired, the return value used to be
-          // discarded, and the very next statement told the miner the submit succeeded. A
+          // (blocks.js). A try/catch alone never fires, and a discarded return value
+          // lets the very next statement tell the miner the submit succeeded. A
           // block the node accepted but the DB never recorded is then invisible everywhere:
           // §J5-8's distribution_stalled detector reads `FROM blocks` and a row that was never
           // INSERTed has nothing to be stuck. The end state is indistinguishable from bad luck.
@@ -1197,10 +1196,10 @@ class StratumServer {
   }
 
   // A job_id is valid iff jobIdMap still holds it — that map IS the window, pruned to
-  // JOB_WINDOW entries by setNewJob (audit §J6-10). The old arithmetic form had no upper bound
-  // (`jobCounter + 1000` passed), accepted non-integers, and never consulted the structure that
-  // actually knows which jobs exist — so "valid" and "present in the map" could disagree, which
-  // is what made the fallbacks in handleSubmit reachable.
+  // JOB_WINDOW entries by setNewJob (audit §J6-10). An arithmetic check (`jobCounter + 1000` passes) has no upper bound,
+  // accepts non-integers, and never consults the structure that actually knows which jobs
+  // exist — "valid" and "present in the map" could then disagree and the fallbacks in
+  // handleSubmit become reachable.
   isValidJob(jobId) {
     return Number.isInteger(jobId) && this.jobIdMap.has(jobId);
   }

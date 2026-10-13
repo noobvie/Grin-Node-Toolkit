@@ -95,6 +95,17 @@
                 d.getUTCDate() === now.getUTCDate()) return hm;
             return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }) + ' ' + hm;
         }
+        // Relative form for P-03's Last share: "42 seconds ago" … "3 days ago". Computed at
+        // render, so it is as fresh as the last lookup; the absolute time rides in a title.
+        function fmtAgo(unixSeconds) {
+            if (!unixSeconds) return 'never';
+            const s = Math.max(0, Math.floor(Date.now() / 1000 - Number(unixSeconds)));
+            const unit = (n, w) => n + ' ' + w + (n === 1 ? '' : 's') + ' ago';
+            if (s < 60) return unit(s, 'second');
+            if (s < 3600) return unit(Math.floor(s / 60), 'min');
+            if (s < 86400) return unit(Math.floor(s / 3600), 'hour');
+            return unit(Math.floor(s / 86400), 'day');
+        }
 
         // "Member for" — coarse elapsed duration since first seen, plus a 🎉 on the
         // yearly anniversary (same UTC month+day, ≥1 year old). Purely cosmetic.
@@ -1391,7 +1402,8 @@
                 '<td class="num">' + Number(w.shares || 0).toLocaleString('en-US') + '</td>' +
                 '<td class="num">' + pct(w.stale_pct) + '</td>' +
                 '<td class="num">' + pct(w.reject_pct) + '</td>' +
-                '<td>' + escHtml(fmtShort(w.last_share_at)) + '</td>' +
+                '<td' + (w.last_share_at ? ' title="' + escHtml(fmtWhen(w.last_share_at)) + '"' : '') + '>' +
+                    escHtml(fmtAgo(w.last_share_at)) + '</td>' +
                 '</tr>').join('');
         }
         async function loadWorkers() {
@@ -1605,17 +1617,17 @@
                                 PENDING_SLOW.indexOf(row.status) !== -1 || row.status === 'slatepack_pending';
                 const cells = [
                     fmtShort(row.created_at),
+                    row.confirmed_at ? fmtShort(row.confirmed_at) : '—',
                     PayoutMethods.methodLabel(row.method),
                     PayoutMethods.statusLabel(row),
                     '−' + Number(row.amount || 0).toFixed(4),
                     (paid || pending) ? fee.toFixed(4) : '—',
-                    paid ? (Number(row.amount || 0) - fee).toFixed(4) : '—',
-                    row.confirmed_at ? fmtShort(row.confirmed_at) : '—'
+                    paid ? (Number(row.amount || 0) - fee).toFixed(4) : '—'
                 ];
                 cells.forEach((text, i) => {
                     const td = document.createElement('td');
-                    if (i === 3) td.className = 'num amt-out';
-                    else if (i === 4 || i === 5) td.className = 'num';
+                    if (i === 4) td.className = 'num amt-out';
+                    else if (i === 5 || i === 6) td.className = 'num';
                     td.textContent = text;
                     tr.appendChild(td);
                 });

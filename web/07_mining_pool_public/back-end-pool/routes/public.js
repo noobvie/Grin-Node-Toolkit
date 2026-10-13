@@ -1,5 +1,5 @@
 // /api/public/* — branding, footer price, endpoints directory, lottery, CMS pages/posts and the ads feed.
-// Moved verbatim out of routes/index.js (code-layout refactor P3); registrations stay at 2-space
+// Registrations stay at 2-space
 // indent and write FULL paths. Instances/state come from ctx.
 
 const express = require('express');
@@ -117,7 +117,7 @@ module.exports = function createPublicRoutes(ctx) {
         } catch (e) {
           cfg.incentives = { enabled: false };
         }
-        // Games nav flag (design §19 D12): { mode, chat }. mode is 'off' whenever the games
+        // Games nav flag (script07_design_games.md §19 D12): { mode, chat }. mode is 'off' whenever the games
         // service fails its health probe, and a probe flip invalidates this memo (attach below).
         cfg.games = gamesLink.publicFlag();
         // Bound the key space: hostname is attacker-chosen (any Host header nginx passes
@@ -227,7 +227,7 @@ module.exports = function createPublicRoutes(ctx) {
   // `rate`    — which rate-limiter bucket applies (see this.limits in lib/rate-limiter.js).
   const PUBLIC_API_PREFIXES = [
     '/api/public/', '/api/account/', '/api/config/', '/api/pool/',
-    // Added 2026-07-28. These are public, rate-limited, and consumed by the pool's own pages
+    // These are public, rate-limited, and consumed by the pool's own pages
     // (reactor-dashboard.js, miners-stats.html, network-map.js) — they were simply invisible to
     // the reference because the prefix list predated them. An undocumented public endpoint is
     // not a private one; it is a public one nobody can use correctly.
@@ -312,8 +312,8 @@ module.exports = function createPublicRoutes(ctx) {
         // so accept either — otherwise a major-version bump would silently empty this page
         // rather than fail loudly (the catch below would never even fire).
         const router = req.app._router || req.app.router;
-        // Routes now live in Routers mounted with app.use(): flatten those layers (code-layout
-        // refactor P3 — the one non-move edit; scripts/test-endpoints-directory.js).
+        // Routes live in Routers mounted with app.use(): flatten those layers
+        // (scripts/test-endpoints-directory.js).
         const flatten = (stk) => (stk || []).reduce((acc, layer) => {
           if (layer && layer.name === 'router' && layer.handle && layer.handle.stack) acc.push(...flatten(layer.handle.stack));
           else acc.push(layer);

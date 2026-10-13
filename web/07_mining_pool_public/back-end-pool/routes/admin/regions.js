@@ -1,5 +1,4 @@
-// /api/admin/poolstats, locations, gateways. Moved verbatim out of routes/index.js (code-layout
-// refactor P8); registrations stay at 2-space indent and write FULL paths.
+// /api/admin/poolstats, locations, gateways. Registrations stay at 2-space indent and write FULL paths.
 
 const express = require('express');
 const caches = require('../_shared/caches');
@@ -130,9 +129,9 @@ module.exports = function createAdminRegionsRoutes(ctx, guards) {
       if (keepPin && prevLoc) { lat = prevLoc.lat; lng = prevLoc.lng; }
 
       // Pre-flight the hub tunnel BEFORE writing anything (read-only `list`).
-      // The upsert used to run first, so a pool that had never raised its
-      // WireGuard server ended up holding a saved region card AND a 502 that
-      // named an SSH menu — the worst possible moment to discover a prerequisite.
+      // The upsert must not run first: a pool that has never raised its
+      // WireGuard server would end up holding a saved region card AND a 502 that
+      // names an SSH menu — the worst possible moment to discover a prerequisite.
       // Refuse the whole request instead, and point at the button that fixes it.
       if (wgPubkey) {
         try {
@@ -196,10 +195,10 @@ module.exports = function createAdminRegionsRoutes(ctx, guards) {
         config.region_ports[pair.region] = pair.region_port;
         if (pair.hub_tunnel_ip) config.region_listen_host = pair.hub_tunnel_ip;
         if (stratumServer) {
-          // AWAIT the real outcome and surface it (audit §J6-12). bindRegionListener used to
-          // return true unconditionally — the listen is asynchronous and its error handler only
-          // logged — and this call discarded the return value anyway, so the panel reported a
-          // successful pairing for a listener that was not listening. A bind failure is exactly
+          // AWAIT the real outcome and surface it (audit §J6-12). bindRegionListener's result matters:
+          // the listen is asynchronous and its error handler only
+          // logs, so a discarded result makes the panel report a
+          // successful pairing for a listener that is not listening. A bind failure is exactly
           // the case an operator must be told about: the region is saved and the tunnel is up,
           // but no miner in it can reach the pool.
           try {
@@ -226,7 +225,7 @@ module.exports = function createAdminRegionsRoutes(ctx, guards) {
 
       // `synced:false` = the peer is in the CONFIG but `wg syncconf` did not load it
       // into the running interface, so the gateway will hand-shake only after a
-      // tunnel bounce. The CLI has always warned about this; the panel used to
+      // tunnel bounce. The CLI warns about this; the panel must too, or it would
       // report plain success and leave the operator debugging the gateway box.
       res.json({
         success: true, location: row,

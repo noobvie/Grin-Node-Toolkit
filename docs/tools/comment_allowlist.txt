@@ -51,3 +51,9 @@ web/07_mining_pool_public/back-end-pool/lib/db.js:written\sbefore\s2026-09-20  D
 web/07_mining_pool_public/back-end-pool/lib/miners.js:deleted\sten$  DIARY_DATE  false positive — "ten minutes", the session sweeper timeout, not a date
 web/07_mining_pool_public/back-end-pool/lib/pool-settings.js:no\sretry\sladder\sto  STALE_TERM  correct: explains why withdrawal_retry_delays is absent
 web/07_mining_pool_public/back-end-pool/lib/pool-settings.js:js/theme\.js  STALE_TERM  correct: records why legacy theme keys are accept-only (their stylesheet source is deleted)
+web/07_mining_pool_public/back-end-pool/lib/alert-monitor.js:fine\snow"  DIARY_DATE  false positive — "fine now", not a date
+web/07_mining_pool_public/back-end-pool/lib/connect-suggest.js:one\sprobe\sset\staken\s2026-09-23  DIARY_DATE  evidence date of the RTT calibration measurement
+web/07_mining_pool_public/back-end-pool/lib/node-availability.js:mainnet\sgenesis\s\(2019-01-15\)  DIARY_DATE  chain fact (genesis date), not a diary entry
+web/07_mining_pool_public/back-end-pool/lib/stratum-pause.js:calendar-impossible\sdate\s\(2026-02-30  DIARY_DATE  example input for the date parser, not a diary entry
+web/07_mining_pool_public/back-end-pool/routes/admin/cms.js:code\sad,\sor\sto\sedit\sa\slegacy  STALE_TERM	describes the live 400 refusal of ad_type code (lib/ads.js REMOVED_MSG); not a claim code ads exist
+web/07_mining_pool_public/back-end-pool/routes/index.js:NO\ssatellite\sshare/block  STALE_TERM  states there is NO satellite ingestion API (trap guard against reintroducing one)

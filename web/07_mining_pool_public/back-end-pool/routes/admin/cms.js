@@ -1,6 +1,5 @@
-// /api/admin CMS — ads, ads-config, media upload, pages, posts, branding assets. Moved verbatim out
-// of routes/index.js (code-layout refactor P7); registrations stay at 2-space indent and write FULL
-// paths. Instances come from ctx; the guard chain is the ONE createGuards(ctx) instance (I7).
+// /api/admin CMS — ads, ads-config, media upload, pages, posts, branding assets.
+// Registrations stay at 2-space indent and write FULL paths. Instances come from ctx; the guard chain is the ONE createGuards(ctx) instance.
 
 const express = require('express');
 const path = require('path');
@@ -21,7 +20,7 @@ module.exports = function createAdminCmsRoutes(ctx, guards) {
   // ─── ADS (Admin CRUD) ──────────────────────────────────────────────
   // Operator-managed promotions (a banner image or a native text card) bound to a public
   // placement. secureAdmin (not freshAdmin) — ads are not money/destructive of funds, and
-  // since design §19.17 D22 removed the `code` type an ad can no longer carry script, so
+  // since script07_design_games.md §19.17 D22 removed the `code` type an ad can no longer carry script, so
   // secureAdmin is no longer a route to code on the public origin. An attempt to create a
   // code ad, or to edit a legacy one, is a 400 that says why (lib/ads.js).
   router.get('/api/admin/ads', secureAdmin, (req, res) => {

@@ -1,8 +1,8 @@
 // /api/admin/stratum/* — the stratum pause (design §21.10): read the state, pause, extend,
 // resume, schedule / cancel a maintenance window. The policy lives in lib/stratum-pause.js.
-// Moved verbatim out of routes/index.js (code-layout refactor P6); registrations stay at 2-space
+// Registrations stay at 2-space
 // indent and write FULL paths. Instances/state come from ctx; the guard chains are the ONE
-// createGuards(ctx) instance routes/index.js built (I7), handed in as `guards`.
+// createGuards(ctx) instance routes/index.js built, handed in as `guards`.
 
 const express = require('express');
 const StratumPause = require('../../lib/stratum-pause');

@@ -1,7 +1,7 @@
-// Admin guard chains + the step-up helpers, shared by every future admin route file (H4).
-// Moved VERBATIM from routes/index.js (P2). ONE instance: routes/index.js calls createGuards(ctx)
+// Admin guard chains + the step-up helpers, shared by every future admin route file.
+// ONE instance: routes/index.js calls createGuards(ctx)
 // once and hands the result to every route file — the chains hold rateLimiter/ipFilter bindings
-// and must never be rebuilt per file (I7).
+// and must never be rebuilt per file.
 const { requireAdmin, requireFreshAuth } = require('../../lib/auth-middleware');
 
 module.exports = function createGuards(ctx) {
@@ -79,11 +79,11 @@ module.exports = function createGuards(ctx) {
   // some requests are sensitive (a settings section that carries fee/whitelist keys; a region
   // save that carries a wg pubkey). Returns true when it has already answered the request.
   //
-  // It exists because those two handlers previously inlined a bare `isTokenFresh()` call, which
-  // reproduced requireFreshAuth but silently dropped requireTotpEnrolled — so on a pool with
-  // access.require_admin_totp ON, an un-enrolled admin was refused by every freshAdmin route
-  // yet could still write the `payout` section with a password-only re-auth (audit §I7).
-  // Both halves of the step-up contract live here now; do not re-inline either one.
+  // It exists because inlining a bare `isTokenFresh()` call in a handler
+  // reproduces requireFreshAuth but silently drops requireTotpEnrolled — so on a pool with
+  // access.require_admin_totp ON, an un-enrolled admin is refused by every freshAdmin route
+  // yet could still write the `payout` section with a password-only re-auth (script07_security_audit_archive.md §I7).
+  // Both halves of the step-up contract live here; do not re-inline either one.
   const stepUpRefused = (req, res) => {
     if (!authManager.isTokenFresh(req.token, STEP_UP_MAX_AGE_S)) {
       res.status(403).json({ error: 'Session expired', challenge_required: true });

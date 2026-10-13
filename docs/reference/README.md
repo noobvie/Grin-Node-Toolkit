@@ -97,6 +97,7 @@ resolver, the allowlist rules, and what is still open.
 | [script07_design.md](script07_design.md) | Public mining pool architecture — PPLNS, address-as-identity, Model C regional gateways, hub move + connect-page latency (§13.13), games platform `/play/` (§19; Parts 1–10 built, not VPS-tested), node availability beside the event recorder (§20; Parts 6–8 built, not VPS-tested) |
 | [script07_implementation.md](script07_implementation.md) | Pool deploy + runbook, incl. the hub-move runbook (§8.7); node availability as built (§10.15) |
 | [script07_security_audit.md](script07_security_audit.md) | Pool security record, §A–§J17. **Start at the Status roll-up** — 14 k lines, and the roll-up is the whole of it in one table |
+| [script07_security_audit_archive.md](script07_security_audit_archive.md) | Closed findings of the Script 07 audit (142, verbatim, by audit section). Open items and the roll-up stay in `script07_security_audit.md` |
 
 ## Admin & host (Script 08 band)
 

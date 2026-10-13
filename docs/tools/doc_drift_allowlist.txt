@@ -43,7 +43,6 @@ gtag.js         | not-a-path | Google's GA4 loader, served from Google's CDN
 stringify.js    | not-a-path | a file inside the npm qs package, named while tracing a CVE
 qs/lib/stringify.js  | not-a-path | node_modules path written without the node_modules/ prefix
 express/lib/utils.js | not-a-path | node_modules path written without the node_modules/ prefix
-.min.js         | not-a-path | a filename SUFFIX, not a path — "the tree ships zero .min.js files"
 .test.js        | not-a-path | a filename SUFFIX naming the test-file convention
 
 # ---------------------------------------------------------------------------
@@ -51,8 +50,6 @@ express/lib/utils.js | not-a-path | node_modules path written without the node_m
 # ---------------------------------------------------------------------------
 evil.html       | not-a-path | attacker-supplied filename in the script07 upload finding
 backdoor.js     | not-a-path | hypothetical dropped-in file in the script052 vendor-integrity argument
-accio-wallet-test.html | not-a-path | example filename used to probe nginx quoted-string parsing
-scripts/x.js    | not-a-path | example src= value quoted from an upstream HTML page
 notes.svg       | not-a-path | example uploaded filename in a stored-upload audit excerpt
 1788363314180-174ac525-notes.svg | not-a-path | the stored form of that same example upload
 scratchpad/j4harness.js | not-a-path | one-shot harness in the scratchpad, deleted with it (the doc says so)
@@ -80,7 +77,6 @@ apply-spec.sh               | external | same floonet-rs upstream repo
 docs/reverse-proxy.md       | external | floonet-rs upstream documentation, not ours
 deploy_grinwallet.sh        | external | lives in the Office Tools repo; script059 mirrors its wallet setup
 wporg-svn/trunk/bridge-config.php | external | a WordPress.org SVN working copy on the operator's machine
-mwcwallet.com-master/public_html/index.html | external | the upstream wallet release zip as downloaded, before vendoring
 
 # ---------------------------------------------------------------------------
 # deleted — the file is genuinely gone, and the doc naming it is RECORDING that

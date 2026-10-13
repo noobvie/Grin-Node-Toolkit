@@ -388,7 +388,7 @@ pw_binary_menu() {
 # Every slatepack payout carries the pool wallet's address, and `grin-wallet
 # receive` on the miner's side sends its reply back to that address over Tor —
 # into the pool wallet's Foreign API finalize_tx, which finalizes AND posts
-# behind the pool backend's back (grin-wallet v5.5.0 source, 2026-09-27). The
+# behind the pool backend's back (grin-wallet v5.5.0 source). The
 # toolkit never opens that door: `owner_api` publishes no onion, only `listen`
 # does. This warns if something else has: a torrc onion aimed at the owner port
 # (which serves /v2/foreign too, via owner_api_include_foreign), or a `listen`

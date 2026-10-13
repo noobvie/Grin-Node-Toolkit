@@ -33,7 +33,7 @@
 #   A) Admin recovery        (locked out: clear 2FA / reset password — break-glass)
 #   W) Multi-region          (WireGuard server + add regional gateways)
 #   P) Play & chat (games)   (/play/ games service — lib/07_lib_pool_games.sh; never
-#                             restarts the pool; design §19)
+#                             restarts the pool; design §19 (script07_design_games.md))
 #   B) Backup & Restore      (encrypted: DB + wallet + WG identity · offsite push)
 #   C) Cron schedules        (daily backup, weekly VACUUM)
 #   L) View logs             (tail -50 | less)
@@ -151,7 +151,7 @@ source "$SCRIPT_DIR/lib/07_lib_gwctl.sh"
 # Hub backup/restore on the shared engine (pool.db + config + wallet + WG identity).
 # shellcheck source=lib/07_lib_pool_backup.sh
 source "$SCRIPT_DIR/lib/07_lib_pool_backup.sh"
-# /play/ games service (menu P, design §19): its own unit, user and DB beside the pool.
+# /play/ games service (menu P, design §19 (script07_design_games.md)): its own unit, user and DB beside the pool.
 # The backup lib above calls its pgs_* hooks at call time (games DB snapshot + restore).
 # shellcheck source=lib/07_lib_pool_games.sh
 source "$SCRIPT_DIR/lib/07_lib_pool_games.sh"
@@ -173,8 +173,8 @@ pool_check_exclusivity() {
         [[ -e "$m" ]] && found+=("$m")
     done
     # /opt/grin/solo-stats counts ONLY when it holds solo collector data — the
-    # node-sync watchdog (installed with EVERY node build) used to keep its
-    # node_watchdog_*.json state here, which falsely hard-blocked the pool on
+    # node-sync watchdog (installed with EVERY node build) keeps its
+    # node_watchdog_*.json state here, which must not hard-block the pool on
     # every plain node box.
     for m in /opt/grin/solo-stats/*; do
         [[ -e "$m" ]] || continue                      # unmatched glob stays literal
@@ -249,8 +249,8 @@ fs.chmodSync(path, 0o600);
 # one of them. The two SERVED directories keep o+rx: nginx reads files there by name via
 # `alias` + `try_files`, and autoindex is off, so listing is not exposed.
 #
-# ⚠ Called from BOTH pool_install and pool_setup_nginx (audit §J8-7b). It used to live
-# only in the nginx step while Install did `chmod 700 "$POOL_APP_DIR"` — so re-running
+# ⚠ Called from BOTH pool_install and pool_setup_nginx (audit §J8-7b). It must not live
+# only in the nginx step: Install does `chmod 700 "$POOL_APP_DIR"` — so re-running
 # Install (the documented fix for a changed systemd unit) silently took the directory
 # back to 700, nginx could no longer traverse it, and every white-label logo and CMS
 # image 404'd until an operator happened to re-run 4) Setup nginx. Nothing warned.
@@ -1017,7 +1017,7 @@ pool_deploy_code() {
         info "$POOL_SERVICE is not running — start it via 6) Service control to load the new code."
     fi
 
-    # The /play/ games service rides along when it is installed (design §19.12). It
+    # The /play/ games service rides along when it is installed (design §19.12 (script07_design_games.md)). It
     # restarts only itself; a games failure never fails the pool deploy above.
     if pgs_installed; then
         pgs_deploy_code || warn "Games deploy reported a problem — the pool deploy above is complete; see P → 5."
@@ -1130,7 +1130,7 @@ pool_setup_nginx() {
     fi
 
     # 1) Install does not install nginx or certbot, and Migrate IN's restore only drops files
-    # into /etc/nginx — so on a fresh/migrated box this step used to write the vhost and then
+    # into /etc/nginx — so on a fresh/migrated box this step would write the vhost and then
     # die on `nginx: command not found`. Install both here, as Scripts 04/06 do.
     if ! command -v nginx &>/dev/null || ! command -v certbot &>/dev/null; then
         command -v nginx   &>/dev/null || warn "nginx is not installed."
@@ -1147,8 +1147,8 @@ pool_setup_nginx() {
 
     mkdir -p "$(dirname "$POOL_NGINX_CONF")"
 
-    # Migrate a pre-rename install: the vhost was renamed to grin-public-pool-<net>
-    # (was the unsuffixed "grin-pool" on mainnet / "grin-pool-testnet" on testnet).
+    # Migrate a pre-rename install: the vhost is grin-public-pool-<net>; the legacy names are
+    # the unsuffixed "grin-pool" (mainnet) and "grin-pool-testnet" (testnet).
     # Drop the legacy conf + its sites-enabled symlink so this run regenerates under
     # the new name instead of leaving two vhosts bound to the same server_name.
     if [[ -n "${POOL_NGINX_CONF_LEGACY:-}" && "$POOL_NGINX_CONF_LEGACY" != "$POOL_NGINX_CONF" ]]; then
@@ -1173,7 +1173,7 @@ pool_setup_nginx() {
     fi
 
     # Re-assert the served-asset directory modes (pool_ensure_served_dirs is the single
-    # definition; Install calls it too, so re-running Install no longer takes the app
+    # definition; Install calls it too, so re-running Install must not take the app
     # directory back to 700 and 404s every logo until this step is re-run — audit §J8-7b).
     pool_ensure_served_dirs
 
@@ -1184,7 +1184,7 @@ pool_setup_nginx() {
     # zone (added 2026-06 to stop the login captcha being starved by static-asset traffic),
     # delete it so the full current list regenerates. Idempotent — once present, this is skipped.
     # Also regenerate if it still carries any earlier-generation rate. All zone rates
-    # were multiplied ×20 in 2026-06 ("loosen now, tighten later" testing posture) so
+    # are deliberately loose ×20 ("loosen now, tighten later" testing posture) so
     # rate-limiting never breaks normal browsing/admin polling — the real controls are
     # JWT + login captcha + per-account lockout + IP auto-ban, not these throttles.
     # Triggers below catch both the original generation (auth 3r/m, static 60r/m) and
@@ -1438,7 +1438,7 @@ $(_pool_nginx_ping_block "$hdr_common")
     # Cache-Control of their own, which silently discarded the server-level CSP,
     # X-Frame-Options, nosniff and Referrer-Policy from EVERY public HTML page and from the
     # entire admin panel — the only two surfaces a browser actually renders. The API blocks,
-    # which add nothing, were the only ones still protected (audit §I1).
+    # which add nothing, were the only ones still protected (audit §I1 (script07_security_audit_archive.md)).
     #
     # Putting the headers in an include makes "add a header here" safe: whoever adds one
     # brings the include along. Two files, because /uploads/ and /custom/ must NOT emit the
@@ -1516,10 +1516,10 @@ HDREOF
 
     # Third snippet: the ADMIN panel CSP (audit §J14-4). /admin/ is served as STATIC files by
     # nginx, so the Express security-header middleware never runs for an admin HTML page —
-    # whatever this vhost sends IS the admin panel's CSP. It used to send $hdr_page, the
+    # whatever this vhost sends IS the admin panel's CSP. It must not send $hdr_page, the
     # PUBLIC one, which allowlists four third-party script origins and five connect-src
     # origins the panel does not use. Two layers now stand against XSS in this panel: script-src
-    # has no 'unsafe-inline' (since 2026-10-12, refactor F7 — every admin page script is an
+    # has no 'unsafe-inline' (refactor F7 — every admin page script is an
     # external /admin/js/<page>.js, so an injected <script> or on*= handler does not run), and
     # connect-src 'self' leaves a script that does run no silent exfiltration destination for
     # the admin session, the miner ledger or an in-flight TOTP secret.
@@ -1527,7 +1527,7 @@ HDREOF
     # Every asset all admin pages load is same-origin (chart.js and quill are vendored under
     # /js/vendor/), so nothing here needs widening. One directive is load-bearing:
     #   data: in img-src — the 2FA enrolment QR is generated client-side.
-    # Deliberately NOT blob: — the Donors review queue (design 18.11 Part 3 #1) loads banner
+    # Deliberately NOT blob: — the Donors review queue (design §18.11 in script07_implementation.md, Donors review) loads banner
     # previews from a plain same-origin src, which keeps the image route's sandbox headers.
     cat > "$hdr_admin" << HDREOF || { error "could not write $hdr_admin"; return 1; }
 # Generated by Script 07 (pool_setup_nginx) — DO NOT EDIT, re-run "Setup nginx" instead.
@@ -1881,7 +1881,7 @@ EOF
     # start at all and EVERY vhost on the box goes down, not just the pool's. The most
     # likely trigger is not a generator bug: `admin_allowlist` is a hand-edited pool.json
     # string spliced straight into `allow <entry>;`, so one typo does this.
-    # `ln -sf` is also no longer swallowed — a failed symlink used to leave `nginx -t`
+    # `ln -sf` failure is not swallowed — a failed symlink leaves `nginx -t`
     # passing (it was testing WITHOUT this vhost) and "nginx configured for …" printing
     # over a site that was never enabled.
     local _was_enabled=0
@@ -1956,7 +1956,7 @@ pool_setup_fail2ban() {
     # broken jail file — falling back to the 10 / 15 min / 10 d defaults.
     #
     # ONE set of defaults, used for both "key absent from grin_pubpool.json" and "key present
-    # but not a plain integer". They previously differed (5 / 600 / 3600 vs 10 / 900 / 864000):
+    # but not a plain integer". The two sets must never differ (5 / 600 / 3600 vs 10 / 900 / 864000 once did):
     # pool_ensure_defaults only seeds keys from pool_install / pool_configure, so an operator
     # who upgraded the toolkit and ran ONLY this menu step got the old 5-in-10-min policy while
     # every comment and the settings screen claimed 10-in-15-min. Silent, and invisible on the
@@ -2544,7 +2544,7 @@ pool_cron_schedules() {
                 rm -f "$cron_vacuum" "$vacuum_script"
                 success "Weekly VACUUM cron disabled."
             else
-                # ⚠ This used to be a one-liner: `sqlite3 pool.db "VACUUM;"` against the LIVE
+                # ⚠ Never a one-liner `sqlite3 pool.db "VACUUM;"` against the LIVE
                 # database, weekly, while the service was running (audit §J7-1). VACUUM takes an
                 # EXCLUSIVE lock for as long as it takes to rewrite the whole file — minutes on a
                 # busy pool — and no `busy_timeout` survives that. Everything the backend writes in
@@ -2836,7 +2836,7 @@ console.log(d.pairing || "");
 # Thin caller over grin-gateway-ctl init-server (§13.5/§13.12) — package, keypair,
 # /etc/wireguard conf, firewall, iface up+enabled and region_listen_host ALL live in
 # the helper, so this menu option and the admin panel's "Enable multi-region" button
-# do byte-identical work. It used to be a second implementation here, which is
+# do byte-identical work. A second implementation here is
 # exactly how the hub key, tunnel net or listen port drift between the two paths.
 pool_wg_setup_server() {
     info "Setting up the central WireGuard server..."
@@ -2926,7 +2926,7 @@ pool_wg_add_peer() {
     read -r _ ex rep reg peer_ip port synced <<< "$head"
 
     if [[ "$ex" == "1" ]]; then
-        # Dup-pubkey guard (cryptokey-routing lesson 2026-07-05): the helper wrote
+        # Dup-pubkey guard (cryptokey-routing lesson): the helper wrote
         # NOTHING — the key keeps its existing tunnel IP/port; re-print the pairing.
         warn "This public key is ALREADY a gateway peer — keeping its existing tunnel IP/port."
         echo -e "  ${BOLD}Existing pairing string for this key (region '${reg}'):${RESET}"
@@ -3405,7 +3405,7 @@ pool_cleanup() {
     local backup_wrapper="/usr/local/bin/grin-pool-backup-${POOL_NET}"
     local logrotate_conf="/etc/logrotate.d/${POOL_SERVICE}"
     local zones_conf="/etc/nginx/conf.d/script07-${POOL_SERVICE}.conf"
-    # Security-header snippets written by pool_setup_nginx (audit §I1/§I2). They live in
+    # Security-header snippets written by pool_setup_nginx (audit §I1 (script07_security_audit_archive.md)/§I2 (script07_security_audit_archive.md)). They live in
     # /etc/nginx/snippets/, which nothing else on the box sweeps — 08del only walks
     # sites-available/sites-enabled — so cleanup has to name them explicitly or they outlive
     # the pool. Removed in the same rm as the vhost that includes them, never before it:

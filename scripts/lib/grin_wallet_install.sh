@@ -58,14 +58,14 @@
 # The pin's original reason was that grin-wallet 5.4.1 pins rpassword 4.x, whose
 # read_password() reads STDIN, and rpassword 7's read_password() reads the TTY —
 # a naive port would have broken every listener this toolkit feeds a passphrase
-# on stdin. That did NOT happen: v5.5.0 (2026-08-12) pins rpassword 7.5.4 but
-# branches on `stdin.is_terminal()`, so the non-TTY path still works. Treat the
+# on stdin. That did NOT happen: v5.5.0 pins rpassword 7.5.4 but branches on
+# `stdin.is_terminal()`, so the non-TTY path still works. Treat the
 # hazard as defused, not pending — but keep smoke-testing
 # `printf 'x\n' | grin-wallet address` before swapping a pin, because that
 # branch is upstream's choice and not a guarantee.
 # A product may override with GWI_PIN_TAG (set it to "latest" to track head).
 #
-# Pin moved v5.4.1 → v5.5.0 on 2026-09-25, read against upstream v5.4.1..v5.5.0:
+# What v5.5.0 changes versus v5.4.1 (read against upstream v5.4.1..v5.5.0):
 #  - Tor: v5.5.0 adds an in-process Arti client, chosen by `[tor] use_integrated`.
 #    A toml with a [tor] section but no such key (every toml a 5.4.1 `init`
 #    wrote) reads it as FALSE and keeps spawning the external `tor` binary as
@@ -226,7 +226,7 @@ gwi_resolve_latest_tag() {
 
 # Download + verify + populate the store. Runs inside a caller-owned temp dir so
 # there is exactly ONE cleanup site (a RETURN trap here would be global and fire
-# again in the caller — see the note that used to live in this file).
+# again in the caller).
 # _gwi_fetch_impl <tag|latest> <tmp_dir>
 _gwi_fetch_impl() {
     local want="$1" tmp_dir="$2"

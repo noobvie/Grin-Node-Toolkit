@@ -947,7 +947,7 @@ grinscan_nuke() {
         # conf and the grinscan-proxy.conf snippet.
         # Do NOT touch /etc/nginx/snippets/grin-api.conf — that snippet is created
         # and OWNED by Script 06 (the world.grin.money stats vhost includes it).
-        # Deleting it here used to break Script 06's vhost (nginx [emerg] open()
+        # Deleting it here breaks Script 06's vhost (nginx [emerg] open()
         # grin-api.conf failed → nginx won't start → site down).
         local rate_conf="/etc/nginx/conf.d/grinscan-rate-limit.conf"
         local proxy_snippet="/etc/nginx/snippets/grinscan-proxy.conf"

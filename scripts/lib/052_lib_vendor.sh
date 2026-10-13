@@ -139,11 +139,11 @@ _acv_fmt_bytes() {
 # below and is never called by a build. Bash discards comments when it parses a
 # function, so comments cannot trip it.
 #
-# ⚠ DENY-LIST, never an allow-list. It used to name the nine functions in the
-#   verify chain, and that made the guard blind to the exact edit it exists to
+# ⚠ DENY-LIST, never an allow-list. Naming the nine functions in the
+#   verify chain would make the guard blind to the exact edit it exists to
 #   catch: a TENTH helper. Verified — define `_acv_helper` with a downloader in
-#   it, call it from acv_verify_vendor, and the old guard passed clean, because
-#   a name nobody added to the list is unguarded by construction. It now
+#   it, call it from acv_verify_vendor, and an allow-list guard passes clean, because
+#   a name nobody added to the list is unguarded by construction. It
 #   enumerates every acv_*/_acv_* function actually defined and skips only
 #   ACV_OFFLINE_EXEMPT. Adding a helper is guarded by default; exempting one is
 #   a visible edit that shows up in review.
@@ -619,10 +619,10 @@ acv_check_upstream() {
     local report="${LOG_DIR:-/opt/grin/logs}/accio_upstream_check_$(date +%Y%m%d_%H%M%S).log"
     mkdir -p "$(dirname "$report")" 2>/dev/null || true
     if ! : > "$report" 2>/dev/null; then
-        # ⚠ The fallback must NOT be inside $root. It was, and $root is removed
+        # ⚠ The fallback must NOT be inside $root: $root is removed
         # at the end of this function — so on precisely the box where the log
         # directory is unwritable, the path printed as "full log with per-commit
-        # stats" was deleted a few lines after being printed. The report is the
+        # stats" would be deleted a few lines after being printed. The report is the
         # whole deliverable of this screen; a fetch whose findings cannot be
         # kept is not worth running.
         local alt=""

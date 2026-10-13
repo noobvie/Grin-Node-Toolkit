@@ -3,3 +3,28 @@
 docs/tools/check_doc_drift.sh:07_lib_satellite  DEAD_PATH  worked example of a deleted file the drift checker was built from
 docs/tools/check_doc_drift.sh:satellite  STALE_TERM  same worked example
 scripts/lib/02_lib_landing.sh:web/grin-money-2026/grin_black_white.svg  DEAD_PATH  file lives in the sibling repo Grin-Landing-Pages (verified present), not this one
+scripts/051_grin_fidelius.sh:web/03_web_wallet  DEAD_PATH  path inside the sibling GrinSuite repo (noobvie/GrinSuite), named as the port's source
+scripts/051x_grin_xp_wallet.sh:TODO:\ssecurity\srecommendations  TODO  deliberate checklist of optional hardening for a future integration, not a stale marker
+scripts/lib/059_lib_nginx.sh:Grin\sDrop\smoved\s052  STALE_TERM  live migration code: deletes the pre-move zone file; the move is the reason it exists
+scripts/lib/059_lib_wallet.sh:Grin\sDrop\smoved\s052  STALE_TERM  live legacy-tag cleanup: boxes deployed under 052_watchdog_* must be reached
+scripts/lib/06_price_collector.py:nonlogs.io  STALE_TERM  records WHY GRIN/BTC comes from CoinGecko and that the old source is dead; dated line is evidence
+scripts/lib/06_collector.py:Grin\smainnet\sgenesis  DIARY_DATE  chain fact (genesis timestamp), not history
+scripts/lib/06_price_collector.py:00:00\sUTC  DIARY_DATE  chain fact (genesis timestamp), not history
+scripts/lib/06_ecosystem_checker.py:previously\sgood  DIARY_DATE  false positive — describes keeping the last good DB row
+scripts/06_global_grin_health.sh:previously\sconfigured  DIARY_DATE  false positive — describes preserving operator config on re-install
+scripts/lib/grin_wallet_install.sh:v5\.4\.1  STALE_TERM  example tag format / the version Fidelius still pins, not a claim about the shared pin
+scripts/051_grin_fidelius.sh:only\sFidelius\sstays  STALE_TERM  statement is current: shared pin v5.5.0, Fidelius alone on v5.4.1
+scripts/051_grin_fidelius.sh:directive\swere\sremoved  DIARY_DATE  false positive — hypothetical, not history
+scripts/05_grin_wallet_service.sh:Drop(.s\smove\sfrom|\s052\s→\s059|\soff\s052)  STALE_TERM  durable rationale for the fixed-slot rule; 052 is Accio now and the text says so
+scripts/lib/052_lib_build.sh:scripts/(x|service)\.js  DEAD_PATH  false positive — example worker filenames inside the vendored upstream tree, not repo paths
+scripts/lib/07_lib_gateway.sh:SATELLITE  STALE_TERM  states there is no satellite role (a trap guard against reintroducing one)
+scripts/lib/07_lib_hub.sh:satellite  STALE_TERM  states there is NO satellite ingestion API (a trap guard)
+scripts/lib/07_lib_pool_migrate.sh:never\s/v1/  STALE_TERM  correct rule: the comment forbids /v1/
+scripts/07_grin_mining_public_pool.sh:panel/CLI  DEAD_PATH  false positive — "panel or CLI", not a path
+scripts/lib/07_lib_hub.sh:web/nginx/admin/status/backup  DEAD_PATH  false positive — list of menu steps, not a path
+scripts/07_grin_mining_public_pool.sh:§13.(12p|10[bcd])  DEAD_SECTION  lettered sub-items inside design §13.12 / §13.10 (bold paragraphs, not headings)
+scripts/lib/07_lib_gwctl.sh:§13.10d  DEAD_SECTION  lettered sub-item inside design §13.10 (bold paragraph, not a heading)
+scripts/lib/07_lib_pool_backup.sh:§13.10c  DEAD_SECTION  lettered sub-item inside design §13.10 (bold paragraph, not a heading)
+scripts/lib/07_lib_pool_wallet.sh:§13.10e  DEAD_SECTION  lettered sub-item inside design §13.10 (bold paragraph, not a heading)
+scripts/07_grin_mining_public_pool.sh:[Ss]atellite  STALE_TERM  Z) Cleanup and the exclusivity guard must still find a pre-Model-C satellite install; the name is a live detection target
+scripts/07_grin_mining_public_pool.sh:Legacy\sSATELLITE  STALE_TERM  cleanup target for a pre-Model-C install

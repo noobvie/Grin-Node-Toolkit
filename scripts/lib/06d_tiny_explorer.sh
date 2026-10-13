@@ -30,11 +30,9 @@ TINYX_PORT=8471
 # tor as a CLIENT only, no hidden service. Ported from _acg_ensure_tor in
 # 052_lib_gateway.sh so both products fail the same way.
 #
-# Called only when the operator has just answered "yes" to the probe. Before R9
-# this function did not exist and the prompt merely printed "(apt install tor)",
-# so the single most likely outcome of answering yes was a probe that returned
-# "could not check" to every visitor — the exact state the off-by-default is
-# there to prevent. Returns 0 when 127.0.0.1:<port> is listening, 1 otherwise;
+# Called only when the operator has just answered "yes" to the probe. Without it,
+# the most likely outcome of answering yes on a box with no tor is a probe that
+# returns "could not check" to every visitor. Returns 0 when 127.0.0.1:<port> is listening, 1 otherwise;
 # the caller decides what to do about it, because leaving the probe on with no
 # tor is a choice an operator is allowed to make (they may be about to install
 # it by hand) — but not one they should make by accident.
@@ -120,7 +118,7 @@ _tinyx_ensure_tor() {
 # tinyx_update call it; neither may go back to a bare `cp -r`.
 #
 # Two exclusions, and neither is cosmetic:
-#   · test/  — the re-runnable assertion suite (fixtures + runners) added in R8.
+#   · test/  — the re-runnable assertion suite (fixtures + runners).
 #     It exists to be run in the repo before a change ships and has no job on a
 #     production box, so it is EXCLUDED rather than "acceptable to ship".
 #   · node_modules — if anyone ever ran `npm install` in the toolkit checkout, a
@@ -315,13 +313,11 @@ tinyx_configure() {
 
     # Wallet Checker tier 2 — the Tor liveness probe (POST /api/wallet-check).
     #
-    # ON by default for a NEW install (changed 2026-09-10). "Is this wallet
-    # answering right now?" is the reason most visitors open the Wallet Checker
-    # at all, and leaving it off shipped a tile that answered every question
-    # except the one that was asked. The original default was written when this
-    # prompt could only DETECT a missing tor daemon; _tinyx_ensure_tor now
-    # installs one, starts it and polls until SOCKS is actually bound, so the
-    # box no longer has to arrive qualified — it can be made so here.
+    # ON by default for a NEW install. "Is this wallet answering right now?" is
+    # the reason most visitors open the Wallet Checker at all, and leaving it off
+    # ships a tile that answers every question except the one that was asked.
+    # _tinyx_ensure_tor installs tor, starts it and polls until SOCKS is actually
+    # bound, so the box does not have to arrive qualified — it can be made so here.
     #
     # ⚠ This is the INSTALLER default, not the code default. The server still
     # treats a missing wallet_check_probe key as false (tiny-explorer-server.js,
@@ -331,14 +327,12 @@ tinyx_configure() {
     # missing. The two defaults answer different questions: this one is "what
     # should a fresh box do", that one is "what does an unreadable config mean".
     #
-    # The current value is READ BACK from the existing config first, and now
-    # reads BOTH values, not just true. This function rewrites config.json
-    # wholesale, so a one-sided read-back silently overwrites whichever choice
-    # is not the default: before, an operator who turned the probe ON lost it by
-    # re-running Configure for a new domain; with the default flipped, a
-    # one-sided read-back would do the same to an operator who deliberately
-    # turned it OFF. An explicit value in the config is a decision and outranks
-    # the default in both directions — only an install whose config does not
+    # The current value is READ BACK from the existing config first, and reads
+    # BOTH values, not just true. This function rewrites config.json wholesale,
+    # so a one-sided read-back silently overwrites whichever choice is not the
+    # default when Configure is re-run for a new domain (ON lost by an operator
+    # who turned it OFF, or the reverse). An explicit value in the config is a
+    # decision and outranks the default in both directions — only an install whose config does not
     # already record a choice gets the default. That is very nearly "a new
     # install" but not exactly: a config written before this key existed
     # (pre-99087d9) matches neither grep and takes the default too. The
@@ -379,13 +373,12 @@ tinyx_configure() {
     local probe_ans
     echo -ne "  Enable the Wallet Checker Tor liveness probe?${probe_extra} [${probe_hint}]: "
     read -r probe_ans || probe_ans="n"
-    # The catch-all keeps the DEFAULT and must never name a value. It used to be
-    # `*) wallet_probe="false"`, which was invisible while the default was false
-    # and became a live bug the moment it flipped: the prompt printed [Y/n]
-    # while every input but a bare "y"/"yes" — "Y " with the space a paste
-    # leaves behind, "ye", "1" — silently answered no, with nothing echoed to
-    # say so. This is also the idiom the rest of this file already uses (:284,
-    # :560): only an explicit n means no.
+    # The catch-all keeps the DEFAULT and must never name a value. A catch-all
+    # of `*) wallet_probe="false"` is invisible while the default is false and a
+    # live bug once it is true: the prompt prints [Y/n] while every input but a
+    # bare "y"/"yes" — "Y " with the space a paste leaves behind, "ye", "1" —
+    # silently answers no, with nothing echoed to say so. Same idiom as the rest
+    # of this file: only an explicit n means no.
     if [[ -n "$probe_ans" ]]; then
         case "${probe_ans,,}" in
             y|yes) wallet_probe="true" ;;
@@ -394,11 +387,11 @@ tinyx_configure() {
         esac
     fi
 
-    # Answering "yes" with no tor on the box used to write the flag and stop
-    # there, leaving a button that could only ever answer "could not check" —
-    # which reads to a visitor as every wallet being offline, not as an
-    # unequipped server. So offer the install here, and if it does not come up,
-    # say plainly what the operator is choosing before writing the flag.
+    # Answering "yes" with no tor on the box must not just write the flag: that
+    # leaves a button that can only ever answer "could not check", which reads to
+    # a visitor as every wallet being offline, not as an unequipped server. So
+    # offer the install here, and if it does not come up, say plainly what the
+    # operator is choosing before writing the flag.
     if [[ "$wallet_probe" == "true" && "$tor_up" != "yes" ]]; then
         if ! _tinyx_ensure_tor "$tor_socks_port"; then
             echo -e "  ${DIM}Without a SOCKS proxy the probe answers \"could not check\" every time.${RESET}"
@@ -726,8 +719,8 @@ tinyx_status() {
                 echo -e "            ${DIM}Every wallet check answers \"could not check\" — systemctl status tor${RESET}"
             fi
         else
-            # Off is no longer the default, so say how to change it: reaching
-            # this line now means someone chose it or a tor install failed.
+            # Off is not the default, so say how to change it: reaching this
+            # line means someone chose it or a tor install failed.
             echo -e "  Probe:    ${DIM}off — Wallet Checker is address-only (no liveness button)${RESET}"
             echo -e "            ${DIM}Turn it on with Configure (2) — it is on by default for new installs.${RESET}"
         fi

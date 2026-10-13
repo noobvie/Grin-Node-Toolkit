@@ -21,7 +21,7 @@
 #                        on the hub's public IP — see the runbook below.
 #   · nginx vhost        $POOL_NGINX_CONF (cert itself is NOT included — certbot
 #                        re-issues once DNS points at the new box)
-#   · games DB           $PGS_DB (grinium-games.db, design §19 D18) when the /play/
+#   · games DB           $PGS_DB (grinium-games.db, design §19 (script07_design_games.md) D18) when the /play/
 #                        service is installed — snapshotted like pool.db, BEST EFFORT:
 #                        a missing or unreadable games DB is a warning, never a failed
 #                        backup. It is NOT extracted with the rest: restore asks about it
@@ -223,7 +223,7 @@ _pbk_utc() {
 
 # Backend CODE at the top of the app dir. lib/, admin-panel/, scripts/ and node_modules/ were
 # always excluded, but these three were not, so a restore put the ARCHIVE's index.js and
-# package files next to THIS box's lib/ — two code versions in one app, silently (audit Part 9
+# package files next to THIS box's lib/ — two code versions in one app, silently (security audit, hub-move review
 # C3: an older daily backup restored after a deploy, or a Migrate IN onto a box installed from
 # a newer checkout). Code comes from 1) Install / 9) Deploy, never from an archive: excluded
 # when an archive is made AND when one is extracted, so archives made before this change
@@ -243,7 +243,7 @@ _pbk_code_excludes() {
 # pass cannot strip the staged snapshot because it is appended in a second call.
 # rc 0 ok · 1 tar reported an error (lenient callers may accept it) · 2 pool.db EXISTS
 # but could not be put in the archive — always fatal: an archive without the ledger looks
-# like a backup and restores no balances (audit Part 9 C5; it used to return 0 then).
+# like a backup and restores no balances (security audit, hub-move review C5).
 _pbk_make_tar() {
     local outgz="$1"
     local work; work=$(mktemp /tmp/grin_pubpool_bakwork_XXXXXX.tar 2>/dev/null) || return 1
@@ -261,7 +261,7 @@ _pbk_make_tar() {
         fi
     fi
 
-    # Games DB (design §19 D18) — same two-phase snapshot, but best effort: any problem is a
+    # Games DB (design §19 (script07_design_games.md) D18) — same two-phase snapshot, but best effort: any problem is a
     # warning and the archive simply carries no games data. Never rc 2, never fatal.
     local gdbrel=""
     if [[ -n "${PGS_DB:-}" && -f "$PGS_DB" ]] && declare -F pgs_snapshot_db >/dev/null 2>&1; then
@@ -408,8 +408,7 @@ _pbk_restore_extract() {
         # A FAILED extraction is a partial one: the wallet dir may already be the archive's
         # while pool.db (appended LAST, so usually the last member written) is still the old
         # one, or half-written. Whatever pool.db is there now gets frozen too, so neither 2)
-        # Restore nor Migrate IN leaves payouts live on a mixed state (audit Part 9 C4 — only
-        # Migrate IN used to freeze here, inline).
+        # Restore nor Migrate IN leaves payouts live on a mixed state (security audit, hub-move review C4).
         if [[ -f "$POOL_APP_DIR/pool.db" ]] && pbk_freeze_payouts "$POOL_APP_DIR/pool.db" "$reason" "$by"; then
             PBK_EXTRACT_FROZEN=1
         fi

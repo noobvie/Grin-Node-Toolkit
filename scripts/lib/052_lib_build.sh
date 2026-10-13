@@ -39,8 +39,8 @@
 #     the cleanup to each of them individually is how one gets missed.
 #
 #     `net` is a GUARD, not a switch: it must equal the already-selected
-#     ACC_NETWORK or the build refuses. It used to call acc_set_network, which
-#     silently re-pointed every ACC_* global — dirs, ports, conf path, service
+#     ACC_NETWORK or the build refuses. Calling acc_set_network here would
+#     silently re-point every ACC_* global — dirs, ports, conf path, service
 #     name — for the rest of the hub session. Mainnet/testnet isolation must not
 #     rest on nobody ever passing the documented argument. Select first, build
 #     second.
@@ -84,7 +84,7 @@
 #     this runs against a live box with other vhosts, live certs and a running
 #     gateway, all of which must survive a failed build untouched.
 #
-#     ⚠ "Last" is the guarantee; ATOMIC is not, and this used to claim it. POSIX
+#     ⚠ "Last" is the guarantee; ATOMIC is not, so never claim it. POSIX
 #       cannot rename a directory over a non-empty one, so publishing is TWO
 #       renames (rotate the old aside, move the new in) and there is a window
 #       between them where the nginx root does not exist and a request 404s. It
@@ -742,7 +742,7 @@ _acb_build_run() {
     _acb_assert_offline || return 1
 
     if [[ -z "$net" ]]; then error "accio_build: no network selected."; return 1; fi
-    # A GUARD, not a switch. This used to call acc_set_network, which re-pointed
+    # A GUARD, not a switch. Calling acc_set_network here would re-point
     # every ACC_* global — dirs, ports, conf path, service name, nginx vhost —
     # for the whole remaining hub session, with no restore. Mainnet/testnet
     # isolation must not depend on nobody passing the documented argument.
@@ -1135,11 +1135,11 @@ _acb_sa_inline_images() {
 # class constant (Logo.VERTEX_SHADER_FILE_LOCATION), and the constant is a
 # `static get` returning the path. Both forms are resolved here.
 #
-# ⚠ THE CLASS IS HALF THE KEY. This used to match `X.CONST`, throw the `X` away,
-#   grep `static get CONST()` across every script and take head -n1 in GLOB
-#   order. That is not a theoretical hazard in this tree: WORKER_FILE_LOCATION
+# ⚠ THE CLASS IS HALF THE KEY. Matching `X.CONST`, throwing the `X` away,
+#   grepping `static get CONST()` across every script and taking head -n1 in GLOB
+#   order is wrong. That is not a theoretical hazard in this tree: WORKER_FILE_LOCATION
 #   is declared THREE times — camera.js, output.js, slate.js — each returning a
-#   different path. It resolved correctly only because the four constants that
+#   different path. That form would resolve correctly only because the four constants that
 #   currently appear in the `X.CONST` form happen to be unique names. The first
 #   time upstream writes one of the triplicated names in that form, the build
 #   inlines camera's asset under slate's expression — silently, because the
@@ -1329,7 +1329,7 @@ _acb_sa_inline_worker_imports() {
             rm -f "$script"
         done
         # The 5-pass cap is a cycle guard, not a budget. Hitting it with imports
-        # still in the file used to end the loop in silence.
+        # still in the file must not end the loop in silence.
         left=$(grep -c 'importScripts("' "$worker" 2>/dev/null || true)
         if [[ "${left:-0}" -gt 0 ]]; then
             warn "  ${worker##*/} still has $left importScripts() call(s) after 5 passes"

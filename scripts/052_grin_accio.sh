@@ -5,12 +5,9 @@
 #
 #  Member of the Wallet Services hub (Script 05), fixed slot key `2`.
 #
-#  Created 2026-08-09 by build packet S0 ("Vendor & pin"), which is what
-#  ASSIGNS the number 052 — a product gets its number the day its first file is
-#  created. Every menu key is LIVE as of 2026-08-10 (packet S7), and hub 05
-#  key `2` now dispatches here instead of to `_slot_notice`.
+#  A product gets its number the day its first file is created.
 #
-#  ⚠ NOTHING IN THIS PRODUCT HAS EVER RUN ON A VPS. Every packet from S1 to S7
+#  ⚠ NOTHING IN THIS PRODUCT HAS EVER RUN ON A VPS. Every part
 #    was authored against the vendored tree and verified offline — `bash -n`,
 #    `node --check`, unit assertions and end-to-end assertions against the real
 #    server.js. What has NOT happened is a single build, deploy, send or
@@ -58,52 +55,33 @@
 #       vendor/SHA256SUMS before every build, and reports (never takes) what
 #       upstream changed since the pin. A pin nothing checks is a comment.
 #
-#  ─── Build packets (docs/reference/script052_design.md §"Build plan") ───────
-#    S0  vendor & pin ...................................... DONE 2026-08-09
-#    S1  052_lib_build.sh (own the build) ................... DONE 2026-08-09
-#    S2  static deploy on testnet, stock nginx        [first VPS work]
-#        └─ step 1 IS S1's acceptance test: run "Rebuild site" twice on the
-#           VPS and diff site.SHA256SUMS.prev against site.SHA256SUMS.
-#           Needs php-cli + php-mbstring + php-intl (build time only).
-#    S3  gateway I  — /tor/ forwarder ....................... DONE 2026-08-09
-#        └─ web/052_accio/gateway/ (Node, ZERO npm deps) + 052_lib_gateway.sh.
-#           Self-test = 8 offline probes of the SSRF guard; the end-to-end
-#           send to a Fidelius onion still needs a VPS and a browser.
-#    S4a listen protocol spec (read listener.js) ........... DONE 2026-08-10
-#        └─ script052_design.md §"Listen protocol" — the SOLE input to S4b.
-#    S4b gateway II — /listen + /wallet/<suffix> ............ DONE 2026-08-10
-#        └─ 4 more modules (ws/store/listen_route/wallet_route), still ZERO
-#           npm deps. Adds the ONE thing this service writes to disk: the
-#           suffix<->session table at /opt/grin/accio-<net>/gateway-state/.
-#           Lose it and every wallet's RECEIVING ADDRESS changes. Self-test is
-#           now 16 probes; the real receive still needs a VPS and a browser.
-#    S5  Grin-default overlay, branding, About credit ...... DONE 2026-08-10
-#        └─ web/052_accio/patches/public_html/, 16 files here — 19 today: S9
-#           pass 1 added mqs.js, S10 added styles/accio.css and
-#           errors/template.php for the "Orbital Dawn" theme. Every deviation
-#           is marked `ACCIO PATCH` — grep for that, do not diff vendor/.
-#    S6  052_lib_vendor.sh (integrity + update check) ...... DONE 2026-08-10
-#        └─ Verify is OFFLINE and now GATES the build: one changed byte under
-#           vendor/, or one file added there that the manifest never listed,
-#           and nothing is staged. Check upstream is the ONLY network action
-#           in 052, is menu-only (never a timer), clones BARE so upstream code
-#           is never checked out, and changes nothing.
-#    S7  mainnet, SSL, onion, hub 05 wiring ................ DONE 2026-08-10
-#        └─ 052_lib_nginx.sh (vhost + certbot + hidden service), the standalone
-#           artefact in 052_lib_build.sh, the install/status/uninstall actions,
-#           and hub 05 key `2` pointed at this script. S2's authorable half —
-#           the nginx lib — is paid here too, because an SSL vhost cannot be
-#           added to a vhost that was never written.
-#    S8  security audit .................................... DONE 2026-08-11
-#        └─ docs/reference/script052_security_audit.md — 8 fixed, 6 open.
-#    S9+ deletion passes, one subsystem per session
-#        └─ pass 1 (MQS) DONE 2026-08-11. Pass 2 waits for a box: it is the
-#           pass that deletes files rather than reducing one.
-#    R1–R8 review arc — the whole authored surface read once before S2 spends
-#        VPS time on it. Plan + findings: script052_implementation.md.
+#  ─── Build status (plan: docs/reference/script052_design.md §"Build plan") ───
+#  Every menu key is live and hub 05 key `2` dispatches here. All of it was
+#  authored and verified OFFLINE; the acceptance runs on a VPS are still owed,
+#  testnet before mainnet (see the NOTHING … RUN warning above).
+#    • Build (052_lib_build.sh) — reads only vendor/. The acceptance check is to
+#      run "Rebuild site" twice on the VPS and diff site.SHA256SUMS.prev against
+#      site.SHA256SUMS. Needs php-cli + php-mbstring + php-intl (build time only).
+#    • Gateway (web/052_accio/gateway/, Node, ZERO npm deps) + 052_lib_gateway.sh —
+#      /tor/ forwarder, /listen and /wallet/<suffix>. It writes ONE thing to disk:
+#      the suffix<->session table at /opt/grin/accio-<net>/gateway-state/. Lose it
+#      and every wallet's RECEIVING ADDRESS changes. The self-test is offline
+#      probes only; a real send/receive still needs a VPS and a browser.
+#    • Overlay + branding (web/052_accio/patches/public_html/) — every deviation is
+#      marked `ACCIO PATCH`; grep for that, do not diff vendor/. The file table
+#      is patches/README.md.
+#    • Vendor integrity (052_lib_vendor.sh) — Verify is OFFLINE and GATES the
+#      build: one changed byte under vendor/, or one file added there that the
+#      manifest never listed, and nothing is staged. Check upstream is the ONLY
+#      network action in 052, is menu-only (never a timer), clones BARE so
+#      upstream code is never checked out, and changes nothing.
+#    • Deploy (052_lib_nginx.sh) — vhost + certbot + hidden service, and the
+#      standalone artefact in 052_lib_build.sh.
+#    • Deletion passes (one subsystem each): MQS is reduced; the pass that
+#      deletes files rather than reducing one waits for a box.
 #
 #  Design:  docs/reference/script052_design.md
-#  Log:     docs/reference/script052_implementation.md
+#  Build:   docs/reference/script052_implementation.md
 #
 #  ─── Network submenu ────────────────────────────────────────────────────────
 #   1) Install / deploy          5) Check upstream        (052_lib_vendor.sh)
@@ -237,7 +215,7 @@ _acc_conf_get() {
     if [[ -n "$v" ]]; then echo "$v"; else echo "$default"; fi
 }
 
-# The value is NEVER fed to `sed` as a replacement. It used to be, and every
+# The value is NEVER fed to `sed` as a replacement: every
 # value that reaches here is operator- or Tor-supplied: a `&` silently expands
 # to the whole match (a corrupt conf line nothing would explain), and a `|`
 # closes the s/// and turns the rest into sed FLAGS — `w /some/file` writes, as

@@ -19,7 +19,7 @@
 #     stopped — pool service, the wallet listener's @reboot line and its */5
 #     watchdog — so a reboot of this box cannot bring a second pool back. The
 #     weekly VACUUM cron goes too, and step 4 refuses while a vacuum runs: its
-#     script restarts the pool from an EXIT trap (audit Part 9 P1).
+#     script restarts the pool from an EXIT trap (security audit, hub-move review P1).
 #   · The final archive is taken AFTER everything stops, so pool.db and the
 #     wallet it describes leave the box as one consistent pair.
 #   · The hub's WireGuard goes DOWN and is disabled at boot. While it still
@@ -742,7 +742,7 @@ _pmg_out_stop() {
     # The weekly VACUUM's script stops the pool, compacts pool.db, and STARTS it again from an
     # EXIT trap whenever the pool was running when the vacuum began. One in flight now would
     # start this pool again after the checks below said it was stopped — a live old hub, the
-    # one thing this order exists to prevent (audit Part 9 P1). So: its cron goes FIRST (no new
+    # one thing this order exists to prevent (security audit, hub-move review P1). So: its cron goes FIRST (no new
     # vacuum can begin after the check), then refuse while one runs. A vacuum started by hand
     # after the stop finds the pool inactive and never restarts it.
     if [[ -f "$PMG_VACUUM_CRON" ]]; then
@@ -878,7 +878,7 @@ _pmg_out_archive() {
     # The archive is named (and keyed) by the LOCAL date at step 6, the manifest's
     # archive_name by the date at step 5. A run straddling local midnight made them differ,
     # and Migrate IN rightly refuses a manifest naming another archive — so the move's own
-    # archive was unusable (audit Part 9 C1). Everything is stopped, so the ledger cannot
+    # archive was unusable (security audit, hub-move review C1). Everything is stopped, so the ledger cannot
     # have moved: rewrite the manifest under the new date and rebuild once. The rebuild
     # gets the SAME file name and replaces the mismatched archive; no orphan is left.
     if [[ "$(basename "$PMG_ARCHIVE")" != "$PMG_MANIFEST_ARCHIVE" ]]; then
@@ -983,7 +983,7 @@ pmg_migrate_out() {
 #      IS DARK (F4): two live pools on one wallet seed must never happen.
 #   3  restore through _pbk_restore_extract — the same core and the same freeze
 #      as 2) Restore. Payouts come up FROZEN.
-#   4  location (singlebox): a new region tag, so Part 1's move rule in
+#   4  location (singlebox): a new region tag, so the move rule in
 #      ensureLocalRegion publishes the new row on the first start.
 #   5  bring-up: node secrets, wallet binary, ownership, web files, WG, nginx.
 #   6  continuity: every ledger figure AND per-row digest EQUAL to the manifest;
@@ -1054,8 +1054,8 @@ _pmg_in_cleanup() {
 # ─── Probes of the OLD hub (F4) ──────────────────────────────────────────────
 # A "no" only counts when the OLD BOX ITSELF said it. A firewall answers for a box too — a
 # DROP times out, and a REJECT answers with ICMP (firewalld's default: icmp-host-prohibited,
-# "No route to host") or a RST — so a box filtered FROM HERE used to read as dark while its
-# pool still served (audit Part 9 C6). Hence: only a RST counts as a stratum "no", and only
+# "No route to host") or a RST — so a box filtered FROM HERE reads as dark while its
+# pool still served (security audit, hub-move review C6). Hence: only a RST counts as a stratum "no", and only
 # an HTTP answer that is not the pool counts as an API "no"; everything else proves nothing.
 # rc 0 = connected · 1 = REFUSED (a TCP RST) · 2 = timed out, or any other error: proves nothing
 _pmg_tcp_probe() {  # <host> <port>
@@ -1660,7 +1660,7 @@ _pmg_in_restore() {
 
     # 1) Install ENABLED the pool unit. From the restore until step 7 this box holds the old
     # hub's seed and ledger, and a reboot must not start that pool unattended — so the unit is
-    # disabled first, and only step 7 enables it again (audit Part 9 C2).
+    # disabled first, and only step 7 enables it again (security audit, hub-move review C2).
     systemctl disable "$POOL_SERVICE" >/dev/null 2>&1 || true
     if [[ "$(systemctl is-enabled "$POOL_SERVICE" 2>/dev/null)" == "enabled" ]]; then
         error "Could not disable $POOL_SERVICE at boot — nothing restored. systemctl disable $POOL_SERVICE, then B → 7 again."
@@ -1692,9 +1692,9 @@ _pmg_in_restore() {
            return 1 ;;
     esac
     _pbk_restore_perms
-    # Games DB (design §19 D18): never part of the extraction above; asked separately, and
+    # Games DB (design §19 (script07_design_games.md) D18): never part of the extraction above; asked separately, and
     # a problem with it never fails the move. Its outcome is SAID here, in the log and on the
-    # final screen — it used to be one line among many, and an operator then had no way to
+    # final screen — one line among many would leave an operator no way to
     # tell afterwards whether /play/ came up on the old data or on an empty DB.
     PMG_IN_GAMES="absent"
     if declare -F pgs_restore_db_from_archive >/dev/null 2>&1; then
@@ -1716,7 +1716,7 @@ _pmg_in_restore() {
 
 # ─── Step 4: location ────────────────────────────────────────────────────────
 # The seeded row for a new tag (e.g. cqf) already exists INACTIVE on the old hub's DB.
-# Part 1's rule in ensureLocalRegion activates it on the first start because the tag
+# The move rule in ensureLocalRegion activates it on the first start because the tag
 # differs from the `_state/local_region` stamp. A manifest WITHOUT a stamp (the old hub
 # never ran that code) would make the move look like a first boot → stamp only, no
 # activation; so the old tag is written as the stamp here first (F3).

@@ -478,7 +478,7 @@ EOF
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# _gsb_list_artifacts — print previously built binaries, newest first.
+# _gsb_list_artifacts — print binaries built earlier, newest first.
 # Echoes paths one per line (callers read into an array); prints nothing if none.
 # -----------------------------------------------------------------------------
 _gsb_list_artifacts() {

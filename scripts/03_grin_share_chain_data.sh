@@ -190,7 +190,7 @@ TMUX_SESSION=""
 # Logging helpers
 ################################################################################
 
-# _grin_session_name() now lives in lib/grin_node_control.sh (sourced above).
+# _grin_session_name() is defined in lib/grin_node_control.sh (sourced above).
 
 # LOG_FILE is empty until the build resolver or the remote-copy runner sets it,
 # and the interactive mirror menus (rc_log -> log) run before either does. A
@@ -248,9 +248,9 @@ show_error_pause() {
 # Usage: ensure_package <command> <package>
 # Optional helpers (pigz, nocache, rsync) go through this, and the callers are
 # on a cron schedule. When a package genuinely is not available - nocache is in
-# no RHEL base repo, for instance - the old version ran a full `apt-get update`
-# plus a failing install on EVERY run, for ever: minutes of network and disk on
-# a box the whole redesign exists to keep quiet, to reach the same answer as
+# no RHEL base repo, for instance - an uncached check would run a full
+# `apt-get update` plus a failing install on EVERY run, for ever: minutes of
+# network and disk on a box this design keeps quiet, to reach the same answer as
 # last time. A failure is remembered and not retried for PKG_RETRY_HOURS.
 #
 # Only FAILURE is cached, and only for a while. A package that appears in a repo
@@ -912,10 +912,9 @@ validate_nginx_config() {
 #
 # Why this exists, and why it runs first. The publish sequence deletes the live
 # archive (step 0) long before its replacement exists (step 5), so a run that
-# cannot finish takes the mirror down with it. That was survivable while fullmain
-# published twice a week — the next run healed it within four days. Since the
-# cadence moved to the 1st and 15th, the same failure leaves a mirror dead for up
-# to 17 days, which is what makes "fail before deleting anything" worth real code.
+# cannot finish takes the mirror down with it. With fullmain published on the
+# 1st and 15th, that failure leaves a mirror dead for up to 17 days (a twice-weekly
+# cadence would heal within four), which is what makes "fail before deleting anything" worth real code.
 #
 # Three outcomes, measured on OUTPUT_DIR's filesystem — the only one that has to
 # hold the archive, since chain_data may well sit on another disk:
@@ -1005,7 +1004,7 @@ preflight_disk_space() {
     # of archive over a fortnight). That undershoot is what DISK_HEADROOM_MB is
     # there to absorb — 512 MiB covers roughly six cadences — but it means the
     # headroom is load-bearing here, not decorative. Do not cut it to zero on the
-    # reasoning that the ratio is now measured rather than guessed.
+    # reasoning that the ratio is measured rather than guessed.
     #
     # Guards. Exactly one archive, or the sum is two generations added together
     # and meaningless. A sane band, because a truncated or half-written archive
@@ -1053,7 +1052,7 @@ preflight_disk_space() {
     fi
 }
 
-# Step 0: clear previously published artefacts from the output dir
+# Step 0: clear the artefacts this pipeline published earlier from the output dir
 #
 # OUTPUT_DIR is a live nginx web root, not a scratch dir. Only the files THIS
 # pipeline publishes are removed — anything else the operator put there is kept.
@@ -1065,10 +1064,10 @@ clean_output_directory() {
     cd "$OUTPUT_DIR" || error_exit "Cannot access $OUTPUT_DIR"
 
     # Debris in every case: interrupted transfers and abandoned temp files. The
-    # old blanket "find . -type f -delete" swept these; now that the sweep is
-    # name-scoped to protect index.html, they have to be named or they accumulate
-    # forever. The leading-dot patterns are spelled out because a bare * never
-    # matches them — and that now includes step 5's own hidden work files.
+    # sweep is name-scoped to protect index.html (not a blanket delete), so debris
+    # has to be named or it accumulates forever. The leading-dot patterns are
+    # spelled out because a bare * never matches them — that includes step 5's own
+    # hidden work files.
     local -a targets=( '*.tar.gz.part' '*.tar.gz.tmp' '*.tar.gz.[0-9]'
                        'wget-log' 'wget-log.*' '.chaindata.json.*'
                        '.*.tar.gz.tmp' '.*.sha256.tmp' )
@@ -1151,7 +1150,7 @@ remove_old_txhashset() {
 }
 
 # Step 3: peer directory — kept in archive intentionally.
-# Removing it was the original behaviour, but when DNS seeds are unavailable
+# Do not remove it: when DNS seeds are unavailable
 # (as happened when all Grin DNS seed nodes went offline in 2026-04) a node
 # that bootstraps from this archive has no peers at all and cannot connect.
 # Including the peer DB gives downloaders a head-start with known-good peers.
@@ -1243,8 +1242,8 @@ _clamp_level() {
 # vanishing mid-read) would publish a TRUNCATED archive alongside a perfectly
 # valid .sha256 and a perfectly valid manifest. Every integrity and freshness
 # check downstream would accept it, because each one is self-consistent with the
-# corrupt file. The old `tar -czf` was a single command, so its `$?` test was
-# sound; converting to a pipeline is what makes this check load-bearing.
+# corrupt file. A lone `tar -czf` has a sound `$?` test; as a pipeline it is the
+# PIPESTATUS check that makes this load-bearing.
 compress_chain_data() {
     log "Step 5: Compressing chain_data..."
     # Every failure path below RETURNS rather than calling error_exit. error_exit
@@ -1359,9 +1358,9 @@ compress_chain_data() {
         fi
     fi
 
-    # "${rdr[@]}" carries nice/ionice/nocache. Until now these were applied to the
-    # COMPRESSOR only, which had it backwards: tar is the process that reads the
-    # whole ~20 GB off disk, so it is the one whose IO needed deprioritising.
+    # "${rdr[@]}" carries nice/ionice/nocache and goes on TAR, not just the
+    # compressor: tar is the process that reads the whole ~20 GB off disk, so it
+    # is the one whose IO needs deprioritising.
     # Still exactly two pipeline elements — the PIPESTATUS check below indexes 0
     # and 1, so adding a third stage here would silently stop checking one of them.
     "${rdr[@]}" tar -cf - \
@@ -1400,7 +1399,7 @@ compress_chain_data() {
     # has just been deleted reads as READY and hands the client a 404 it reports
     # as a broken mirror. Everything after it is a rename within one directory,
     # so the window where nothing is published is a few milliseconds — not the
-    # length of a compress, which is what step 0 used to cost.
+    # length of a compress, which clearing in step 0 would cost.
     #
     # Take the site_key lock for the swap ONLY. A remote copy holds this same
     # lock for its whole run, so a swap can never pull files out from under an
@@ -1672,7 +1671,7 @@ run_nginx_share_for_port() {
         save_instance_detection          # keep conf fresh after live run
     elif ! load_instance_from_conf "$port"; then
         # Nothing listening on the port AND no usable entry in the instances conf.
-        # This used to return silently, which is how an entire network disappears
+        # Returning silently here would make an entire network disappear
         # from a run that otherwise reports "jobs finished" — the operator sees a
         # fresh testnet archive, no error anywhere, and no clue mainnet was
         # dropped. Say which network went and why.
@@ -1703,8 +1702,8 @@ run_nginx_share_for_port() {
     remove_peer_directory
     create_status_in_progress
     # Steps 5-8 are bracketed so that step 9 runs on BOTH paths. The node is
-    # stopped from step 1 onward; a compress that dies here used to exit the
-    # script outright and leave it stopped until someone noticed. Publishing is
+    # stopped from step 1 onward; a compress that dies here must not exit the
+    # script outright and leave the node stopped until someone noticed. Publishing is
     # skipped on failure — with RETAIN_PREVIOUS the previous archive is still
     # sitting there intact, so the mirror carries on serving it.
     if compress_chain_data; then
@@ -2017,7 +2016,7 @@ _node_type_for_network() {
 #   each network in turn naturally staggers their times. Preset 1 (fixed default)
 #   is network-specific so mainnet/testnet don't collide even on the default.
 #
-#   The preset SET now also depends on node type: a full archive costs ~20 GB and
+#   The preset SET also depends on node type: a full archive costs ~20 GB and
 #   a long stop-the-node compress, so it is offered biweekly-or-rarer while
 #   pruned keeps its frequent schedule. See list_presets for the full reasoning.
 get_cron_expression() {
@@ -2560,8 +2559,8 @@ run_cron_remote() {
 # silently leave the copy firing before there is anything new to copy.
 #
 # The result comes back in RC_SCHED_EXPR and the reason for a refusal in
-# RC_SCHED_WARN. Both are globals because the caller used to read this through
-# $( ), which runs the function in a SUBSHELL — so every variable it set was
+# RC_SCHED_WARN. Both are globals because reading this through
+# $( ) would run the function in a SUBSHELL — so every variable it set was
 # discarded, and the operator got a bare "could not derive a schedule" while the
 # sentence explaining why was thrown away.
 _rc_derive_schedule() {
@@ -2574,9 +2573,9 @@ _rc_derive_schedule() {
     # The build cron is ONE line with its marker appended at the END:
     #   0 0 1,15 * * bash .../03_...sh --cron-nginx-main >> ...log 2>&1 # ...grin_share_nginx_main
     # (see cron_line= in the installer). So the marker is matched as a substring
-    # of that line. An earlier version looked for the marker on a line of its own
-    # and took the line after it — a layout this script has never written, which
-    # made the whole function return empty every single time.
+    # of that line. Never look for the marker on a line of its own
+    # (the next-line layout is one this script never writes): that made the whole
+    # function return empty every single time.
     line=$(crontab -l 2>/dev/null | grep -F "$tag" | tail -1)
     # Legacy combined schedule, only when there is no per-network one. Anchored
     # to end-of-line because "...grin_share_nginx" is a PREFIX of both
@@ -2701,21 +2700,21 @@ menu_remote_schedule() {
 # ---------------------------------------------------------------------------
 # SSH access — the FIRST thing an operator does in this menu
 # ---------------------------------------------------------------------------
-# The order used to be wrong, and it cost every new operator the same hour.
-# "Add a mirror" was option 1 and "SSH key" was option 6, so the path the menu
-# invited was: add a mirror -> watch its automatic connection test fail -> go
-# looking for what was missing. Worse, the key screen built its ssh-copy-id
+# Order matters here: a wrong order costs every new operator the same hour.
+# With "Add a mirror" first and "SSH key" last, the path the menu invites is:
+# add a mirror -> watch its automatic connection test fail -> go looking for
+# what was missing. Worse, the key screen built its ssh-copy-id
 # lines by reading the CONFIGURED mirrors, so on a fresh box — the only box
 # where it is actually needed — it printed a key and no instructions at all.
 #
-# Access is now step 1 and stands on its own: it asks for the host itself
+# Access is step 1 and stands on its own: it asks for the host itself
 # instead of requiring one to already be in the config, and it names the machine
 # each command belongs on. The most common newbie failure here is running a step
 # on the wrong box (generating a second key on the mirror, or pasting the
 # PRIVATE half into authorized_keys), so every line says THIS SERVER or THE
 # MIRROR rather than leaving it to be inferred.
 #
-# The password rule is unchanged and load-bearing: this script NEVER reads the
+# The password rule is load-bearing: this script NEVER reads the
 # mirror's password. ssh-copy-id is run on the operator's terminal and does its
 # own prompting, so the secret goes from the keyboard to ssh and never through a
 # shell variable, the session log or `ps`.
@@ -3032,7 +3031,7 @@ menu_remote_keys() {
 # is a numbered choice; remove and enable/disable were the two that asked the
 # operator to TYPE a site_key and an alias from memory. That is the worst place
 # for free text: "site_key" is internal jargon that appears in no other prompt,
-# and a typo in the remove path used to report success.
+# and a typed typo in the remove path would report success.
 # Answers in RC_PICK_SK / RC_PICK_AL / RC_PICK_EN. Returns 1 if cancelled.
 RC_PICK_SK=""; RC_PICK_AL=""; RC_PICK_EN=""
 _rc_pick_target() {
@@ -3065,12 +3064,10 @@ _rc_pick_target() {
     return 0
 }
 
-# The rows are listed in the order the work is actually done, which is not the
-# order they used to be in. SSH access is first because nothing below it can
-# succeed without it, and "Add a mirror" ends with an automatic connection test —
-# so under the old layout the very first thing a new operator did was watch a
-# test fail for a reason the menu had not mentioned yet, with the fix parked at
-# item 6. Keys are positional in this script (03 is not hub 05 or 08), so
+# The rows are listed in the order the work is actually done. SSH access is
+# first because nothing below it can succeed without it, and "Add a mirror" ends
+# with an automatic connection test — a new operator who started there would
+# watch a test fail for a reason the menu had not mentioned yet. Keys are positional in this script (03 is not hub 05 or 08), so
 # reordering rows is allowed; what is not optional is the `|| true` on every
 # dispatch — this loop runs under `set -e`.
 menu_remote_setup() {
@@ -3182,15 +3179,14 @@ menu_remote_copy_now() {
         return
     fi
     echo -e "\n${CYAN}[INFO]${RESET}  Copying the published archive to every enabled mirror."
-    # Says what the code does NOW. This used to promise a local and a remote
-    # sha256 pass; both were turned off by default (they read a 17-20 GB file an
-    # extra two times, which is the IO this redesign exists to avoid), and a
-    # screen that still claims a gate nobody is running is worse than no screen.
+    # Says what the code does. No local or remote sha256 pass runs by default (each
+    # would read a 17-20 GB file an extra time, the IO this design avoids), and a
+    # screen that claims a gate nobody is running is worse than no screen.
     echo -e "  ${DIM}rsync verifies every file it transfers, so a corrupt copy fails the run.${RESET}"
     echo -e "  ${DIM}The .sha256 ships alongside the archive for downloaders to check.${RESET}"
     echo -e "  ${DIM}Mirrors already holding this build are skipped.${RESET}"
     echo ""
-    # rc_should_push now confirms against the mirror itself rather than trusting
+    # rc_should_push confirms against the mirror itself rather than trusting
     # our own state file, so a wiped mirror is picked up automatically and this
     # is rarely needed - but "copy now" has to be able to mean it.
     echo -ne "  Force re-upload to mirrors that already hold this build? [y/N]: "

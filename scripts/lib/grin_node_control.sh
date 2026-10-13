@@ -3,8 +3,8 @@
 # =============================================================================
 # Sourced by 01 / 03 / 04 / 05 / 06 / 07 / 08, by lib/grin_node_secrets.sh and the
 # 07 wallet libs, and by the node-sync watchdog in grin_node_keepalive.sh.
-# Provides the small set of node-control primitives that were previously copied
-# across scripts:
+# Provides the small set of node-control primitives shared across scripts
+# (one copy, not one per script):
 #
 #   _grin_session_name <dir>          tmux session name from a node dir
 #   gnc_node_api_port  <network>      Owner API port (3413 / 13413)
@@ -32,7 +32,7 @@
 # TWO TMUX SERVERS — the root cause of every "lock file is held by another
 # grin process" duplicate: a session started by root lives on root's default
 # socket (/tmp/tmux-0/default), while a session started AS the grin user (the
-# @reboot autostart, and now ALL launches) lives on grin's per-user socket
+# @reboot autostart, and every launch through the launcher below) lives on grin's per-user socket
 # (/tmp/tmux-<uid>/default — what the gtmux CLI helper targets). A kill or
 # has-session check that only looks at one server misses nodes on the other →
 # a second grin is started → LMDB lock error. Rules:
@@ -76,9 +76,9 @@ if ! declare -F success >/dev/null 2>&1; then success() { echo "[OK]    $*"; }; 
 # -----------------------------------------------------------------------------
 # _grin_session_name <node_dir>
 # tmux session name convention: grin_<nodetype>_<networktype>.
-# Canonical copy (previously duplicated in 01/03/07). Uses UNDERSCORES so the
+# Canonical copy (01/03/07 call this, none keeps its own). Uses UNDERSCORES so the
 # name matches the `grep '^grin_'` session sweeps (a dashed name would escape
-# them). All scripts (01/03/04/07/08) now derive names from this function.
+# them). All scripts (01/03/04/07/08) derive names from this function.
 # -----------------------------------------------------------------------------
 _grin_session_name() {
     case "$(basename "${1:-}")" in

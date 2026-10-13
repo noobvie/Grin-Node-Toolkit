@@ -2,3 +2,4 @@
 # Entries are added only after a hit is confirmed legitimate; one line per pattern, no spaces in the regex (use \s).
 docs/tools/check_doc_drift.sh:07_lib_satellite  DEAD_PATH  worked example of a deleted file the drift checker was built from
 docs/tools/check_doc_drift.sh:satellite  STALE_TERM  same worked example
+scripts/lib/02_lib_landing.sh:web/grin-money-2026/grin_black_white.svg  DEAD_PATH  file lives in the sibling repo Grin-Landing-Pages (verified present), not this one

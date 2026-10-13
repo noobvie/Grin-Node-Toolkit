@@ -210,7 +210,7 @@ source "$SCRIPT_DIR/lib/grin_node_control.sh"
 # Source-guarded, no side effects; provides gnk_autostart_enable / gnk_watchdog_install
 # used by Super Auto's post-build hardening.
 source "$SCRIPT_DIR/lib/grin_node_keepalive.sh"
-# Node event recorder (086 design §8): read-only down/up ledger + evidence at
+# Node event recorder (script086_design.md §8): read-only down/up ledger + evidence at
 # the moment of failure. Source-guarded, no side effects; provides gne_install,
 # used by Super Auto's hardening and the post-build offer (_offer_event_recorder).
 source "$SCRIPT_DIR/lib/grin_node_events.sh"
@@ -525,8 +525,8 @@ _stagger_node_wait() {
 # all down, then restarts them ONE AT A TIME — mainnet first, then a
 # GRIN_STAGGER_SECS gap, then testnet.  Chain data is never touched.
 #
-# Replace-all-then-start (rather than replace+start per instance, as this did
-# before) is what makes the gap real: starting mainnet inside the install loop
+# Replace-all-then-start (rather than replace+start per instance)
+# is what makes the gap real: starting mainnet inside the install loop
 # would have it competing for disk with the testnet install that follows.
 #
 # The replaced binary is kept twice, exactly as the source-build install does:
@@ -1596,8 +1596,8 @@ check_grin_running() {
 # -----------------------------------------------------------------------------
 # Detects the non-standard $HOME/.grin path that older grin/grin-wallet versions
 # created by default. Runs unconditionally from main() so the warning is shown
-# regardless of which Step-1 branch was taken (including "install alongside"
-# paths that previously returned before the legacy check could run).
+# regardless of which Step-1 branch was taken (including the "install alongside"
+# paths, which return before any legacy check could otherwise run).
 # Offers D) delete, Enter to keep, 0 to abort.
 # =============================================================================
 check_legacy_grin_dir() {
@@ -1702,7 +1702,7 @@ check_os_and_deps() {
         systemctl enable --now crond &>/dev/null || true
     else
         # Debian/Ubuntu — use apt-get
-        # ncurses: libncurses5 was removed in Ubuntu 24.04 — use libncurses6 there.
+        # ncurses: Ubuntu 24.04 has no libncurses5 — use libncurses6 there.
         local ncurses_pkg
         if apt-cache show libncurses5 &>/dev/null 2>&1; then
             ncurses_pkg="libncurses5"
@@ -2349,7 +2349,7 @@ patch_config() {
     # default (false) is kept for a freshly built node.
 
     # p2p host — no patch needed: grin v5.5+ already defaults to host = "::"
-    # (IPv6 any-address, dual-stack). The old 0.0.0.0→:: sed is obsolete.
+    # (IPv6 any-address, dual-stack), so no 0.0.0.0→:: rewrite is needed.
 
     success "Config patched:"
     info "  archive_mode                      = $archive_val"
@@ -2585,17 +2585,17 @@ PYEOF
     echo "${result}" | xargs
 }
 
-# Manifest fast path — chaindata.json (schema 1), published by Script 03 step 7.
+# Manifest fast path — chaindata.json (schema 1), published by Script 03 step 7a.
 #
 # Answers in ONE request what the four legacy probes below answer in four, and
 # replaces two fragile inferences:
-#   · filename       — was scraped from nginx autoindex HTML (href="*.tar.gz")
-#   · freshness      — was HEAD / Last-Modified, which an index.html silently
+#   · filename       — legacy path: scraped from nginx autoindex HTML (href="*.tar.gz")
+#   · freshness      — legacy path: HEAD / Last-Modified, which an index.html silently
 #                      poisons with its own frozen mtime
-#   · archive type   — was guessed from substrings in the filename
+#   · archive type   — legacy path: guessed from substrings in the filename
 #
 # The manifest exists ONLY when the archive is complete (Script 03 deletes it at
-# step 0 and writes it at step 7), so its mere presence is the ready signal.
+# step 0 and writes it at step 7a), so its mere presence is the ready signal.
 #
 # Returns 0 = host accepted, 1 = fall through to the legacy probes. ANY doubt
 # returns 1: mirrors we do not control, and older toolkit versions, have no
@@ -3240,7 +3240,7 @@ stream_extract_chain_data() {
     log "[STEP 10] On-the-fly extraction complete."
 }
 
-# _grin_session_name() now lives in lib/grin_node_control.sh (sourced near top).
+# _grin_session_name() is defined in lib/grin_node_control.sh (sourced near top).
 
 # =============================================================================
 # HELPER: CHECK IF A GRIN PROCESS IS RUNNING FOR A SPECIFIC NODE DIRECTORY
@@ -3275,7 +3275,7 @@ start_grin_tmux() {
     # If a grin process already owns this node directory (booting or running but
     # port not yet bound), check whether it has a live tmux session — on EITHER
     # tmux server (grin's gtmux socket AND root's; the @reboot autostart runs
-    # grin-owned, so a root-only check used to miss it and start a duplicate
+    # grin-owned, so a root-only check would miss it and start a duplicate
     # that died on "lock file is held by another grin process").
     #   • Live process  + live tmux session → truly running, skip to avoid grin.lock conflict.
     #   • Live process  + NO  tmux session  → orphaned/stale (tmux was killed while grin kept

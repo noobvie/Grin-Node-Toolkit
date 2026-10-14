@@ -12,7 +12,7 @@ const { readPageSource, resolveSrc, isPageSpecific, PUBLIC_ROOT, ADMIN_ROOT } = 
 let passed = 0, failed = 0;
 const ok = (name, cond, extra) => { if (cond) passed++; else { failed++; console.error(`FAIL  ${name}${extra ? `\n      ${extra}` : ''}`); } };
 
-// A page that loads no page-specific script reads back byte for byte. An EXTRACTED page (F1–F5:
+// A page that loads no page-specific script reads back byte for byte. An EXTRACTED page (extracted:
 // it loads a js/pages/ or admin-panel/js/ src) legitimately differs, so instead it must come back
 // with every one of its own scripts inlined in place — one FILE marker each, no own src left.
 // (F1 fix: this regex had been written with its backslashes collapsed — a literal BACKSPACE byte
@@ -41,7 +41,7 @@ for (const root of [PUBLIC_ROOT, ADMIN_ROOT]) {
 }
 ok('walked at least 40 pages (the loop is not vacuous)', compared + extracted >= 40, `${compared} + ${extracted}`);
 
-// Every extracted script is still LOADED, by exactly one page (R3). Nothing above notices a page
+// Every extracted script is still LOADED, by exactly one page Nothing above notices a page
 // that lost its <script src>: the page then holds no page-specific src, so it is classed as
 // "never extracted" and compared byte for byte against itself — green — while its code sits in
 // js/pages/ unused. R3 planted exactly that (fortune-board.html) and the whole suite stayed green.

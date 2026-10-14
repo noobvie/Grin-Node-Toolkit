@@ -5,11 +5,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <!-- This is the OPERATOR's admin portal, not a public page. It used to carry
-       "index, follow" plus a canonical, an og:image and a Twitter card — i.e. it
-       actively invited search engines to list the pool's admin login and asked social
-       platforms to render a preview card for it. None of that serves a visitor, and an
-       indexed admin login is free reconnaissance. noindex/nofollow, no canonical, no
+  <!-- This is the OPERATOR's admin portal, not a public page. "index, follow",
+       a canonical, an og:image or a Twitter card would invite search engines to list the
+       pool's admin login and ask social platforms to render a preview card for it. None of
+       that serves a visitor, and an indexed admin login is free reconnaissance. noindex/nofollow, no canonical, no
        social cards; it is reached by typing the URL or via /admin. -->
   <meta name="robots" content="noindex, nofollow">
   <meta name="language" content="English">
@@ -213,10 +212,9 @@
       text-decoration: underline;
     }
 
-    /* Link-looking BUTTON. Every in-page action here used to be an <a onclick> with no
-       href — which is not focusable, not reachable by Tab, and not activated by Enter,
-       so "Register here", both captcha refreshers and the TOTP back-link were dead to
-       anyone not using a mouse. They are <button type="button"> now; this class undoes
+    /* Link-looking BUTTON. Every in-page action here is a <button type="button">, not an <a onclick>
+       without href (which is not focusable, not reachable by Tab, and not activated by
+       Enter — dead to anyone not using a mouse). This class undoes
        the full-width gradient of the bare `button` rule above so they still read as links.
        type="button" is load-bearing: these sit inside <form>, and a typeless button
        defaults to submit — clicking "Register here" would have submitted the login form. */
@@ -236,10 +234,10 @@
     .linkbtn:hover { opacity: 0.8; text-decoration: underline; }
     .linkbtn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 3px; }
 
-    /* Captcha question + its refresh control. The refresh used to live INSIDE the
-       <label for="captcha-answer">, which is invalid (a label may not wrap another
-       interactive control) and made a click on it also forward focus to the input.
-       Side by side in a flex row instead, so the label labels only its field. */
+    /* Captcha question + its refresh control. The refresh must NOT live inside the
+       <label for="captcha-answer">: that is invalid (a label may not wrap another
+       interactive control) and a click on it would also forward focus to the input.
+       Side by side in a flex row, so the label labels only its field. */
     .label-row {
       display: flex; align-items: baseline; justify-content: space-between; gap: .75rem;
       margin-bottom: 0.5rem;
@@ -311,11 +309,11 @@
         <button type="submit" id="login-btn">Login</button>
       </form>
       <div class="register-link">
-        <!-- Audit §J17-1: this used to read "New admin? Register here" on every pool, forever —
-             pointing anonymous visitors at /api/auth/register, which is open to whoever asks
+        <!-- script07_security_audit.md §J17-1: no "New admin? Register here" link — it would point
+             anonymous visitors at /api/auth/register, which is open to whoever asks
              whenever the users table holds no admin (a fresh install between service start and
-             admin creation, and again after every pool.db reset). The route is now on-box only,
-             so the link advertised a door that can no longer open from a browser. The form
+             admin creation, and again after every pool.db reset). The route is on-box only,
+             so such a link would advertise a door that cannot open from a browser. The form
              below is kept (toggleRegister/handleRegister still reference its ids) but is no
              longer reachable from the UI. -->
         New admin? Registration runs on the pool server — Script 07 &rarr; Create admin account.

@@ -1,5 +1,5 @@
-// OPTIONS must fall through every route-file Router to the final 404, exactly as it did when all
-// routes sat on the app's own router (code-layout refactor, R2 finding). An Express Router answers
+// OPTIONS must fall through every route-file Router to the final 404, exactly as if all
+// routes sat on the app's own router (impl §12 Code layout, script07_implementation.md). An Express Router answers
 // OPTIONS itself — `200 Allow: GET,HEAD` — when a request runs off its stack and some route in it
 // matched the path; mounted without routes/_shared/no-auto-options.js that turned every admin and
 // auth path's 404 into a method listing served ahead of the IP filter and the rate limiter. The

@@ -1,8 +1,8 @@
-// Payment-proof regression tests — R4's real-wallet fixture + its eight-row
+// Payment-proof regression tests — the real-wallet fixture + its eight-row
 // negative-control table, made re-runnable.
 //
 // WHY THIS FILE EXISTS. Every byte-layout fact in lib/payment-proof.js was read
-// out of grin-wallet source, and R4 settled the standing #1 risk of the /proof
+// out of grin-wallet source, and the fixture settled the standing #1 risk of the /proof
 // tool — "a shared misreading is uncatchable" — against a proof that
 // grin-wallet's own CI asserts byte-for-byte (api/src/owner_rpc.rs:1802-1836).
 // That check ran once, in a throwaway harness, and its result then lived only in

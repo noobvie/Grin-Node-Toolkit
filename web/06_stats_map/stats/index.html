@@ -107,8 +107,8 @@
     --map-label-halo: rgba(0,0,0,0.9);
   }
   html[data-theme="matrix"] body { font-family: 'Courier New', Courier, monospace; }
-  /* The basemap is vector now, so the container background IS the ocean — the
-     CARTO raster used to paint it. Each theme needs its own or matrix/hp sit on
+  /* The basemap is vector, so the container background IS the ocean.
+     Each theme needs its own or matrix/hp sit on
      the default theme's navy. */
   html[data-theme="matrix"] .leaflet-container { background: #000600 !important; }
   html[data-theme="matrix"] #map-container::after {
@@ -716,7 +716,7 @@
 
 <!--#include virtual="/_header.html"-->
 
-<!-- H1 kept in the DOM for SEO; the intro copy now lives in the footer -->
+<!-- H1 kept in the DOM for SEO; the intro copy lives in the footer -->
 <h1 class="sr-only">Live Grin Network Peer Map</h1>
 <noscript>
   <p>This live Grin node map needs JavaScript enabled. The Grin Node Toolkit continuously tracks active peers across the global Grin network and plots them on an interactive world map, with filtering by country, Grin client version, inbound/outbound direction, and IPv4/IPv6. Peer data refreshes every few minutes from a live Grin node. Learn more about Grin at <a href="https://grin.mw/">grin.mw</a> or the <a href="https://forum.grin.mw/">Grin community forum</a>.</p>
@@ -1033,9 +1033,8 @@ function countryFlag(code) {
 // (buildBasemapFC). Stripes are fractions of the flag's HEIGHT measured from the top —
 // each 1/9 tall with a 1/9 gap, the set of three centred on the flag.
 // ⚠ There is a THIRD copy this cannot reach: the literal <svg> in the footer's static
-// HTML. It is the one that was already centred correctly; the hand-written FLAG_SVG.VN
-// rects were not (their three stripes sat 7.5% of the height below centre), which is why
-// they are generated now instead of typed. The footer also uses a different yellow
+// HTML. It is centred correctly. FLAG_SVG.VN's stripes are generated rather than typed
+// because hand-written ones sat 7.5% of the height below centre. The footer also uses a different yellow
 // (#FFCD00). Aligning it is a one-line edit nobody has made yet.
 const VN_FLAG = {
   yellow:  "#f9d616",
@@ -1070,7 +1069,7 @@ function displayCity(city) {
 // Peer-row user agent — drop the trailing git commit hash, keep everything else.
 // Real agents (verified against live peers.json, 50 distinct strings) look like
 // "MW/Grim 5.4.0.3a37d24" and "MW/Grin 5.5.1-alpha.0.e4c4a38" — NOT the
-// "MW/Grin X.Y.Z/os" shape the old planning doc describes. The hash is the only
+// "MW/Grin X.Y.Z/os" shape. The hash is the only
 // part with no display value, and removing it is what lets the version itself
 // stop being ellipsised ("MW/Grin 5.5.…"). Everything else is preserved verbatim:
 // the prerelease tag (5.5.1-alpha.0 is a different version from 5.5.1), the "+"
@@ -1101,8 +1100,8 @@ let markersLayer = null;
 let basemapLayer = null;
 
 // ── Self-hosted vector basemap ────────────────────────────────────────────────
-// This used to be four CARTO raster tile URLs. CARTO now requires an API key on
-// that host and serves keyless requests WATERMARKED at HTTP 200 — nothing 404s and
+// Not CARTO raster tiles: CARTO requires an API key on its host and serves
+// keyless requests WATERMARKED at HTTP 200 — nothing 404s and
 // no JS error fires, so the breakage is invisible from our side. Worse, every
 // visitor's browser connected to a third party directly, on a page that otherwise
 // hashes miner IPs and publishes country-only geo.
@@ -1146,16 +1145,15 @@ const BASEMAP_ATTR = 'Map data ' +
   ' — public domain';
 
 // Land fill + border stroke per theme, taken from each theme's CSS custom
-// properties. matrix and hp previously just re-pointed at CARTO's dark_all because
-// CARTO has no green or purple basemap; now that the geometry is ours, a theme is
-// two colours and all four get a real basemap.
+// properties. CARTO has no green or purple basemap (matrix, hp); because the geometry
+// is ours, a theme is just two colours and all four get a real basemap.
 const BASEMAP_STYLES = {
   dark:   { fillColor: "#1b2430", color: "#3d4655" },
   light:  { fillColor: "#e9edf1", color: "#b4bdc7" },
   matrix: { fillColor: "#00230a", color: "#00b833" },
   hp:     { fillColor: "#1d0650", color: "#6b34c4" },
 };
-// Two roles now, and they need different options: land is a filled polygon whose stroke
+// Two roles, and they need different options: land is a filled polygon whose stroke
 // is the COASTLINE, borders are a single unfilled line mesh. `fill: false` is not
 // cosmetic on the border feature — without it Leaflet closes and fills the line mesh,
 // which paints a lake-shaped blob over half of Eurasia.
@@ -1329,9 +1327,9 @@ function buildBasemapFC(topo) {
 
 // ONE construction site, ONE layer, for the life of the page. The layer is built empty
 // and never rebuilt: a theme change is setStyle() on it (see applyTheme) and a
-// resolution change is clearLayers()+addData() on it (see drawBasemapTier). The old
-// code constructed a tile layer in initMap AND again in applyTheme with a duplicated
-// options object, which is how a fix to one of them silently reverted on the next
+// resolution change is clearLayers()+addData() on it (see drawBasemapTier).
+// A second construction site with a duplicated options object (initMap AND applyTheme)
+// is how a fix to one copy silently reverts on the next
 // theme switch.
 function makeBasemapLayer() {
   // interactive:false so land never swallows a peer dot's hover/click — the canvas
@@ -1607,8 +1605,8 @@ function prefetchNextBasemapTier() {
 // places, 17 KB gzipped, which is the entire cost of this feature.
 //
 // Leaflet has NO collision-aware label placement — the one thing the raster tiles gave us
-// for free. Overlaps used to be ACCEPTED here, with CITY_LABEL_RANK_OFFSET as the only
-// lever; that trades a dense region's clutter against a sparse one's emptiness, and every
+// for free. Accepting overlaps, with CITY_LABEL_RANK_OFFSET as the only
+// lever, would trade a dense region's clutter against a sparse one's emptiness, and every
 // setting is wrong for half the map. The cull below is ~15 lines and settles it per view.
 //
 // Three filters, cheapest first. scalerank thins by importance as zoom allows (rank 0: 27
@@ -1616,8 +1614,8 @@ function prefetchNextBasemapTier() {
 // screen; then the cull drops whatever will not FIT. Without the first two this would be
 // 1,251 DOM nodes, each repositioned by Leaflet on every pan, to show a few dozen.
 const CITY_LABEL_SRC         = "assets/cities.json";
-// Eligibility, not density — the cull decides density now. One lower than it was, because
-// with a cull a generous candidate list is strictly better: more names where there is
+// Eligibility, not density — the cull decides density. With a cull a generous
+// candidate list is strictly better: more names where there is
 // room, none where there is not. RAISE it to make even a sparse ocean quieter.
 const CITY_LABEL_RANK_OFFSET = 1;
 const CITY_LABEL_H           = 11;  // 10px text at line-height 1, +1 for descenders
@@ -1775,7 +1773,7 @@ function initMap() {
 
   // Order here is not what keeps the dots on top — the pane z-indexes above do
   // that, and the basemap has its own canvas (makeBasemapLayer), not the shared
-  // overlayPane renderer this comment used to appeal to. It is still added first
+  // overlayPane renderer. It is still added first
   // so that if the pane split is ever undone, the fallback is the right one.
   basemapLayer = makeBasemapLayer().addTo(leafletMap);
 

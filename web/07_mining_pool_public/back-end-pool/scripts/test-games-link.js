@@ -1,4 +1,4 @@
-// Games platform link — pool side (design §19.3, plan Part 2).
+// Games platform link — pool side (design §19.3, script07_design_games.md).
 //
 // lib/games-link.js is the ONLY pool code the games platform adds: three internal routes the
 // games service calls, the admin proxy, the health probe and the public nav flag. The pool is
@@ -356,7 +356,7 @@ const L = (extra) => ({ 'X-Games-Link': SECRET, ...(extra || {}) });
       const auditRow = db.prepare("SELECT details FROM admin_audit_log WHERE action = 'update_settings' AND target_id = 'games' ORDER BY id DESC LIMIT 1").get();
       ok('a games settings write leaves an update_settings audit row', !!auditRow);
 
-      // The name lists ride on the same answer (§19.17.5, D28) — no second route.
+      // The name lists ride on the same answer (§19.17.5 (script07_design_games.md), D28) — no second route.
       r = await call(port, { p: '/internal/games/config', headers: L() });
       ok('config carries blocked_words (empty by default — the seed is the games\' own) and pool_name',
         Array.isArray(r.json.blocked_words) && r.json.blocked_words.length === 0 && r.json.pool_name === settings.getSection('pool_info').pool_name, r.text);
@@ -429,7 +429,7 @@ const L = (extra) => ({ 'X-Games-Link': SECRET, ...(extra || {}) });
       settings.updateSection('games', { mode: 'preview' }, adminId);
       ok("preview → the payload says 'preview' (branding.js shows the link only on 'on')", link.publicFlag().mode === 'preview' && link.publicFlag().chat === true);
 
-      // §19.17.2's whole table, through the real publicFlag(): pool mode ↓ × launch →.
+      // §19.17.2 (script07_design_games.md)'s whole table, through the real publicFlag(): pool mode ↓ × launch →.
       const TABLE = [['off', 'preview', 'off'], ['off', 'on', 'off'], ['preview', 'preview', 'preview'],
         ['preview', 'on', 'preview'], ['on', 'preview', 'preview'], ['on', 'on', 'on']];
       const got = [];
@@ -488,7 +488,7 @@ const L = (extra) => ({ 'X-Games-Link': SECRET, ...(extra || {}) });
          gaudit && gaudit.admin_id === adminId && gaudit.target_id === 'players/grin1abc/ban' && /"method":"POST"/.test(gaudit.details) && /"status":200/.test(gaudit.details), JSON.stringify(gaudit));
       stepUpFresh = false;
 
-      // Go live / Back to preview (§19.17.2): step-up like every non-FAST write, and a 200
+      // Go live / Back to preview (§19.17.2 (script07_design_games.md)): step-up like every non-FAST write, and a 200
       // re-probes at once so the nav follows without waiting for the 60 s tick.
       ok('POST launch is step-up pool-side (not a FAST write)', gl.requiresStepUp('POST', 'launch') === true);
       gamesSeen = [];
@@ -631,7 +631,7 @@ const L = (extra) => ({ 'X-Games-Link': SECRET, ...(extra || {}) });
       const firstLimiter = src.indexOf("rateLimiter.middleware(");
       ok('…and before any rate limiter', iInternal < firstLimiter);
       // Either receiver (route files register on `router`) and any quote — `app.` alone would pass
-      // vacuously once routes move (R1 2026-10-10); the control proves the reader sees a real one.
+      // vacuously once routes move; the control proves the reader sees a real one.
       const REG = (p) => new RegExp(`\\b(?:app|router)\\.(?:get|post|put|patch|delete|all|use)\\(\\s*['"\`]${p}`);
       ok('control — the registration reader sees a real route (/api/pool/stats)', REG('\\/api\\/pool\\/stats').test(src));
       ok('no pool route is registered under /internal (the lib answers the whole prefix)', !REG('\\/internal').test(src));
@@ -651,7 +651,7 @@ const L = (extra) => ({ 'X-Games-Link': SECRET, ...(extra || {}) });
     {
       const shell = fs.readFileSync(path.join(WEB, 'public_html/js/public-shell.js'), 'utf8');
       const brand = fs.readFileSync(path.join(WEB, 'public_html/js/branding.js'), 'utf8');
-      // §19.17.8 (D31, Part C2): Play lives INSIDE the Community group, beside Fortune Board +
+      // §19.17.8 (script07_design_games.md) (D31, Part C2): Play lives INSIDE the Community group, beside Fortune Board +
       // Contribute; each child keeps its own gate and the group follows its children.
       const navSrc = (shell.match(/var NAV = \[[\s\S]*?\n  \];/) || [''])[0];
       ok('NAV: no standalone Play item any more (it moved into the group)', !/^    \{ href: '\/play\/'/m.test(navSrc));
@@ -702,7 +702,7 @@ const L = (extra) => ({ 'X-Games-Link': SECRET, ...(extra || {}) });
         const onlyGames = fakeDom([{ label: 'X', children: [{ href: '/play/', label: 'Play', games: true }] }]).groups[0];
         ok('a group whose every child starts hidden starts hidden itself (no empty dropdown before the fetch)', onlyGames.style.display === 'none');
       }
-      // §19.17.8's table: incentives × games (effective) → group shown?, which children.
+      // §19.17.8 (script07_design_games.md)'s table: incentives × games (effective) → group shown?, which children.
       const MATRIX = [
         [true, 'on', true, ['Fortune Board', 'Contribute', 'Play']],
         [true, 'preview', true, ['Fortune Board', 'Contribute']],
@@ -737,7 +737,7 @@ const L = (extra) => ({ 'X-Games-Link': SECRET, ...(extra || {}) });
       ok('the group still lights as active on a child page (/play/ included — fileOf("/play/") === "/play/")',
          /var childActive = l\.children\.some\(function \(c\) \{ return fileOf\(c\.href\) === here; \}\);/.test(shell));
       // The header is mounted on /play/ and on /blog/<slug>: a relative href resolves under
-      // those paths (§19.15 Part 6). Every rendered href goes through abs() or is literal '/…'.
+      // those paths (impl §19.15, script07_implementation_games.md). Every rendered href goes through abs() or is literal '/…'.
       ok('nav + footer hrefs are rendered through abs()', (shell.match(/'<a href="' \+ abs\(l\.href\) \+ '"/g) || []).length === 2 &&
         !/'<a href="' \+ l\.href/.test(shell));
       ok('no literal relative href left in the chrome', !/href="(?!\/|#|https?:|mailto:|' \+)[^"]*"/.test(shell),

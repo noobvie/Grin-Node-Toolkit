@@ -3,7 +3,7 @@
  * socks5.js — a SOCKS5 CONNECT client (RFC 1928 + RFC 1929), zero dependencies.
  *
  * ─── Why this is hand-written rather than `socks-proxy-agent` ────────────────
- * The design (script052_design.md §S3) named socks-proxy-agent. It is a fine
+ * The design (script052_design.md "Build plan", S3) names socks-proxy-agent. It is a fine
  * package; this is a deliberate deviation, for reasons specific to what this
  * file is:
  *
@@ -11,16 +11,16 @@
  *     bytes from an arbitrary hidden service. socks-proxy-agent pulls in a
  *     transitive tree (agent-base, socks, smart-buffer, ip-address, debug) and
  *     every one of those becomes supply chain on a *wallet* front end.
- *   · S0 spent a whole packet making this product's source pinned, offline and
- *     byte-verifiable. Reintroducing an unpinned npm fetch at install time on
- *     the VPS gives that back for ~90 lines of protocol we can read in full.
+ *   · This product's source is pinned, offline and byte-verifiable (vendor/SHA256SUMS).
+ *     Reintroducing an unpinned npm fetch at install time on
+ *     the VPS would give that back for ~90 lines of protocol we can read in full.
  *   · We only ever need one command (CONNECT), one address type (domain name,
  *     because Tor must do the resolving) and one optional auth method. The
  *     package's generality is surface we do not use.
  *
  * The gateway therefore has NO npm dependencies at all, and its install step
- * makes no network request. S4b faced the same question for `ws` and answered
- * it the same way — ws.js is hand-written too; its header records which parts of
+ * makes no network request. ws.js is hand-written for the same reason;
+ * its header records which parts of
  * RFC 6455 it implements in full and which the browser client never uses.
  *
  * ─── Why ATYP 0x03 (domain name) and never an IP ─────────────────────────────

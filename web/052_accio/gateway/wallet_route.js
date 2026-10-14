@@ -1,7 +1,7 @@
 'use strict';
 /**
  * wallet_route.js — the per-wallet inbound URL, `/wallet/<suffix>/v2/foreign`
- * (packet S4b).
+ * (Script 052).
  *
  * This is the address side of the listen rail. A browser tab cannot open a
  * listening socket, so the gateway holds one public HTTPS Foreign-API URL per
@@ -98,7 +98,7 @@ function handle(req, res, ctx) {
 		return listen.sendJson(res, 415, { error: 'body must be application/json' });
 	}
 
-	// ⚠ R7. The suffix is checked for EXISTENCE before a byte of body is read.
+	// ⚠ The suffix is checked for EXISTENCE before a byte of body is read.
 	// deliver() has always answered 404 for an address nobody owns, but it only
 	// runs once readBody has buffered the whole request — and parsePath admits
 	// any [A-Za-z0-9]{4,64}, so a POST to a suffix that has never existed was
@@ -115,10 +115,10 @@ function handle(req, res, ctx) {
 		return listen.sendJson(res, 404, { error: 'unknown address' });
 	}
 
-	// ⚠ S8. The admission check happens BEFORE the body is read, not after.
-	// max_inbound_in_flight used to be tested inside deliver(), by which point
-	// this function had already buffered a whole inbound_body_bytes into the
-	// process — so the cap bounded relays and not memory, and N senders could
+	// ⚠ The admission check happens BEFORE the body is read, not after.
+	// max_inbound_in_flight must not be tested inside deliver(), by which point
+	// this function has already buffered a whole inbound_body_bytes into the
+	// process — so the cap would bound relays and not memory, and N senders could
 	// hold N MB between them with nothing counting it. Reserving here makes the
 	// same budget cover the read.
 	if (!hub.beginRead()) {
@@ -137,13 +137,13 @@ function handle(req, res, ctx) {
 	const release = () => { if (!released) { released = true; hub.endRead(); } };
 	res.once('close', release);
 
-	// §11.7 was ours to decide: the client has no body cap and upstream's
+	// script052_design.md §11 item 7 was ours to decide: the client has no body cap and upstream's
 	// /wallet/ location sets no client_max_body_size at all, so it silently
 	// inherits nginx's 1 MB default. We set it explicitly, in both places, and
 	// enforce it here too — the onion front has no nginx in front of it, so a
 	// cap that lives only in the vhost does not exist for half the traffic.
 	//
-	// ⚠ R7. inbound_body_bytes is CLAMPED at load time (config.js) to what the
+	// ⚠ inbound_body_bytes is CLAMPED at load time (config.js) to what the
 	// listen rail can actually carry: deliver() base64-encodes this body into ONE
 	// WebSocket frame bounded by ws_max_message_bytes, and base64 is 4 bytes out
 	// per 3 in — so at the defaults anything past ~192 KB was read in full and
@@ -209,7 +209,7 @@ function drain(req, cfg) {
 }
 
 /**
- * ⚠ R6. Every refusal on this route, wherever it is raised, goes out through
+ * ⚠ Every refusal on this route, wherever it is raised, goes out through
  * here — including the two that server.js raises before this module is even
  * reached (listen rail disabled, onion bucket empty). This route is called
  * CROSS-ORIGIN by another wallet's tab, so a refusal without CORS headers is a

@@ -62,3 +62,20 @@ web/07_mining_pool_public/back-end-pool/admin-panel/js/ads.js:A\slegacy\scode\sa
 web/07_mining_pool_public/back-end-pool/admin-panel/js/node-availability.js:e\.g\.\s'2026-10-03  DIARY_DATE  example of the timestamp format the function emits, not a diary entry
 web/07_mining_pool_public/back-end-pool/admin-panel/js/regions.js:\(§13\.12r\)  DEAD_SECTION  §13.12r is a lettered bold sub-item of design §13.12 that the heading scan cannot see
 web/07_mining_pool_public/back-end-pool/admin-panel/miners.html:design\s§13\.12r  DEAD_SECTION  §13.12r is a lettered bold sub-item of design §13.12 that the heading scan cannot see
+web/07_mining_pool_public/public_html/js/stepup.js:design\s§13\.12r  DEAD_SECTION  §13.12r is a lettered bold sub-item of design §13.12 that the heading scan cannot see
+web/07_mining_pool_public/public_html/js/ads.js:server\sno\slonger\sserves\sa\sstored\scode\sad  STALE_TERM  describes the live guard (renderAd draws nothing for a code ad; design D22); not a claim code ads exist
+web/07_mining_pool_public/play/server/lib/guests.js:Re-read:\sthe\saccount\smay\shave\sbeen\sdeleted  DIARY_DATE  'Re-read' is a code instruction (fetch the row again after the await), not a was/now narrative
+web/07_mining_pool_public/play/shell/js/play-guest.js:account\swas\sdeleted|account\sdeleted  DIARY_DATE  describes the signed-out event's payload, not history
+web/06_stats_map/stats/stats.html:2019-01-15\s00:00\sUTC  DIARY_DATE  mainnet genesis timestamp — a fact about the chain, not history
+web/06b_grinscan/public/js/info.js:2019-01-15\s00:00:00\sUTC  DIARY_DATE  mainnet genesis timestamp — a fact about the chain, not history
+web/06b_grinscan/server.js:2019-01-15\sUTC  DIARY_DATE  mainnet genesis timestamp — a fact about the chain, not history
+web/06d_tiny_explorer/lib/payment-proof.js:v5\.4\.1\sand\sre-checked  STALE_TERM  evidence of what the wire layout was read from, not a claim about the current pin
+web/051_fidelius/client/app.js:showModal\(\{\stitle  COMMENTED_CODE  call signature documentation for the helper below, not disabled code
+web/051_fidelius/server.js:web/03_web_wallet/server\.js  DEAD_PATH  upstream GrinSuite path (noobvie/GrinSuite), not a path in this repo
+web/051_fidelius/server.js:NO\sv1\sREST\sAPI|perfectly\shealthy\snode|Never\sadd\sa\s/v1/  STALE_TERM  states the v1 removal as a trap; matches the rule it is quoting
+web/051_fidelius/server.js:mainnet\snode,\s2026-08-09  DIARY_DATE  evidence date for the live /v1/status probe
+web/051_fidelius/server.js:\(2026-08-12\)\spins\srpassword  DIARY_DATE  evidence date of the grin-wallet v5.5.0 tag
+web/051_fidelius/server.js:shared\spin\sis\sv5\.5\.0  STALE_TERM  states the current pin split (shared v5.5.0, Fidelius v5.4.1)
+web/052_accio/gateway/test/store.test.js:release\(\)  COMMENTED_CODE  names the method under test in a section label
+web/07_mining_pool_solo/index.html:panel/chart  DEAD_PATH  prose "panel/chart", not a path
+web/07_mining_pool_solo/index.html:2026-06-27\s14:30\sUTC  DIARY_DATE  format example for the dual-zone stamp, not history

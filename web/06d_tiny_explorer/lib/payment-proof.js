@@ -4,8 +4,8 @@
 //
 // Verifies the JSON file written by `grin-wallet export_proof`. Every layout
 // fact below is from the "Payment proof — verified wire facts" subsection of
-// docs/reference/script06_design.md, which was read field-by-field from
-// mimblewimble/grin-wallet at v5.4.1 (the toolkit's pin) and re-checked at
+// docs/reference/script06_implementation.md, which was read field-by-field from
+// mimblewimble/grin-wallet at v5.4.1 and re-checked at
 // v5.5.0 and master. Do not "improve" a byte layout here without re-reading
 // that subsection — a guessed layout produces a verifier that calls every
 // honest proof invalid, which is worse than no tool.
@@ -28,14 +28,14 @@
 // kernel lookup are two independent verdicts and the caller must be able to
 // report which one failed; the chain half lives in the server route.
 //
-// THE BYTE LAYOUT IS CONFIRMED (R4, 2026-09-06 — design doc,
-// "R4 — RESOLVED 2026-09-06"). It did NOT need a VPS. grin-wallet's Owner API
+// THE BYTE LAYOUT IS CONFIRMED (script06_implementation.md,
+// What shipped). It did NOT need a VPS. grin-wallet's Owner API
 // rustdoc carries a complete real PaymentProof (api/src/owner_rpc.rs:1802-1836)
 // whose response the surrounding doctest macro asserts byte-for-byte in CI, so
 // it is the output of the very serde impls tabulated above. Running it through
 // this file unmodified verifies BOTH signatures, and the check is cryptographic
 // rather than textual: a wrong offset, width or endianness would change the
-// 73-byte message and both ed25519 verifies would fail. That fixture and R4's
+// 73-byte message and both ed25519 verifies would fail. That fixture and the
 // eight-row negative-control table now ship as ../test/fixtures/payment-proof-*
 // and ../test/test-payment-proof.js — run them, don't re-derive them.
 //

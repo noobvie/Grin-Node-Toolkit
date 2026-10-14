@@ -5,7 +5,7 @@
  * This file replaces upstream's `Block-Access` nginx C module. That module was
  * a battle-tested filter and this is not, so it is deliberately kept in one
  * small, pure, side-effect-free file: no sockets, no I/O, no config writes —
- * inputs in, a verdict out. S8 audits this file specifically, and it is the
+ * inputs in, a verdict out. the security audit covers this file specifically, and it is the
  * only part of the gateway that is worth unit-testing exhaustively.
  *
  * ─── The directives being replaced, and their exact semantics ────────────────
@@ -76,7 +76,7 @@ const HOSTNAME = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z
 // are enabled, which they are not by default.
 const IPV4_LITERAL = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 
-// ⚠ S8. IPV4_LITERAL only recognises the DOTTED-QUAD spelling, and that is not
+// ⚠ IPV4_LITERAL only recognises the DOTTED-QUAD spelling, and that is not
 // the only one a resolver accepts: `2130706433`, `127.1` and `0x7f000001` all
 // mean 127.0.0.1 to inet_aton, and every one of them sails past both
 // IPV4_LITERAL and the PRIVATE_V4 list below while still satisfying HOSTNAME.
@@ -156,7 +156,7 @@ function parseTorUrl(url) {
  * between the decision and the connection for a rebind to slip through.
  */
 function checkDestination(dest, cfg) {
-	// ⚠ R6. The PORT is part of the destination, and upstream never looked at it.
+	// ⚠ The PORT is part of the destination, and upstream never looked at it.
 	// A wallet address never carries one — the client composes
 	// `http://<onion>/v2/foreign`, i.e. 80 — so an arbitrary port is not a payee,
 	// it is a probe: the caller reads open-vs-closed off connect-success-vs-
@@ -219,7 +219,7 @@ function checkMethod(method) {
  */
 function checkOrigin(origin, cfg) {
 	if (origin === undefined || origin === '') return;
-	// R6: belt-and-braces, not the duplicate-header defence it reads as. Node's
+	// belt-and-braces, not the duplicate-header defence it reads as. Node's
 	// parser never hands us an array here — `origin` is not on its dedup list, so
 	// two Origin headers arrive JOINED as "https://a, https://b", which fails the
 	// exact-match Set below and is denied on that path instead. Kept because a
@@ -234,7 +234,7 @@ function checkOrigin(origin, cfg) {
 /** checkContentType — upstream's `require_header Content-Type … POST`. */
 function checkContentType(method, contentType) {
 	if (method !== 'POST') return;
-	// R6: unreachable via Node's parser for the opposite reason to Origin above —
+	// unreachable via Node's parser for the opposite reason to Origin above —
 	// `content-type` IS on the dedup list, so a duplicated header resolves to the
 	// FIRST value and the second is discarded before we see it. That is first-wins,
 	// not last-wins; the value checked here is the value tor_route.js forwards.

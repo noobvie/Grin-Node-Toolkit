@@ -1,4 +1,4 @@
-/* play-chat-core.js — the ONE chat client (design §19.10, §19.17.7; Part C7).
+/* play-chat-core.js — the ONE chat client (design §19.10, §19.17.7).
  *
  * Two surfaces draw the same public chat: the G-07 panel on /play/ (play-chat.js, which adds
  * the moderator tools and the rules fold) and the floating bubble on every other pool page

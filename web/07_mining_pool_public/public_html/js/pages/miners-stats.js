@@ -1,8 +1,7 @@
-// miners-stats.js — the miners-stats page's own script. Until 2026-10 (pool code-layout refactor,
-// part F2) this was miners-stats.html's inline <script> block; it moved out byte-for-byte so
-// a strict script-src can drop 'unsafe-inline'. The block's indent is kept.
+// miners-stats.js — the miners-stats page's own script, external (not inline) so a strict script-src needs no 'unsafe-inline'.
+// The original indent is kept.
 //
-// The page loads it as a CLASSIC script at the block's old position. Never add defer / async /
+// The page loads it as a CLASSIC script at its original position. Never add defer / async /
 // type="module": the order and the shared global scope are what this code was written against.
         // Escape any value before it goes into innerHTML. Defense-in-depth: the stratum
         // layer already restricts grin_address to bech32 chars (lib/stratum-protocol.js),
@@ -40,7 +39,7 @@
         }
 
         // Full miner address rendered as a link into the account view.
-        // Plain text, NOT a link to /account-settings.html?addr= (audit §J11-1, 2026-09-02).
+        // Plain text, NOT a link to /account-settings.html?addr= (audit §J11-1).
         // The three leaderboards below are the pool's largest address surface (up to 500 rows
         // each), and the server now masks the address on all three. The deep-link was what made
         // that mask worthless: it needed the FULL address to build the href, so every row put

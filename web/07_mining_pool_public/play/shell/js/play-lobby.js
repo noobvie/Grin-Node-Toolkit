@@ -1,4 +1,4 @@
-/* play-lobby.js — "Play a person" on /play/ (design §19.8, Part 10).
+/* play-lobby.js — "Play a person" on /play/ (design §19.8).
  *
  * Posting a seek or a direct challenge, the open seeks, and the challenges addressed to the
  * signed-in player. It talks to play-shell.js only through DOM events, as the other panels do:
@@ -56,7 +56,7 @@
   var S = { me: null, games: [], game: null, busy: false, challenges: null, seq: 0, rules: null };
 
   // Errors the player can act on, in their words. Anything else: the server's own sentence.
-  // The visible word is "tickets" (operator, C0); the API keeps `plays`.
+  // The visible word is "tickets" (the operator's choice); the API keeps `plays`.
   var ERROR_TEXT = {
     too_many_open: 'You already have the most open seeks and challenges allowed. Cancel one first.',
     too_many_matches: 'You already have the most games in progress allowed. Finish one first.',
@@ -287,7 +287,7 @@
     var me = e && e.detail ? e.detail.me : null;
     var was = S.me;
     S.me = me && typeof me === 'object' ? me : null;
-    // A guest has no address anyone could type into a challenge (§19.15 Part C5 #12).
+    // A guest has no address anyone could type into a challenge (see script07_implementation_games.md, Guest accounts).
     show(EL['pvp-guest-note'], !!S.me && S.me.kind === 'guest');
     if (!S.me) {
       S.challenges = null;

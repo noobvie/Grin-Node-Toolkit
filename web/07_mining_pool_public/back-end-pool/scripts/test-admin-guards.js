@@ -5,7 +5,7 @@
 //          They look like cosmetic branding fields, so the risk is a future tidy-up dropping
 //          them — which would silently re-open a secureAdmin → freshAdmin escalation
 //          (public_html/login.html loads branding.js). The worst of them, custom_head_html /
-//          custom_body_html, were deleted outright in design §19.17 D22; this file now pins
+//          custom_body_html, no longer exist (script07_design_games.md §19.17 D22); this file pins
 //          that they stay gone.
 //   §J1-2  updateSection must write an admin_audit_log row naming the changed keys, must NOT
 //          write one for a no-op save, must roll the row back with a rejected update, and must
@@ -75,8 +75,8 @@ try {
 
   console.log('\n[2] §J1-2 — the audit row records NAMES, never values');
 
-  // This used to write to the `alerts` section, which held three live credentials until §J8-3
-  // deleted it. The property under test is not "credentials are protected" but the broader rule
+  // The `alerts` section held three live credentials (deleted, §J8-3), so it is not the
+  // subject here. The property under test is not "credentials are protected" but the broader rule
   // the audit writer actually implements — NO settings VALUE ever reaches admin_audit_log,
   // which is readable through GET /api/admin/audit-log and its CSV export. Any section proves
   // it; `analytics` is used because its values are free-form strings an operator pastes in.
@@ -131,7 +131,7 @@ try {
     gated.includes('pool_fee_percent'));
 
   // §J9-1 / §J9-8: four pool_info keys and two access keys described an access control the
-  // backend never had (a "private" pool accepted every miner). They were deleted rather than
+  // backend never had (a "private" pool accepted every miner). They are deleted rather than
   // enforced, because a login-only gate would still have published every member on the public
   // miner list. This asserts they stay deleted — re-adding one to defaults without a consumer
   // re-creates the exact deception, and re-adding it to the step-up set makes it look real.
@@ -143,8 +143,8 @@ try {
     ok(`${key} is gone from STEP_UP_SETTINGS_KEYS`, !gated.includes(key));
   }
 
-  // Design §19.17 D22 (Option B, Part C1): the two raw-HTML sinks that §J1-1 put behind
-  // step-up are DELETED, not gated. Re-adding either to defaults brings back operator script
+  // Audit §J1-1 (script07_security_audit.md) put the two raw-HTML sinks behind step-up; D22
+  // (§19.17, script07_design_games.md) DELETED them instead. They are DELETED, not gated. Re-adding either to defaults brings back operator script
   // on an origin that has a sign-in form on every page; re-adding it to the step-up set would
   // make a dead key look guarded. (Their write refusal and the hidden legacy row are pinned in
   // test-operator-code-sinks.js.)
@@ -254,11 +254,11 @@ try {
   ok('control — the same reader sees ban as freshAdmin and miners as secureAdmin',
     routeGuard('post', '/api/admin/miners/:addr/ban') === 'freshAdmin' && routeGuard('get', '/api/admin/miners') === 'secureAdmin');
 
-  // Removed in §18 Part 3: v1's censor/uncensor. Express answers 404 for a path no route
+  // v1's censor/uncensor routes do not exist (design §18, script07_design.md). Express answers 404 for a path no route
   // declares, so "the declaration is gone" IS "the route 404s" — and no other handler may be
   // left calling the deleted lib functions.
   // Either receiver (route files register on `router`) and any quote — a negative written for
-  // `app.` alone passes vacuously once the route moves (R1 2026-10-10). The control proves the
+  // `app.` alone passes vacuously once the route moves. The control proves the
   // same regex shape still SEES a donors registration that does exist.
   const REG = (verb, rest) => new RegExp(`\\b(?:app|router)\\.${verb}\\(\\s*['"\`]\\/api\\/admin\\/donors${rest}`);
   ok('control — the registration reader sees POST /api/admin/donors/:addr/block', REG('post', "\\/:addr\\/block['\"`]").test(src));
@@ -377,8 +377,8 @@ try {
 
   console.log('\n[8] tor_send_mode removed (2026-09-26) — a pool that stored it keeps loading and saving');
 
-  // The step-by-step Tor sender (F5) is deleted, and its switch went the way F4's keys did: field,
-  // default, validator and applyToConfig in ONE change. A pool that ran F5 may hold the row —
+  // The step-by-step Tor sender does not exist; its switch goes the way an obsolete key does: field,
+  // default, validator and applyToConfig in ONE change. A pool that once had it may hold the row —
   // possibly 'stepwise'. It must stay inert: load, save, and never reach the runtime config.
   up.run('tor_send_mode', 'stepwise');
   const staleMode = () => db.prepare("SELECT value FROM pool_config WHERE section='payout' AND key='tor_send_mode'").get();

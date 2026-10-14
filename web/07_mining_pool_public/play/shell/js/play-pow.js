@@ -1,4 +1,4 @@
-/* play-pow.js — the sign-up proof-of-work, browser side (design §19.17.3, Part C6).
+/* play-pow.js — the sign-up proof-of-work, browser side (design §19.17.3).
  *
  * The server hands out a challenge and a difficulty (`bits`). We look for a nonce — 1 to 32
  * characters of [0-9A-Za-z] — such that sha256(challenge + ':' + nonce) starts with `bits`
@@ -10,7 +10,7 @@
  *   PlayPow.solve(challenge, bits, { onProgress(tries, ms), cancelled() }) → Promise<nonce>
  *     rejects with PlayPow.Error { code: 'cancelled' | 'bad_input' }
  *
- * Why plain JavaScript and not WebCrypto (§19.15 Part C6 #1): crypto.subtle.digest is one
+ * Why plain JavaScript and not WebCrypto (see script07_implementation_games.md, The guest UI): crypto.subtle.digest is one
  * promise round trip per hash. Measured in Edge it managed ~37 000 hashes a second — 7 s on
  * average at 18 bits and 25 s on an unlucky run, several times that on a phone. Here the
  * challenge part of the message (≥ 64 bytes, the same for every try) is hashed ONCE into a

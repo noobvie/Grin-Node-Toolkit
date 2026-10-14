@@ -20,8 +20,8 @@
 :root {
     /* Reactor default (v4 control-room skin) — legacy var names kept; themes.css remaps
        them per theme. Slot mapping: cyan-slot = phosphor green (accent/ok), magenta-slot =
-       hot magenta (accent2), lime-slot = instrument amber (gold). The old uranium-lime
-       default lives on as body.uranium-theme ("Uranium Classic"). */
+       hot magenta (accent2), lime-slot = instrument amber (gold). The uranium-lime
+       look is body.uranium-theme ("Uranium Classic"). */
     --dark-bg: #07090c;
     --dark-card: #10141a;
     --dark-text: #cfd8d3;
@@ -56,9 +56,8 @@ body {
     --glow: color-mix(in srgb, var(--neon-cyan) 55%, transparent);
     --shadow: 0 1px 3px rgba(0, 0, 0, .5), 0 8px 24px rgba(0, 0, 0, .35);
     /* admin-template aliases — pages written against the older --bg-body/--bg-card
-       var family (connect, page, login) resolve to the same palette. That family
-       came from the deleted js/theme.js; the aliases are what keep those pages
-       working without a rewrite. */
+       var family (connect, page, login) resolve to the same palette; the aliases
+       keep those pages working without a rewrite. */
     --bg-body: var(--dark-bg);
     --bg-card: var(--dark-card);
     --bg-card2: var(--bg-elev2);
@@ -69,7 +68,7 @@ body {
     --btn-text: var(--dark-bg);
 
     background-color: var(--bg);
-    /* control-room ambience: soft overhead glow instead of the old full-page grid
+    /* control-room ambience: soft overhead glow, no full-page grid
        (the reactor panels carry their own graph-paper texture) */
     background-image:
         radial-gradient(1100px 520px at 50% -12%, color-mix(in srgb, var(--accent) 6%, var(--bg-elev)), transparent 70%);
@@ -91,8 +90,8 @@ a:hover { text-decoration: underline; }
 
 /* ── No-JavaScript notice ──────────────────────────────────────────────────
    Every page here is a JS shell: public-shell.js injects the header and footer,
-   and each page fetches its own numbers. With scripts blocked you previously got
-   a chrome-less page of "—" placeholders with no navigation and no explanation.
+   and each page fetches its own numbers. Without this, blocked scripts
+   leave a chrome-less page of "—" placeholders with no navigation and no explanation.
    The <noscript> block each page ships is styled here so it reads as a notice. */
 .noscript-note {
     max-width: 720px;
@@ -142,10 +141,10 @@ summary:focus-visible,
 
 /* ── Testnet banner ────────────────────────────────────────────────────────
    Injected by public-shell.js (showTestnetBanner) on every PUBLIC page when
-   /api/config/pool-info reports network=testnet. These rules USED to live only in
-   css/pool.css, which no public page loads (it is the admin-panel stylesheet) — so
-   the one warning telling a visitor the coins are worthless rendered as unstyled
-   body text. They belong here, in the public bundle, beside the header they offset.
+   /api/config/pool-info reports network=testnet. These rules must live here, not
+   in css/pool.css, which no public page loads (it is the admin-panel stylesheet) — else
+   the one warning telling a visitor the coins are worthless renders as unstyled
+   body text. They sit in the public bundle, beside the header they offset.
 
    --testnet-banner-h is the single source of truth for the height: the banner sets
    its own box from it and the sticky header is pushed down by exactly that much, so
@@ -563,15 +562,15 @@ footer a:hover { color: var(--accent); }
 }
 .footer-donate:hover { color: var(--accent); text-decoration: underline; }
 .footer-donate-ico { color: #ff5d5d; }
-/* Fortune Board CTA, right under Donate (moved out of the Pool column). */
+/* Fortune Board CTA, right under Donate. */
 .footer-fortune {
     display: inline-flex; align-items: center; gap: 6px; align-self: flex-start;
     margin-top: 2px; font-weight: 600; color: var(--text-dim);
 }
 .footer-fortune:hover { color: var(--text); text-decoration: underline; }
 
-/* Bottom legal row. No border-top: the mini-stats bar that used to sit above it is gone,
-   and a rule right under the columns just adds a second horizontal line to the footer. */
+/* Bottom legal row. No border-top: there is no mini-stats bar above it,
+   and a rule right under the columns would add a second horizontal line to the footer. */
 .footer-bottom {
     max-width: 1100px; margin: 28px auto 0; padding-top: 14px;
     text-align: center;
@@ -586,8 +585,8 @@ footer a:hover { color: var(--accent); }
 .footer-sep { color: var(--text-dim); opacity: .6; }
 
 /* Narrow screens: the brand block takes its own full-width row and the three LINK columns
-   (Pool / Resources / Legal) split the row below it evenly. It used to go 2×2 and then a
-   single column at phone width, which stacked every link into one long list — the link
+   (Pool / Resources / Legal) split the row below it evenly. (2×2 then one column would stack every
+   link into one long list.) The link
    labels are short (1–2 words), so three columns fit down to ~320px. A long CMS page title
    wraps inside its column rather than widening it (minmax(0,…) + overflow-wrap). */
 @media (max-width: 760px) {
@@ -807,8 +806,8 @@ footer a:hover { color: var(--accent); }
 }
 .ad-text-head { font: 700 20px/1.15 var(--mono, ui-monospace, monospace); letter-spacing: .5px; color: var(--text, #e6efe9); }
 .ad-text-body { font: 400 13px/1.45 var(--mono, ui-monospace, monospace); color: var(--text-dim, #8a978f); flex: 1 1 220px; min-width: 170px; }
-/* CTA follows the theme accent. It used to be a hard-coded Reactor-green gradient with
-   near-black ink, which stayed lurid green on every other theme and — on the light
+/* CTA follows the theme accent. A hard-coded Reactor-green gradient with
+   near-black ink would stay lurid green on every other theme and — on the light
    themes — put a #07090c label on a colour the palette never chose. */
 .ad-text-cta {
   font: 700 13px var(--mono, ui-monospace, monospace); letter-spacing: .5px; white-space: nowrap;

@@ -1,4 +1,4 @@
-/* play-names.js — the Nickname fold in the account strip (design §19.17.5, Part C3; §19.16 before).
+/* play-names.js — the Nickname fold in the account strip (design §19.17.5; v1 display rule in §19.16).
  *
  * It follows play-shell.js's `play:me` (null when signed out) and reads `me.nickname`:
  *   { enabled, live, shown_as, refused: {name, state, reason, at, by} | null,

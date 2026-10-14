@@ -1,7 +1,7 @@
 // Money-path regression tests — block-reward distribution, the commit-reveal lottery, and the
 // per-share donation (design §18.2).
 //
-// Guards the audit §I3–I6 and §I8 fixes. Each of these was a real bug that moved (or failed
+// Guards the audit §I3 (script07_security_audit_archive.md)–I6 and §I8 (script07_security_audit_archive.md) fixes. Each of these was a real bug that moved (or failed
 // to move) real GRIN, so they get a test rather than a comment. Runs against a throwaway
 // SQLite file in the OS temp dir — never the pool DB. Run: node scripts/test-money-path.js
 const path = require('path');
@@ -74,7 +74,7 @@ db.prepare(`INSERT INTO shares (grin_address, worker_name, difficulty, block_hei
             VALUES ('grin1miner','w1', 100, ?, 'h1')`).run(H);
 
 (async () => {
-  // 1a. Without a node, it must REFUSE (used to warn and credit anyway).
+  // 1a. Without a node, it must REFUSE (never warn and credit anyway).
   const noNode = new RewardDistributor(config, null);
   const r0 = await noNode.distributeRewards(blockId);
   ok('refuses to distribute with no node client', r0.success === false && /chain verification/i.test(r0.error || ''), JSON.stringify(r0));
@@ -127,18 +127,18 @@ db.prepare(`INSERT INTO shares (grin_address, worker_name, difficulty, block_hei
   ok('miner credited 60 - 1% fee = 59.4', Math.abs(bal - 59.4) < 1e-9, `got ${bal}`);
   ok('block flipped to paid', db.prepare('SELECT status FROM blocks WHERE id=?').get(blockId).status === 'paid');
 
-  // 1d. THE §I4 REGRESSION TEST: replaying the same block must not credit twice.
+  // 1d. THE §I4 (script07_security_audit_archive.md) REGRESSION TEST: replaying the same block must not credit twice.
   const rReplay = await rd.distributeRewards(blockId);
   ok('replay refused (already settled)', rReplay.success === false, JSON.stringify(rReplay));
   const bal2 = db.prepare("SELECT balance FROM miner_accounts WHERE grin_address='grin1miner'").get().balance;
   ok('balance UNCHANGED after replay', Math.abs(bal2 - 59.4) < 1e-9, `got ${bal2}`);
 
-  // 1e. §I5 — ledger rows carry real before/after, not zeros.
+  // 1e. §I5 (script07_security_audit_archive.md) — ledger rows carry real before/after, not zeros.
   const led = db.prepare("SELECT * FROM balance_log WHERE grin_address='grin1miner' AND event_type='credit'").get();
   ok('credit ledger row has real balance_after', led && Math.abs(led.balance_after - 59.4) < 1e-9, JSON.stringify(led));
   ok('credit ledger row has real balance_before', led && led.balance_before === 0);
 
-  // 1f. §I4 ATOMICITY, directly. Make a late step of the distribution throw and assert that
+  // 1f. §I4 (script07_security_audit_archive.md) ATOMICITY, directly. Make a late step of the distribution throw and assert that
   // NOTHING committed: not the credits, not the confirmed→paid flip. Before the fix these
   // were separate write units, so a failure here left miners credited with the block still
   // 'confirmed' — and the next monitor tick credited them all over again.
@@ -229,7 +229,7 @@ db.prepare(`INSERT INTO shares (grin_address, worker_name, difficulty, block_hei
   const again = await lot.resolveCommittedDraws();
   ok('second reveal pays nothing', again.length === 0 && inc.prizePoolBalance() === potAfter);
 
-  // §I5 for the incentives mover.
+  // §I5 (script07_security_audit_archive.md) for the incentives mover.
   const lotLed = db.prepare("SELECT * FROM balance_log WHERE reference_type='lottery' AND event_type='credit'").get();
   ok('lottery ledger row has non-zero before/after',
      lotLed && !(lotLed.balance_before === 0 && lotLed.balance_after === 0), JSON.stringify(lotLed));

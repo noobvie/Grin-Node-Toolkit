@@ -1,8 +1,7 @@
-// payment-history.js — the payment-history page's own script. Until 2026-10 (pool code-layout refactor,
-// part F2) this was payment-history.html's inline <script> block; it moved out byte-for-byte so
-// a strict script-src can drop 'unsafe-inline'. The block's indent is kept.
+// payment-history.js — the payment-history page's own script, external (not inline) so a strict script-src needs no 'unsafe-inline'.
+// The original indent is kept.
 //
-// The page loads it as a CLASSIC script at the block's old position. Never add defer / async /
+// The page loads it as a CLASSIC script at its original position. Never add defer / async /
 // type="module": the order and the shared global scope are what this code was written against.
         // Escape any value before it goes into innerHTML (defense-in-depth on grin_address and any
         // operator/miner-derived field rendered into the table).
@@ -25,10 +24,10 @@
             return addr.length > 16 ? addr.slice(0, 9) + '…' + addr.slice(-4) : addr;
         }
         // Full miner address rendered as a link into the account view.
-        // Plain text, NOT a link, and NO `title` tooltip (audit §J11-1, 2026-09-02). The server
+        // Plain text, NOT a link, and NO `title` tooltip (audit §J11-1). The server
         // masks grin_address on /api/pool/payments now, so `addr` arrives already truncated —
-        // truncAddr() below is a no-op on it and stays only as a guard. The old cell put the
-        // FULL address in both the href and the title, which is what made every masked feed
+        // truncAddr() below is a no-op on it and stays only as a guard. A cell that put the
+        // FULL address in both the href and the title would make every masked feed
         // elsewhere re-attachable by a join. See the note in miners-stats.html addrCell().
         function addrCell(addr) {
             return '<span class="addr-plain">' + escHtml(truncAddr(String(addr || ''))) + '</span>';
@@ -155,7 +154,7 @@
         // where the row honestly stays "sent"). The cell reads "Tor · mined" / "Slatepack · sent".
         //
         // Tx ID = the payout's kernel excess, linked to the operator's chain explorer so anyone
-        // can check the payout was mined. Published here since 2026-09-25 by operator decision,
+        // can check the payout was mined. Published here by operator decision,
         // reversing the pool-wide half of audit §J11-2 — the address beside it MUST stay masked
         // (see the note on GET /api/pool/payments). The server sends only a shape-checked
         // 66-hex value or null; Explorer.link() escapes it and branding.js relinks it once the

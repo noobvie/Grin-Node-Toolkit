@@ -31,7 +31,8 @@ const NAME_MIN = 3;
 const NAME_MAX = 20;
 const NAME_RE = /^[A-Za-z0-9]+$/;
 const NAME_RULE = `${NAME_MIN}–${NAME_MAX} characters: letters A–Z and digits 0–9 only (no spaces), with at least one letter`;
-// The donor shape (§18.5, kept by the operator at C0 — §19.17.6): wider than a nickname, because
+// The donor shape (kept by the operator, §19.17.6; the pool-side rules are
+// script07_design.md §18.5): wider than a nickname, because
 // a donor name is often a brand. Only the pool uses it; it lives here so both copies stay one code.
 const DONOR_MIN = 2;
 const DONOR_MAX = 32;
@@ -133,7 +134,7 @@ function compileList(list) {
 // two-letter pool name would refuse nearly every name; same floor as the donor flags).
 // pool_info.pool_name is free text, so accents are stripped and every other character outside
 // a–z 0–9 (`!`, brackets, `#`, `™`, an emoji) is DROPPED — never a reason to reserve nothing:
-// `Night Owl Mining!` reserves `nightowlmining` like `Night Owl Mining` does (R1 review).
+// `Night Owl Mining!` reserves `nightowlmining` like `Night Owl Mining` does.
 function poolNameEntry(poolName) {
   const bare = String(poolName == null ? '' : poolName).normalize('NFD').replace(/[̀-ͯ]/g, '');
   const norm = matchForm(bare).replace(/[^a-z0-9]/g, '');

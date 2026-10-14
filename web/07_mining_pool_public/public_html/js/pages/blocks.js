@@ -1,8 +1,7 @@
-// blocks.js — the blocks page's own script. Until 2026-10 (pool code-layout refactor,
-// part F2) this was blocks.html's inline <script> block; it moved out byte-for-byte so
-// a strict script-src can drop 'unsafe-inline'. The block's indent is kept.
+// blocks.js — the blocks page's own script, external (not inline) so a strict script-src needs no 'unsafe-inline'.
+// The original indent is kept.
 //
-// The page loads it as a CLASSIC script at the block's old position. Never add defer / async /
+// The page loads it as a CLASSIC script at its original position. Never add defer / async /
 // type="module": the order and the shared global scope are what this code was written against.
         // Public blocks deck. All data comes from public endpoints:
         //   /api/pool/stats                        summary KPIs (total/confirmed/immature/24h/7d)

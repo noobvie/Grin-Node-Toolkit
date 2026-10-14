@@ -74,8 +74,8 @@ function err(res, msg, code = 400, reason = null) {
 }
 
 // ── Wallet error classification ──────────────────────────────────────────────
-// Every wallet-touching endpoint used to collapse all failures into one opaque
-// 503 ("Wallet temporarily unavailable"), and the frontend then blamed a "full
+// Collapsing every wallet-touching failure into one opaque
+// 503 ("Wallet temporarily unavailable") would make the frontend blame a "full
 // scan / LMDB write lock" for ANY 503 — masking the real cause (node down,
 // wallet listener down, out of funds).  classifyWalletError() maps the
 // underlying error string to a machine-readable `reason` + a user-facing message
@@ -122,8 +122,8 @@ function truncAddr(addr) {
 
 // A Grin slatepack address is a bech32-encoded 32-byte ed25519 public key: hrp
 // ("grin" | "tgrin") + "1" + 52 data chars + 6 checksum chars. That is EXACTLY 63
-// chars on mainnet and 64 on testnet — not "40 or more", which the old
-// [a-z0-9]{40,} accepted while the rejection message next to it said "52+".
+// chars on mainnet and 64 on testnet — not "40 or more" (a loose
+// [a-z0-9]{40,} would accept what the rejection message says needs "52+").
 // The charset is bech32's, which deliberately omits 1/b/i/o, so a typo'd address
 // containing one of those is caught here rather than by the wallet much later.
 const GRIN_ADDR_RE    = /^(grin|tgrin)1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{58}$/;
@@ -692,9 +692,9 @@ app.post('/api/donate/receive', async (req, res) => {
 
     // 3. Encode response slate → slatepack.
     // sender_index: null — do NOT embed the server's Tor address in the envelope.
-    // Previously sender_index: 0 caused donor wallets (Tor enabled by default) to
+    // sender_index: 0 would cause donor wallets (Tor enabled by default) to
     // auto-deliver the payment response directly to the server's Foreign API, bypassing
-    // this endpoint entirely. That produced "ghost" TxReceived entries in grin-wallet
+    // this endpoint entirely. That produces "ghost" TxReceived entries in grin-wallet
     // (tx_slate_id=None, kernel_excess=None) with no matching DB record.
     const responseSlatepack = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'create_slatepack_message', {
       token,
@@ -761,10 +761,10 @@ app.post('/api/donate/invoice', async (req, res) => {
 
     // 2. Encode invoice → slatepack.
     // sender_index: null — do NOT embed the server's Tor address in the envelope.
-    // Previously sender_index: 0 caused donor wallets (Tor enabled by default) to
+    // sender_index: 0 would cause donor wallets (Tor enabled by default) to
     // auto-complete the payment via Tor directly to the server's Foreign API, bypassing
-    // /api/donate/finalize entirely. That left DB invoices stuck as "pending" and
-    // produced "ghost" TxReceived entries in grin-wallet (tx_slate_id=None).
+    // /api/donate/finalize entirely. That leaves DB invoices stuck as "pending" and
+    // produces "ghost" TxReceived entries in grin-wallet (tx_slate_id=None).
     // With null, the donor must always paste the response slatepack back to the website.
     const invoiceSlatepack = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'create_slatepack_message', {
       token,

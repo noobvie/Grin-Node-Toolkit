@@ -1,7 +1,7 @@
 // Node-checker regression tests — the SSRF blocklist and parseTarget.
 //
 // WHY THIS FILE EXISTS. Both tables were run exactly once, in a throwaway
-// harness (the first pass on 2026-09-05, re-confirmed by R5), and the numbers
+// harness (the first pass on 2026-09-05, re-confirmed in review), and the numbers
 // "23/23" and "14/14" then lived only in the tools-hub review plan, which is
 // session scaffolding kept outside the repo. blockedReason() is the ONLY
 // thing standing between a visitor-supplied host name and this server dialling
@@ -28,7 +28,7 @@ const ok = (name, fn) => {
   catch (e) { fail++; console.log('  FAIL  ' + name + '\n        ' + (e && e.message)); }
 };
 
-// ═══ 1. blockedReason() — R5's 23 addresses, plus boundary rows ══════════════
+// ═══ 1. blockedReason() — the original 23 addresses, plus boundary rows ══════════════
 //
 // [address, expected reason | null, what it is]. `null` = must be dialled.
 // The four disguised-loopback forms are the point of the table: each reaches the
@@ -87,7 +87,7 @@ ok('an address it cannot parse is REFUSED, never dialled', () => {
   }
 });
 
-// ═══ 2. parseTarget() — R5's 14 inputs, plus the accepted forms ══════════════
+// ═══ 2. parseTarget() — the original 14 inputs, plus the accepted forms ══════════════
 //
 // Accepted rows assert the WHOLE resolved tuple: a target that parsed but landed
 // on the wrong port or scheme is a worse outcome than one that was rejected.
@@ -97,7 +97,7 @@ ok('an address it cannot parse is REFUSED, never dialled', () => {
 // suggestion from the person who needs it or offers it to someone who typed an
 // explicit port and does not.
 //
-// ⚠ An assumed row's scheme/port DEPENDS ON THE HOST TYPE since 2026-09-10 — a
+// ⚠ An assumed row's scheme/port DEPENDS ON THE HOST TYPE — a
 // name lands on https/443, an address on http/3413. Section 8 owns that split
 // in full; the two assumed rows here are the ones that would have gone stale
 // silently, so they are spelled out rather than left to the table below.
@@ -404,7 +404,7 @@ ok('the page no longer claims it checks only the API', () => {
 
 // ═══ 8. The assumed API endpoint — a NAME gets 443, an IP gets 3413 ══════════
 //
-// WHY THIS EXISTS. Until 2026-09-10 a bare host defaulted to 3413, and the route
+// WHY THIS EXISTS. A bare host once defaulted to 3413, and the route
 // itself carried a comment calling that "the single commonest wrong verdict this
 // tool can give" — Script 04 fronts a node with nginx and publishes it on 443,
 // with 3413 bound to localhost. The default now splits on what the host IS, and

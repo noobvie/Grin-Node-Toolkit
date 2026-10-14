@@ -38,7 +38,7 @@ const SCRIPT_SRC = /<script\b([^>]*?)\ssrc\s*=\s*(["'])([^"']*)\2([^>]*)>\s*<\/s
 
 const norm = (p) => p.replace(/\\/g, '/');
 
-// Where a script URL lives on disk, as served: /admin/x → admin-panel/x, /x → public_html/x,
+// Where a script URL lives on disk, as served: /admin/x → admin-panel/x, /x → public_html/<x>,
 // a relative x → beside the page. Query/hash stripped. null = not a local file we serve.
 function resolveSrc(htmlPath, src) {
   const clean = src.split(/[?#]/)[0];

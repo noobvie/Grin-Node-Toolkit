@@ -69,7 +69,7 @@ for (const file of files) {
 // The regex deliberately skips <script src=…> (nothing inline to check) and does not try to
 // parse HTML: an admin page carries exactly one inline block, at the end of <body>.
 //
-// `../public_html` added 2026-09-02 (audit §J11): the PUBLIC pages have the same shape — the
+// `../public_html` is covered too (audit §J11): the PUBLIC pages have the same shape — the
 // leaderboards, the blocks explorer, the payouts table, the donor wall and the whole account
 // page are inline <script>, not .js files — so the gate was blind to the money UI miners
 // actually use as well as to half the panel. Unlike the admin pages these carry a second
@@ -91,11 +91,11 @@ for (const dir of INLINE_HTML_DIRS) {
       // Skip non-JavaScript payloads (JSON-LD, templates). A bare <script> or an explicit
       // JS type is checked; anything else is data.
       //
-      // Sniff the OPENING TAG's attributes only — never the whole match. Until 2026-09-21 this
-      // ran over m[0], i.e. the script BODY too, so any inline block whose row template
+      // Sniff the OPENING TAG's attributes only — never the whole match. Sniffing m[0]
+      // would read the script BODY too, so any inline block whose row template
       // contains `type="button"` (miners.html, donors.html, index.html …) read as
-      // type=button → "not JavaScript" → skipped. Those pages were never syntax-checked, and
-      // a deliberately broken donors.html passed this gate. Exactly the "looks thorough,
+      // type=button → "not JavaScript" → skipped, and a deliberately broken
+      // donors.html would pass this gate. Exactly the "looks thorough,
       // cannot fail" failure the header of this file describes.
       const typeAttr = /\stype\s*=\s*["']?([^"'\s>]+)/i.exec(attrs);
       const type = typeAttr ? typeAttr[1].toLowerCase() : '';

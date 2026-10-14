@@ -1,14 +1,14 @@
 'use strict';
 
-// Donor league (design §16.6/§16.7, Part 4) — the public /api/pool/donors v2 response built by
+// Donor league (design §16.6/§16.7) — the public /api/pool/donors v2 response built by
 // lib/donor-ledger.js donorWall() against an in-memory copy of the real schema. index.js starts
 // a server on require, so the route itself is only ever read as text (test-public-leakage.js);
 // everything the route hands the lib — switch state, live rigs, the mask — is passed here as
 // fixtures. Covers: the 100/20 limits with totals over every donor and an exact Σ; the window
 // dropping a donor whose last debit is older (and 0 = lifetime); active months across rollup +
 // raw; the multiplier cap; tie order; past-strip order + `more`; names from APPROVED donor
-// profiles only (§18 Part 3 — pending/rejected/removed and v1 names never reach a card) and
-// expired → null; banners (§18 Part 4) only on league ranks ≤ donor_banner_slots, never on
+// profiles only (design §18 — pending/rejected/removed and v1 names never reach a card) and
+// expired → null; banners only on league ranks ≤ donor_banner_slots, never on
 // the past strip, never from a non-approved row; league/past disjoint; the mask being
 // REQUIRED and applied to both arrays; blank/junk settings never reaching a score; the
 // donations switch zeroing the live readings; and (design §18.3) liveDonations() — the one
@@ -66,7 +66,7 @@ function setInc(a, fields) {
   db.prepare(`UPDATE miner_incentives SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE grin_address = ?`)
     .run(...keys.map((k) => fields[k]), a);
 }
-// A donor_requests row (design §18.4) — the one source of a card's name since §18 Part 3.
+// A donor_requests row (design §18.4) — the one source of a card's name.
 function req(a, f) {
   db.prepare(`INSERT INTO donor_requests (grin_address, kind, status, name, submitted_at, decided_at, reason)
               VALUES (?, 'name', ?, ?, ?, ?, ?)`)
@@ -250,7 +250,7 @@ function keys(v, out = new Set()) {
   })());
 }
 
-// ── names: approved-only (design §18.7, since §18 Part 3) ────────────────────────────────
+// ── names: approved-only (design §18.7) ────────────────────────────────
 // A card's name is the APPROVED, unexpired donor_requests name (publicProfiles). Pending,
 // rejected, withdrawn and removed rows never reach a card, and the v1 donor_name column on
 // miner_incentives is not read at all — v1 names were never reviewed.
@@ -379,7 +379,7 @@ function keys(v, out = new Set()) {
   })());
 }
 
-// ── banners: the Top-N slot rule (design §18.7, §18 Part 4) ─────────────────────────────
+// ── banners: the Top-N slot rule (design §18.7) ─────────────────────────────
 // `banner` is { url, width, height } only on a LEAGUE card with rank ≤ donor_banner_slots and
 // an approved, unexpired banner; null everywhere else, and always null on the past strip.
 {

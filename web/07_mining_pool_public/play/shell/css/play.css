@@ -1,4 +1,4 @@
-/* play.css — the /play/ shell (design §19, Part 6). Loaded AFTER the pool's public bundle
+/* play.css — the /play/ shell (design §19). Loaded AFTER the pool's public bundle
  * (dashboard.css → themes.css → reactor.css), and only on /play/.
  *
  * Colours come ONLY from the pool's token bridge on <body> (--bg, --text, --accent, --gold,
@@ -79,7 +79,7 @@
 .play-actions a { font-size: 13.5px; }
 .hint { font-size: 13px; margin: 2px 0 12px; }
 
-/* ── Guest sign-in + sign-up (design §19.17.3, Part C6) ───────────────────── */
+/* ── Guest sign-in + sign-up (design §19.17.3) ───────────────────── */
 #login-note:empty { display: none; }
 #login-note { margin: 0 0 12px; }
 .play-lead { margin: 0 0 14px; font-size: 14px; line-height: 1.55; color: var(--text-dim); max-width: 620px; }
@@ -162,7 +162,7 @@
 /* ── Badges line (account strip) ─────────────────────────────────────────── */
 .play-badges { margin: -6px 0 10px; font-size: 13px; color: var(--gold); font-weight: 600; }
 
-/* ── Leaderboards & events (Part 7) ───────────────────────────────────────── */
+/* ── Leaderboards & events ───────────────────────────────────────── */
 .play-tabs {
     display: flex; gap: 4px; margin-bottom: 14px;
     border-bottom: 1px solid var(--border);

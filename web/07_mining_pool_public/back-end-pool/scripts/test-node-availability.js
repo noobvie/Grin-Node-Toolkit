@@ -54,7 +54,7 @@ const api = (port) => new GrinNodeAPI({
   node_api_secret: 'test-secret', node_foreign_api_secret: 'test-secret',
 });
 
-const D0 = Date.UTC(2026, 9, 3) / 1000;   // 2026-10-03 00:00 UTC
+const D0 = Date.UTC(2026, 9, 3) / 1000;   // fixed clock origin, 00:00 UTC
 const quiet = () => {};
 
 (async () => {
@@ -316,7 +316,7 @@ const quiet = () => {};
     ok('start outside an outage → a planned point row', rows.some((x) => x.state === 'planned' && x.started_at === T + 800 && x.ended_at === T + 800));
     ok('gap → an unobserved interval', rows.some((x) => x.state === 'unobserved' && x.started_at === T + 900 && x.ended_at === T + 1300));
 
-    // R2: a recorder_start after earlier lines (a ledger restored by 089, or a re-install that lost
+    // A recorder_start after earlier lines (a ledger restored by 089, or a re-install that lost
     // status.json) means nobody watched since the previous line — 086's dgr_availability counts that
     // span unobserved, and so must the pool, or a 40-day hole reads as 40 days up. Its own network
     // (testnet), so the mainnet rows the [4] maths pins are untouched.

@@ -23,13 +23,10 @@
  * both toggle these classes, so the two entry points share one stylesheet.
  *
  * The old built-in looks (cyan "dark" default, black-bg "atomic", gradient
- * "light") were retired from the public pages in 2026-06. They survived for a
- * while as admin-panel palettes in js/theme.js (Cyber Classic / Atomic Classic /
- * Gradient Light), but nothing ever loaded that file after the 2026-06 admin
- * rebuild and it was deleted in 2026-08 — git history is where those palettes
- * live now. The legacy public key 'dark' maps to the default.
+ * "light") are gone from the public pages; git history holds those palettes.
+ * The legacy public key 'dark' maps to the default.
  *
- * 2026-07: the default (key 'atomic', no body class) became the "Reactor"
+ * The default (key 'atomic', no body class) is the "Reactor"
  * control-room skin (phosphor green / magenta / amber, defined in dashboard.css;
  * panel components in reactor.css). The previous uranium-lime default lives on
  * below as body.uranium-theme ("Uranium Classic").
@@ -73,12 +70,10 @@ body.nexus-theme::before {
   body.nexus-theme::before { animation: none; }
 }
 
-/* NOTE: the `.theme-switcher .theme-select` block that used to live here (a styled grouped
- * <select> with a custom caret) was DEAD — public-theme.js has rendered a single
- * .theme-cycle-btn since the switcher became a click-to-cycle palette icon, and nothing in
- * public_html/ or the admin panel emits .theme-select any more. Removed 2026-07-25 along
- * with the winxp override of it and the --t-switcher-bg palette token (same orphan: its
- * only consumer was the container background this file no longer paints). */
+/* NOTE: there is no `.theme-switcher .theme-select` block — public-theme.js renders a single
+ * .theme-cycle-btn (a click-to-cycle palette icon), and nothing in public_html/ or the
+ * admin panel emits .theme-select. Likewise no --t-switcher-bg palette token: its only
+ * consumer would be a container background this file does not paint. */
 
 /* ── Generic component theming (written once, driven by --t-* per palette) ──── */
 body.themed {
@@ -136,9 +131,8 @@ body.themed footer {
   color: var(--t-dim);
 }
 
-/* The switcher CONTAINER is a bare flex wrapper — never give it a surface. It used to
- * get a tinted pill + glow here, from the era when it held a wide <select>. The control
- * is now a single square icon button, so those rules painted an un-rounded, un-sized
+/* The switcher CONTAINER is a bare flex wrapper — never give it a surface. The control
+ * is a single square icon button, so a tinted pill + glow here would paint an un-rounded, un-sized
  * rectangle (white on the light themes, black elsewhere) with a rectangular halo behind
  * a smaller button — which is what made the theme control look misshapen. All chrome now
  * belongs to .theme-cycle-btn in dashboard.css, which is a fixed square. */
@@ -150,8 +144,8 @@ body.themed .theme-cycle-btn:hover { background: var(--t-chip-bg); border-color:
  *  CLASSIC THEMES — Uranium Classic + Nexus + Light. Reactor is the no-class default.
  * ════════════════════════════════════════════════════════════════════════════ */
 
-/* Uranium Classic ☢ — the pre-2026-07 default (mockup-v3 uranium-lime reactor grid).
- * Kept switchable for operators/visitors who prefer the old look; scanlines included
+/* Uranium Classic ☢ — the earlier default (mockup-v3 uranium-lime reactor grid).
+ * Kept switchable for operators/visitors who prefer that look; scanlines included
  * via the ::before selector at the top of this file. */
 body.uranium-theme {
   --t-bg: #080b07; --t-text: #e8f5cf; --t-dim: #9db077;
@@ -410,13 +404,13 @@ body.comic-theme .nav-link { color: #1a1a1a; }
  * So this block re-tunes the TOKENS the effects are built from (one place, every page),
  * then switches off the handful of glows that don't route through --glow.
  *
- * The palettes themselves were also re-inked (2026-07-25): --t-accent / --t-accent2 are
+ * The palettes are inked for contrast: --t-accent / --t-accent2 are
  * TEXT colours here (stat values, counters, `.panel-title .tag`, `.proc` bullets), not just
  * fills, so a vivid light-theme brand colour fails outright — sakura #ff6f9c was 2.6:1 and
- * Aqua #0a84ff 3.7:1 on white. Each light palette now uses a darkened variant of the same
+ * Aqua #0a84ff 3.7:1 on white. Each light palette uses a darkened variant of the same
  * hue at ≥4.5:1 (the vivid original survives in the header gradients and page background,
- * where nothing has to be read on top of it). Same reason the `light` theme's greens were
- * darkened in 2026-06 — see the note on that palette.
+ * where nothing has to be read on top of it). Same reason the `light` theme's greens are
+ * darkened — see the note on that palette.
  *
  * ADDING A NEW LIGHT PALETTE: add its `body.<key>-theme` to BOTH selector lists below —
  * that is the only wiring needed. The list is duplicated (not a shared class) on purpose:

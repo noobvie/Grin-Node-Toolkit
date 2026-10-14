@@ -1,6 +1,6 @@
 'use strict';
 
-// Part C2 (design §19.17.2, D30): the launch state and the effective mode.
+// Launch state (design §19.17.2, D30): the launch state and the effective mode.
 //
 //   [a] units: effectiveMode() over the whole pool-mode × launch table, garbage in → the
 //       safe side; the launch value read from meta (fresh DB, absent row, junk row)

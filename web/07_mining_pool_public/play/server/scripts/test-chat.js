@@ -1,6 +1,6 @@
 'use strict';
 
-// Part 8 (design §19.10, §19.11, D9, D12, D21): chat + moderation.
+// Chat (design §19.10, §19.11, D9, D12, D21): chat + moderation.
 //
 //   [a] units: body normalisation, the hold rules, word normalisation
 //   [b] reading: chat switch, mode off, page shape, masking, own held messages, params

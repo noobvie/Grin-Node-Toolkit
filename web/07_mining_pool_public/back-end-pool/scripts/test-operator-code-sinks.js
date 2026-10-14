@@ -1,10 +1,10 @@
-// Operator-code sinks — design §19.17 D22 (Option B, Part C1) and threat note #22 (§19.13).
+// Operator-code sinks — design §19.17 (script07_design_games.md) D22 (Option B, Part C1) and threat note #22 (§19.13 (script07_design_games.md)).
 //
 // D22: no operator-authored code runs on the pool origin. The `code` ad type and the
-// analytics custom_head_html / custom_body_html sinks were DELETED, not filtered (`<img
+// analytics custom_head_html / custom_body_html sinks are DELETED, not filtered (`<img
 // onerror>` runs code, so a sanitiser would be a second thing to get right forever).
-// Analytics stays as provider-ID loaders only. C7 closed D22-4, the one sink D22's text missed
-// (the CMS page/post bodies), by sandboxing them (js/cms-frame.js). This file pins all of it:
+// Analytics stays as provider-ID loaders only. D22-4, the one sink D22's text missed
+// (the CMS page/post bodies), is closed by sandboxing them (js/cms-frame.js). This file pins all of it:
 //
 //   [1] STATIC — every place in public_html + play/shell that creates a <script> (or an
 //       <iframe>) is on an explicit allowlist, keyed by the function it sits in, and each
@@ -18,13 +18,13 @@
 //       frame, with its sandbox pinned token by token — and the deleted sinks' names are gone
 //       from the code. Plus an innerHTML RATCHET: the count per file is pinned, so a new
 //       innerHTML assignment fails until it is reviewed and the table updated.
-//   [3] BEHAVIOUR — lib/ads.js against a throwaway DB: a code ad cannot be created or edited,
+//   [3] BEHAVIOUR — lib/ads.js against a throwaway DB: an ad of the deleted `code` type cannot be created or edited,
 //       a legacy one is never served or counted and never leaves the module, and an ad URL
 //       must be a site path or http(s).
 //   [4] BEHAVIOUR — lib/pool-settings.js: the custom-HTML keys refuse writes, a legacy stored
 //       row never comes back out (admin GET or public payload), and every analytics value that
 //       reaches a <script> is pattern-checked on write AND on publish.
-//   [5] BEHAVIOUR — public_html/js/ads.js in a DOM shim: a code ad, a javascript: link and a
+//   [5] BEHAVIOUR — public_html/js/ads.js in a DOM shim: a legacy `code` ad, a javascript: link and a
 //       '/\host' link draw nothing executable or off-site; real banners and text cards render.
 //   [6] BEHAVIOUR — public_html/js/branding.js in a DOM shim: the chat-bubble loader appends
 //       /play/version.js then /play/js/chat-bubble.js?v=<stamp> ONLY for games chat on + mode on
@@ -151,7 +151,7 @@ const SCRIPT_CREATORS = {
     mount: { n: 1, guard: /s\.src = '\/js\/ads\.js';/, why: 'the ads renderer, a fixed same-origin path' },
   },
 };
-// C7 (design §19.17.7): the chat-bubble loader. It lives in branding.js, where the payload
+// C7 (design §19.17.7 (script07_design_games.md)): the chat-bubble loader. It lives in branding.js, where the payload
 // lands — not public-shell.js as this file once guessed: the decision needs cfg.games.
 SCRIPT_CREATORS['public_html/js/branding.js'].loadChatBubble = {
   n: 2, guard: /isCredentialPage\(\) \|\| !chatBubbleWanted\(cfg\)\) return;[\s\S]*v\.src = PLAY_VERSION_SRC;[\s\S]*s\.src = CHAT_BUBBLE_SRC \+ \(typeof ver === 'string' && PLAY_VERSION_RE\.test\(ver\) \? '\?v=' \+ ver : ''\);/,
@@ -258,20 +258,20 @@ for (const [re, label] of FORBIDDEN) {
 // innerHTML assignments per file. EXACT, not "at most": any change to this table means
 // someone looked at the line. All are fixed markup or escaped data (esc()/attr()/escapeText).
 //
-// CLOSED in C7 — D22-4, the CMS bodies (found in Part C1, confirmed by R1). They were
+// CLOSED — D22-4, the CMS bodies. They were
 //   page.html → `page-body`.innerHTML = json.data.html   (lib/pages.js, operator HTML, raw)
 //   post.html → `post-body`.innerHTML = p.body_html      (lib/posts.js, Quill HTML, raw)
-// i.e. an `<img onerror>` in a body ran on the origin. The operator chose (2026-10-04) to
-// SANDBOX them: both now go through js/cms-frame.js (srcdoc, no allow-scripts) — pinned below
+// i.e. an `<img onerror>` in a body ran on the origin. The operator chose to
+// SANDBOX them: both go through js/cms-frame.js (srcdoc, no allow-scripts) — pinned below
 // and in the srcdoc block above. page.html 3 → 2, post.html 4 → 3.
 //
-// blocks.html 4 → 7 (P-05 heatmap, 4ec39d3; reviewed 2026-10-10): `wrap.innerHTML = ''` (empty
+// blocks.html 7 (the P-05 heatmap): `wrap.innerHTML = ''` (empty
 // state), `wrap.innerHTML = html` (the weekday × hour table) and `summary.innerHTML` (busiest /
 // quietest hour). No API text reaches any of them: labels are the HEAT_DAYS constants, every count
 // goes through Number() || 0, hours are loop indexes, `expected` goes through fmtExpected().
 //
-// account-settings 20 (code-layout F1, 2026-10-10): the page's inline block moved byte-for-byte to
-// js/pages/account-settings.js, so its row is re-keyed from `…html#inline0` — same 20 lines.
+// account-settings 20: the page's script is js/pages/account-settings.js (keyed by that file, not
+// `…html#inline0`).
 const INNER_HTML = {
   'public_html/js/pages/api-docs.js': 4,
   'public_html/js/pages/blocks.js': 7,
@@ -310,7 +310,7 @@ ok('play/shell assigns no innerHTML at all (Part 6 rule)',
 // cms-frame.js shows a sentence — never an innerHTML fallback.
 const unitCode = (f) => (units.find((u) => u.file === f) || {}).code || '';
 for (const [page, payload, wrap] of [['page.html', 'json.data.html', 'content'], ['post.html', 'p.body_html', 'post-body']]) {
-  // F2: the page's script moved to js/pages/<page>.js (its key was `…html#inline0`). unitCode() answers ''
+  // The page's script is js/pages/<page>.js (not `…html#inline0`). unitCode() answers ''
   // for a missing unit, which would make every "never assigns" check below pass on nothing — so require code.
   const code = unitCode(`public_html/js/pages/${page.replace(/\.html$/, '.js')}`);
   ok(`D22-4: ${page}'s script unit is found and non-empty (the checks below are not vacuous)`, code.length > 200);
@@ -582,7 +582,7 @@ async function runLoader(payload, o, okVer) {
     console.log(`  FAIL  ads.js harness error: ${e && e.stack}`);
   }
 
-  // ═══ [6] the chat-bubble loader (design §19.17.7, Part C7) ═══════════════════
+  // ═══ [6] the chat-bubble loader (design §19.17.7 (script07_design_games.md), Part C7) ═══════════════════
   console.log('\n[6] branding.js loadChatBubble — the bubble loads only under the right flags, never on exempt pages');
   try {
     const OK_VER = 'abcdef012345';

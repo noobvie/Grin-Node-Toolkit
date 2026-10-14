@@ -1,8 +1,8 @@
 // Node display-state regression tests — the homepage "Node sync" lamp.
 //
 // A node opening a rebuilt chain_data refuses the API port for minutes (ECONNREFUSED), then
-// times out while it catches up. Both used to render as a red "offline" while the node
-// process was healthy (seen live 2026-09-30 after a chain_data rebuild). getStatus() now
+// times out while it catches up. Both must not render as a red "offline" while the node
+// process was healthy (seen live 2026-09-30 after a chain_data rebuild). getStatus()
 // carries the transport failure kind and downState() maps it to starting | busy | offline.
 //
 // What this pins:
@@ -39,7 +39,7 @@ const listen = (onConn) => new Promise((resolve) => {
   srv.listen(0, '127.0.0.1', () => resolve(srv));
 });
 const close = (srv) => new Promise((resolve) => srv.close(() => resolve()));
-// A port that was just ours and is now closed: connecting to it is refused.
+// A closed port (ours until the server closes): connecting to it is refused.
 const closedPort = async () => {
   const srv = await listen(() => {});
   const { port } = srv.address();

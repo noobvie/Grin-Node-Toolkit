@@ -1,14 +1,14 @@
 'use strict';
 /**
- * server.js — grin-accio-gateway (Script 052, packet S3).
+ * server.js — grin-accio-gateway (Script 052).
  *
  * The one server-side process Accio needs. Accio is a self-custodial browser
  * wallet: the seed is generated in the visitor's tab and never leaves it, so
  * this service holds no key, no wallet file and no balance. What it does hold
  * is the two things a tab physically cannot do —
  *
- *   S3   outbound:  POST a slate to a payee's .onion   → /tor/
- *   S4b  inbound:   own a listening address            → /listen
+ *   outbound:  POST a slate to a payee's .onion   → /tor/
+ *   inbound:   own a listening address            → /listen
  *                                                      → /wallet/<suffix>/v2/foreign
  *
  * A browser cannot open a TCP connection to a hidden service and cannot listen
@@ -34,7 +34,7 @@
  *     127.0.0.1:port      ← the clearnet nginx server block.  Rate limiting is
  *                           nginx's (limit_req zone=accio_tor, keyed on the
  *                           real client IP, which only nginx knows).
- *     127.0.0.1:tor_port  ← the onion nginx server block (S7). Every caller is
+ *     127.0.0.1:tor_port  ← the onion nginx server block. Every caller is
  *                           the same 127.0.0.1 with no identity at all, so the
  *                           only honest limit is one shared bucket, applied
  *                           here. Forwarding headers are ignored on this port.
@@ -44,7 +44,7 @@
  * serve over the onion exactly as it does over TLS, while /tor/, /listen and
  * /wallet/ proxy through to this port. Classification by localPort survives
  * that intact. tor_port = 0 keeps the second listener closed, which is the
- * state until S7 mints the onion.
+ * state until the onion is minted.
  *
  * The two fronts are also two COOKIE JARS, and that is worth stating rather
  * than discovering: http://<onion> and https://<domain> are different origins,
@@ -95,7 +95,7 @@ function makeLog(cfg) {
 // ─── Counters (what /health reports; no addresses, ever) ─────────────────────
 const stats = {
 	started: new Date().toISOString(),
-	// outbound (/tor/, S3)
+	// outbound (/tor/)
 	tor_requests: 0,
 	tor_denied: 0,
 	tor_failed: 0,
@@ -103,7 +103,7 @@ const stats = {
 	rejected_rate_limit: 0,
 	rejected_busy: 0,
 	in_flight: 0,
-	// inbound (/listen + /wallet/, S4b). Counts only — never a suffix, never an
+	// inbound (/listen + /wallet/). Counts only — never a suffix, never an
 	// address, never a peer. /health is a `curl` on the box, but it should stay
 	// cheap to expose, and a payment graph is not a health metric.
 	listen_connections: 0,
@@ -114,7 +114,7 @@ const stats = {
 	inbound_delivered: 0,
 	inbound_unknown: 0,
 	inbound_offline: 0,
-	// R7. A live socket in the session, but not one that has CLAIMED the address
+	// A live socket in the session, but not one that has CLAIMED the address
 	// the payment is for. Deliberately its own counter rather than folded into
 	// inbound_offline: during the acceptance session a non-zero value here means
 	// real clients are being paid inside the window between a reconnect and their
@@ -143,7 +143,7 @@ function makeBucket(ratePerSecond, burst) {
 	let last = Date.now();
 	return function take() {
 		const now = Date.now();
-		// ⚠ R6. `Date.now()` is not monotonic and this box runs a time daemon.
+		// ⚠ `Date.now()` is not monotonic and this box runs a time daemon.
 		// Math.min clamped the top and nothing clamped the bottom, so a BACKWARD
 		// step made the elapsed term negative and drove the balance arbitrarily far
 		// below zero — an hour's correction at 10/s left −36,000 tokens, i.e. the
@@ -209,7 +209,7 @@ function main() {
 
 		// ── Inbound rail: /wallet/<suffix>/v2/foreign ────────────────────────
 		//
-		// ⚠ R6. Both refusals below answer through walletRoute.refuse, not
+		// ⚠ Both refusals below answer through walletRoute.refuse, not
 		// torRoute.sendError, because this route is reached CROSS-ORIGIN by another
 		// wallet's tab. sendError emits no CORS headers, so a sender's JS could not
 		// read either status — "the payee's listen rail is off" and "you are being
@@ -334,7 +334,7 @@ function main() {
 			socket.destroy();
 			return;
 		}
-		// ⚠ R6. Wrapped for the same reason the /tor/ and /wallet/ entry points are.
+		// ⚠ Wrapped for the same reason the /tor/ and /wallet/ entry points are.
 		// A throw here is not caught by anything — an 'upgrade' listener is called
 		// from the parser, so the exception goes straight to uncaughtException and
 		// takes the process, i.e. every OTHER wallet's live socket, with it. The
@@ -381,7 +381,7 @@ function main() {
 	process.on('SIGTERM', () => shutdown('SIGTERM'));
 	process.on('SIGINT', () => shutdown('SIGINT'));
 
-	// ⚠ R6. The last resort, and it deliberately does NOT exit. Node's default is
+	// ⚠ The last resort, and it deliberately does NOT exit. Node's default is
 	// to print the stack and die; here that means dropping every live /listen
 	// socket and failing every parked inbound payment because one request found
 	// one bug. The three entry points above each catch their own throws, so
@@ -423,10 +423,10 @@ function listen(port, handler, onUpgrade, log, cfg, label) {
 	return server;
 }
 
-// ⚠ R6. The store is a PARAMETER. It used to be reached through a module-level
-// `healthExtra` that main() assigned at its very last line — after both listeners
-// were already accepting — so a /health arriving in that window answered
-// `listen: {}` and read as "the listen rail has no state" rather than "ask again
+// ⚠ The store is a PARAMETER, not reached through a module-level
+// `healthExtra` that main() would assign at its very last line — after both listeners
+// were already accepting — so a /health arriving in that window would answer
+// `listen: {}`, which reads as "the listen rail has no state" rather than "ask again
 // in a millisecond". A mutable global written from inside main() is a race with
 // no upside when the value is simply an argument.
 function health(res, cfg, front, store) {

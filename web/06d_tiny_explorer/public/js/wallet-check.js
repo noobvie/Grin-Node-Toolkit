@@ -327,12 +327,11 @@
     // and a subtree that is display:none is not in the accessibility tree — so a
     // childList change made while it is still hidden happens to a node the AT
     // cannot see, and several screen readers never announce the aria-live region
-    // when it later appears. Appending first and unhiding last (what this did
-    // until R8) is the one order that loses the announcement. It matters most
+    // when it later appears. Appending first and unhiding last is the one order that loses the announcement. It matters most
     // here: this is the Tor liveness probe, the only slow ASYNCHRONOUS result on
     // any of these pages, i.e. the one result a non-sighted visitor most needs
     // spoken. #wc-out, #nc-out, #pf-out and /slate's #out all already unhide
-    // first; this was the odd one out.
+    // first.
     box.hidden = false;
     box.textContent = '';
     const online = (data && 'online' in data) ? data.online : null;
@@ -440,21 +439,20 @@
     out.appendChild(note);
 
     // Only when the server has the probe switched on. Otherwise the tile stays
-    // exactly as it shipped in Part 3: complete, offline, and honest about it.
+    // exactly as the static page ships: complete, offline, and honest about it.
     if (probeEnabled()) out.appendChild(probeSection(res.address));
   }
 
   // ── Page copy follows the capability, not the other way round ───────────────
   //
   // The static HTML describes the tier-1-only page, and it still does even
-  // though a freshly installed box now has the probe ON. The reason changed: it
-  // is no longer "that is what ships", it is that THE BUTTON IS BUILT BY THIS
-  // SCRIPT. A visitor whose browser never runs this file has no control on the
+  // though a freshly installed box now has the probe ON. The reason is
+  // that THE BUTTON IS BUILT BY THIS SCRIPT. A visitor whose browser never runs this file has no control on the
   // page whatever config.json says, so static copy promising a liveness check
   // would over-promise in exactly the state that cannot deliver it.
   //
-  // What the static copy must no longer do is the mirror of that. It used to
-  // say "this server does not offer the optional Tor liveness check" — a claim
+  // What the static copy must not do is the mirror of that: say
+  // "this server does not offer the optional Tor liveness check" — a claim
   // about the SERVER, which is false on most deployments now. It is written
   // config-neutral instead: it says what this page has done, never what the box
   // is capable of, so it is true in all four combinations of flag and script.

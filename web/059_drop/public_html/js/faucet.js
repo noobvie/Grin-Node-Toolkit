@@ -155,7 +155,7 @@ async function apiGet(path) {
 // machine-readable `reason` (node_unreachable / wallet_down / insufficient_funds /
 // busy / unavailable) plus an already-friendly `error` string; a client-side
 // timeout has neither.  Only a genuine 'busy' reason (or a timeout) points at a
-// wallet scan — every other case names the real cause instead of the old blanket
+// wallet scan — every other case names the real cause, not a blanket
 // "full scan / LMDB write lock" text.  `item` labels what's unavailable (e.g.
 // "Slatepack", "Invoice") in the busy/timeout hint.
 function walletErrorMessage(err, item) {
@@ -201,7 +201,7 @@ function showMaintenanceOverlay(dropName, message) {
 }
 
 // ── Shared status refresh (stats bar + donate badge) ──────────────────────────
-// Single poll — replaces separate loadStats + checkDonateWalletStatus timers.
+// Single poll feeding both the stats bar and the donate badge.
 async function refreshStatus() {
   const addrInput = $("claim-address");
   const addrParam = addrInput && addrInput.value.trim()

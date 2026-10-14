@@ -270,7 +270,7 @@ console.log('\n[g] the routes publish the RESOLVED key and build links through t
     /\bnetwork\b/.test(meta('GET /api/pool/stats')) && /\bexplorer\b/.test(meta('GET /api/pool/stats')) && /grinscan_testnet/.test(meta('GET /api/pool/stats')));
 }
 
-// ── Part 2: the two BROWSER copies (public branding.js, admin-shell.js) ─────────────────────────
+// ── the two BROWSER copies (public branding.js, admin-shell.js) ─────────────────────────
 // No jsdom in this project (see test-branding-sinks.js), so the browser files run in a vm context.
 // branding.js runs WHOLE, driven through its real fetch → apply() path. admin-shell.js builds the
 // admin chrome at top level, so its explorer block and decoratePoolIdentity() are cut out by text
@@ -576,7 +576,7 @@ const expectedKey = (c) => ex.resolveExplorerKey(c.net === null ? 'mainnet' : c.
     }
   }
 
-  // Part 3 review finding: a page can render its links BEFORE its primer lands — branding's
+  // A page can render its links BEFORE its primer lands — branding's
   // fetch races reactor-dashboard's loadStatus, fortune-board's winners and the account ledger;
   // decoratePoolIdentity races every admin page's own fetch. sessionStorage is per TAB, so every
   // new tab is a first visit. A testnet pool then rendered test heights on grincoin.org (MAINNET)

@@ -1,6 +1,6 @@
 'use strict';
 
-// Stratum pause — restore / Migrate IN boot paused (design §21.13 Q1, plan Part 1b).
+// Stratum pause — restore / Migrate IN boot paused (design §21.13 Q1, script07_design.md).
 //
 // The writer is bash: pbk_pause_stratum in scripts/lib/07_lib_pool_backup.sh runs a `node -e`
 // against the restored pool.db while the service is stopped. This test extracts that exact JS

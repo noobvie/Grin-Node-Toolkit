@@ -136,9 +136,9 @@ function parseTarget(raw) {
     // default depends on what kind of host this is — and that split is the
     // whole point, because one default is wrong far more often than the other.
     //
-    // ⚠ A BARE NAME DEFAULTS TO 443, NOT 3413. Until 2026-09-10 it was 3413,
-    // the protocol default, and that produced this tool's commonest wrong
-    // answer: a CORRECT verdict about a port the operator never published.
+    // ⚠ A BARE NAME DEFAULTS TO 443, NOT 3413. Defaulting to 3413,
+    // the protocol default, produced this tool's commonest wrong
+    // answer (do not move it back): a CORRECT verdict about a port the operator never published.
     // The toolkit's own Script 04 fronts a node with nginx + certbot and
     // publishes it at `https://api.grin.money/v2/foreign` — 443, with 3413
     // bound to localhost and firewalled off. Somebody who owns a NAME has DNS

@@ -30,7 +30,7 @@
 //     AFTER the password (the reverse of the miner order, §19.5 step 3): before it, "banned"
 //     would tell anyone the name exists.
 //   - The per-name limit counts FAILURES only and lets an IP whose /24 (/48) had a session for
-//     that guest in the last 30 days through (Part 4 #3): a stranger cannot arm it into a
+//     that guest in the last 30 days through: a stranger cannot arm it into a
 //     permanent lockout of the owner.
 //   - Every scrypt — sign-up, login, password change, delete — goes through ONE global cap
 //     (≤ 4 in flight, ≤ 64 waiting, then 429 busy): 16 MB each keeps the worst case at 64 MB
@@ -95,7 +95,7 @@ const PASSWORD_HINTS = Object.freeze({
   unchanged: 'The new password is the same as the current one.',
 });
 
-// The per-name and per-IP shapes copy auth.js (Part 4 #3); keyed on the matching form of the
+// The per-name and per-IP shapes copy auth.js; keyed on the matching form of the
 // name typed, so `Alice` and `ALICE` share one budget.
 const LIMITS = Object.freeze({
   challengeBucket: { capacity: 20, refillPerSec: 20 / 3600 },            // per IP
@@ -397,9 +397,9 @@ function createGuests({
     // The per-name budget is RESERVED here, before the scrypt await, and given back below unless
     // the attempt ends as a wrong password — so it still counts failures only. A peek here and a
     // take after the await (the miner login's shape, which has the pool's throttle behind it)
-    // let every request of a parallel burst pass on the same token: R2 measured 60 of 60
+    // let every request of a parallel burst pass on the same token: measured 60 of 60
     // concurrent guesses evaluated against a budget of 20, again each time one token refilled.
-    // Guest login has no pool behind it, so this budget is the brute-force stop (R2-1).
+    // Guest login has no pool behind it, so this budget is the brute-force stop.
     const budget = loginNameFail.take(norm);
     const reserved = budget.ok;
     if (!reserved) {
@@ -443,7 +443,7 @@ function createGuests({
   // ── The account ─────────────────────────────────────────────────────────────────────
   // The current password, checked under the per-guest lockout: a stolen session cookie must not
   // become an unlimited guesser for the password behind it.
-  // One check per account at a time (R2-1): the lockout records a failure only after the scrypt
+  // One check per account at a time: the lockout records a failure only after the scrypt
   // await, so N parallel requests would all pass check() first and N guesses would land per
   // lockout window. Only a holder of the account's session can reach this, so single-flight
   // cannot be used by a stranger to block the owner.

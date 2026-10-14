@@ -1,24 +1,23 @@
 #!/usr/bin/env node
-// Strict page CSPs (code-layout refactor: F6 added Report-Only twins, F7 flipped, plan tool T6).
+// Strict page CSPs (impl §12 Code layout, script07_implementation.md).
 //
 // Three PAGE policies exist — Express (index.js), the nginx public page snippet, the nginx admin
-// snippet. Since F7 (2026-10-12) each ENFORCES a script-src with no 'unsafe-inline' and no
-// 'unsafe-eval': pages carry no inline <script> and no on*= handler. Until then each shipped a
-// Content-Security-Policy-Report-Only twin (the same policy minus 'unsafe-inline' in script-src)
-// so a browse of every page could show what the strict policy WOULD block; the flip went in only
-// after that browse logged nothing. The twins are gone, and [1]–[4] now fail if one comes back.
+// snippet. Each ENFORCES a script-src with no 'unsafe-inline' and no
+// 'unsafe-eval': pages carry no inline <script> and no on*= handler. A
+// Content-Security-Policy-Report-Only twin (the same policy minus 'unsafe-inline') is gone, and
+// [1]–[4] fail if one comes back.
 //
 // Also pinned: no report-uri / report-to (no reporting endpoint exists), style-src still allows
 // inline style (out of the flip's scope), and the /uploads/ + /custom/ + donor-banner sandbox
 // CSPs are untouched.
 //
-// [5] (R3): the two app-rendered pages (/blog/<slug>, /page.html) must hide the app's own CSP at
+// [5] the two app-rendered pages (/blog/<slug>, /page.html) must hide the app's own CSP at
 // nginx, or the browser enforces both policies there (the app's has no analytics or font host).
 // The Report-Only hide stays too: harmless now, and it covers an old app behind a new vhost.
 //
-// [6] (R3 L9 C10): the three ENFORCING page policies are pinned as literal strings, so any edit
+// [6]: the three ENFORCING page policies are pinned as literal strings, so any edit
 // to one — a host added, a directive dropped, 'unsafe-inline' put back — is a reviewed test diff.
-// [7] (R3 L9 C4): nginx add_header inheritance, mechanically. Every block of the pool vhost
+// [7]: nginx add_header inheritance, mechanically. Every block of the pool vhost
 // (shell fragments expanded the way bash expands them) that declares an add_header of its own
 // must re-include a header snippet, and every :443 server must include one at server level.
 //
@@ -64,7 +63,7 @@ console.log('\n[1] Express (index.js) security-header middleware');
   const ro = [...indexSrc.matchAll(/res\.setHeader\('Content-Security-Policy-Report-Only', "([^"]+)"\)/g)].map((m) => m[1]);
   checkStrict('Express', enf, ro);
   // Set in the SAME middleware as X-Frame-Options, unconditionally — a CSP under an `if` could
-  // miss a set of responses (R3 L9 C8: a substring check cannot see a condition on the same
+  // miss a set of responses (a substring check cannot see a condition on the same
   // line or an `if (…) {` wrapping only one of them).
   const lines = indexSrc.split('\n');
   const li = lines.findIndex((l) => l.includes("res.setHeader('Content-Security-Policy',"));
@@ -102,7 +101,7 @@ console.log('\n[3] nginx admin snippet ($hdr_admin)');
 
 console.log('\n[4] scope — no Report-Only anywhere, sandbox CSPs untouched');
 {
-  // The F6 twins lived in the two snippets; F7 deleted both. A Report-Only header set anywhere in
+  // No snippet carries a Report-Only twin. A Report-Only header set anywhere in
   // the vhost now is a policy nobody reads (no endpoint, and the console is not watched).
   const roLines = vhostSrc.split('\n').filter((l) => /add_header Content-Security-Policy-Report-Only/.test(l));
   ok('vhost: zero Report-Only add_header lines', roLines.length === 0, `found ${roLines.length}`);
@@ -114,12 +113,12 @@ console.log('\n[4] scope — no Report-Only anywhere, sandbox CSPs untouched');
     ok(`${loc}: no Report-Only twin and no page/admin snippet`, block.length > 0 &&
       !/Report-Only/.test(block) && !/include \$hdr_(page|admin);/.test(block));
   }
-  // The Express /uploads sandbox moved into routes/index.js with the backend refactor (P1).
+  // The Express /uploads sandbox lives in routes/index.js.
   const routesIdx = fs.readFileSync(path.resolve(__dirname, '../routes/index.js'), 'utf8');
   ok('Express /uploads sandbox CSP unchanged (routes/index.js)', routesIdx.includes(
     `res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");`));
   ok('Express /uploads: no Report-Only twin', !/Report-Only/.test(routesIdx));
-  // The THIRD sandbox policy (R3 L2): the donor-banner review image, served on the ADMIN origin.
+  // The THIRD sandbox policy: the donor-banner review image, served on the ADMIN origin.
   const donorsSrc = fs.readFileSync(path.resolve(__dirname, '../routes/admin/donors.js'), 'utf8');
   ok('Express donor banner image: sandbox CSP unchanged (routes/admin/donors.js)', donorsSrc.includes(
     `res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");`));
@@ -142,7 +141,7 @@ console.log('\n[5] Express-rendered pages carry the nginx page policy ONLY (R3)'
   // strip upstream headers, and a browser enforces every CSP it receives — so on exactly these two
   // pages the app's narrower policy (no analytics or Google-font host) was intersected with the
   // page one. Each location hides the app's CSP (and the Report-Only header an app from before
-  // F7 still sends) and declares no add_header of its own, so it inherits the server-level page
+  // the enforcing policy still sends) and declares no add_header of its own, so it inherits the server-level page
   // snippet: the same headers the shell gets when served from disk.
   const seo = fs.readFileSync(path.resolve(__dirname, '../routes/seo.js'), 'utf8');
   const shells = [...new Set([...seo.matchAll(/sendShell\(res, '([a-z-]+\.html)'/g)].map((m) => m[1]))].sort();
@@ -173,8 +172,8 @@ console.log('\n[6] the three ENFORCING page policies, pinned (R3 L9 C10)');
 {
   // Literal copies, on purpose: [1]–[3] check properties (no inline script, inline style kept),
   // so a host added to or a directive dropped from an enforcing line passes them. Changing one of
-  // these strings is the review step. F7 (2026-10-12) took 'unsafe-inline' out of all three
-  // script-src lists here, in the same commit that flipped the policies.
+  // these strings is the review step. None of the three
+  // script-src lists here may carry 'unsafe-inline'.
   const PINNED = {
     Express: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'",
     'nginx page': "default-src 'self'; script-src 'self' https://www.googletagmanager.com https://plausible.io https://cloud.umami.is; connect-src 'self'${probe_csp} https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com https://plausible.io https://cloud.umami.is; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.google-analytics.com https://*.googletagmanager.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';",
@@ -195,7 +194,7 @@ console.log('\n[7] nginx header inheritance — every block with its own add_hea
 {
   // nginx: add_header is inherited "if and only if there are no add_header directives defined on
   // the current level" — so ANY add_header in a block silently drops the server-level snippet
-  // (CSP, X-Frame-Options, HSTS, nosniff) for that block unless it includes one again (audit §I1).
+  // (CSP, X-Frame-Options, HSTS, nosniff) for that block unless it includes one again (audit §I1 (script07_security_audit_archive.md)).
   // test-admin-panel / test-latency-probe / [5] pin the blocks that exist; this walks EVERY block,
   // so a new location with `add_header Cache-Control …` and no include fails here by name.
   //

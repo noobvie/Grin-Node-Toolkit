@@ -638,11 +638,10 @@ async function pollPrice() {
   } catch {}
 
   // CoinGecko: GRIN in BTC — preferred for BTC price + BTC-denominated volume.
-  // This used to be nonlogs.io, which ran the last native GRIN/BTC order book
-  // until it went offline in July 2026 (api.nonlogs.io is now NXDOMAIN). No
-  // GRIN/BTC market remains, so CoinGecko's aggregate is the best available:
+  // No native GRIN/BTC order book exists any more, so CoinGecko's aggregate is
+  // the best available:
   // it converts the GRIN tickers it tracks (in practice ~all Gate.io GRIN/USDT)
-  // into BTC. `btc_24h_vol` is already BTC-denominated, like the old quote_volume.
+  // into BTC. `btc_24h_vol` is already BTC-denominated.
   // If this call fails, the Gate.io block above has already set price_btc by
   // division — we just lose the BTC volume figure.
   try {

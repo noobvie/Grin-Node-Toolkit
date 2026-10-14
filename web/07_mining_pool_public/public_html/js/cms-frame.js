@@ -1,12 +1,12 @@
-/* cms-frame.js — CMS page and post bodies in a sandboxed frame (audit D22-4; design §19.15
- * Part C7). Loaded by page.html and post.html, before their own js/pages/page.js / post.js.
+/* cms-frame.js — CMS page and post bodies in a sandboxed frame (audit D22-4; script07_implementation_games.md §19.15).
+ * Loaded by page.html and post.html, before their own js/pages/page.js / post.js.
  *
  * WHY. A page body (lib/pages.js `html`) and a post body (lib/posts.js `body_html`) are raw
- * operator HTML. They used to be set with innerHTML on the pool origin, where the page CSP
- * allows 'unsafe-inline' script — so an `<img onerror=…>` in a body ran as the pool, on the
- * pages that (since C7) carry the chat bubble's sign-in form. D22 deleted the other operator-
+ * operator HTML. Setting them with innerHTML on the pool origin, where the page CSP
+ * allows 'unsafe-inline' script, would let an `<img onerror=…>` in a body run as the pool, on the
+ * pages that carry the chat bubble's sign-in form. D22 deleted the other operator-
  * code sinks rather than filter them; these two are the blog and the pages, so they cannot be
- * deleted. The operator chose (2026-10-04, before C7) to SANDBOX them instead of sanitising:
+ * deleted. The operator chose to SANDBOX them instead of sanitising:
  *
  *   <iframe sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox
  *                    allow-top-navigation-by-user-activation" srcdoc="…the body…">
@@ -23,7 +23,7 @@
  *     #anchor scrolls this page to the anchor inside the frame.
  *   - the frame inherits the page's CSP (srcdoc), so a body loads exactly what it could before.
  *
- * Operator CSS inside a body now stays inside the frame — it can no longer restyle or overlay
+ * Operator CSS inside a body stays inside the frame — it can no longer restyle or overlay
  * the page around it (the header, the chat bubble's sign-in).
  *
  *   CmsFrame.mount(host, html, { wrapClass, title })  → the <iframe>, appended to `host`

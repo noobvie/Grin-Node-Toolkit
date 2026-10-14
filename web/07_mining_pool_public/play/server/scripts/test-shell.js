@@ -1,6 +1,6 @@
 'use strict';
 
-// Part 6 (design §19.7, D4, D13): the /play/ shell and the chess frame — the rules a
+// Shell (design §19.7, D4, D13): the /play/ shell and the chess frame — the rules a
 // browser probe checked once, kept here so a later edit cannot quietly undo them.
 //
 //   [1] static: no inline script / on* handler (the shell's CSP has no 'unsafe-inline'),
@@ -8,7 +8,7 @@
 //   [2] FrameHost in a vm with a fake DOM: the inbound message filter and what it posts
 //   [3] PlayApi in a vm with a fake fetch: which answers count as "offline"
 //   [4] the nginx snippet still carries the frame's sandbox + connect-src 'none'
-//   [6] (C7) the floating chat bubble: static rules (shared core, fixed URLs, storage in
+//   [6] the floating chat bubble: static rules (shared core, fixed URLs, storage in
 //       try/catch, no mod paths, wiped passwords, Esc/aria) + the polling budget MEASURED in a
 //       vm with a fake clock: closed + signed out = 0 requests, closed + signed in = 60 s,
 //       hidden = paused, open = the panel's cadence; the unread dot; a body stays text
@@ -81,7 +81,7 @@ async function main() {
   ok('frame: inbound messages accepted only from window.parent', /e\.source !== window\.parent/.test(game));
   ok('frame: posts only ready + move', JSON.stringify([...stripComments(game).matchAll(/postMessage\(\{ type: '([a-z]+)'/g)].map((m) => m[1]).sort()) === '["move","ready"]');
 
-  // Part 7: the Leaderboards & events panel.
+  // The Leaderboards & events panel.
   const boards = stripComments(read(path.join(SHELL, 'js', 'play-boards.js')));
   const shellJs = stripComments(read(path.join(SHELL, 'js', 'play-shell.js')));
   const shellBody = stripHtmlComments(shellHtml);
@@ -101,9 +101,9 @@ async function main() {
   ok('boards: badges on the account strip are written with textContent from server labels',
     /text\(EL\['acct-badges'\], badges\.length \? 'Badges: '/.test(shellJs));
 
-  // Part 9: the Chat panel (§19.10, D21).
+  // The Chat panel (§19.10, D21).
   const chatJs = stripComments(read(path.join(SHELL, 'js', 'play-chat.js')));
-  // C7: the list, the change feed, the rows and the refusal sentences moved into the shared
+  // The list, the change feed, the rows and the refusal sentences live in the shared
   // chat core (the bubble draws the same rows) — the panel checks below read both files.
   const coreJs = stripComments(read(path.join(SHELL, 'js', 'play-chat-core.js')));
   const chatAll = chatJs + ' ' + coreJs;
@@ -125,7 +125,7 @@ async function main() {
     chatPaths.length > 0 && !/Api\.(get|post)\(/.test(coreJs) && chatPaths.every((a) => /^(feed\.path\(|'chat'|'rules'|'mod\/queue'|'chat\/' \+ m\.id \+ '\/report'|'mod\/messages\/' \+ id \+ '\/' \+ action)$/.test(a)), chatPaths.join(' | '));
   ok('chat: no native dialog (confirm / alert / prompt) — two-click confirms only', !/\b(confirm|alert|prompt)\s*\(/.test(chatJs));
 
-  // Part 12 → C3: the Nickname fold (play-names.js, design §19.17.5).
+  // The Nickname fold (play-names.js, design §19.17.5).
   const namesJs = stripComments(read(path.join(SHELL, 'js', 'play-names.js')));
   ok('names: the fold sits in the account strip, hidden until /me fills it',
     /<details class="play-fold play-nick" id="nick-fold" hidden>/.test(shellBody)
@@ -147,7 +147,7 @@ async function main() {
   ok('names: the input carries no name= and is capped at the rule\'s 20', /<input class="input" type="text" id="nick-input" maxlength="20"/.test(shellBody)
     && !/<input[^>]*id="nick-input"[^>]*\bname=/.test(shellBody));
 
-  // Part 10: "Play a person" (play-lobby.js) + the PvP board in play-shell.js.
+  // "Play a person" (play-lobby.js) + the PvP board in play-shell.js.
   const lobbyJs = stripComments(read(path.join(SHELL, 'js', 'play-lobby.js')));
   ok('lobby: the G-08 panel sits in the signed-in game area, with the post form and both lists',
     /<section class="panel" id="lobby-panel">/.test(shellBody) && /id="pvp-form"/.test(shellBody)
@@ -180,7 +180,7 @@ async function main() {
   ok('boards: the picker offers the rating + PvP boards for a game with a pvp mode',
     /'rating\|' \+ g\.id \+ '\|pvp'/.test(boards) && /'wins\|' \+ g\.id \+ '\|pvp'/.test(boards) && /'points\|' \+ g\.id \+ '\|pvp'/.test(boards));
 
-  // C6: guest accounts on /play/ (design §19.17.3/§19.17.4).
+  // Guest accounts on /play/ (design §19.17.3/§19.17.4).
   const guestJs = stripComments(read(path.join(SHELL, 'js', 'play-guest.js')));
   const loginSection = (shellBody.match(/<section class="panel" id="play-login"[\s\S]*?<\/section>/) || [''])[0];
   ok('guest: the sign-in card has two tabs (Miner, Guest) and two panels, Miner selected first',
@@ -238,7 +238,7 @@ async function main() {
     && /id="chat-guest-note" hidden>/.test(shellBody));
   ok('chat: a wait that runs out asks the shell for a fresh /me (one timer, capped)',
     /dispatchEvent\(new CustomEvent\('play:refresh-me'\)\)/.test(chatJs6) && /addEventListener\('play:refresh-me'/.test(shellJs) && /ms > 6 \* 3600 \* 1000/.test(chatJs6));
-  // The visible word is "tickets" (operator, C0) everywhere on /play/ — the internal name stays.
+  // The visible word is "tickets" (the operator's choice) everywhere on /play/ — the internal name stays.
   const visible = shellBody.replace(/<script\b[\s\S]*?<\/script>/g, '').replace(/<[^>]+>/g, ' ');
   const literals = [SHELL].flatMap(() => fs.readdirSync(path.join(SHELL, 'js')).map((n) => stripComments(read(path.join(SHELL, 'js', n)))))
     .flatMap((src) => [...src.matchAll(/'((?:[^'\\\n]|\\.)*)'/g)].map((m) => m[1]).filter((x) => / /.test(x)));
@@ -391,7 +391,7 @@ async function main() {
     r = await outcome(Api.get('../../api/admin/x'));
     ok('a path with dots never reaches fetch', !r.ok && calls.length === 0);
 
-    // C6: one GET rules per page, shared by the chat panel, the lobby and the guest forms.
+    // One GET rules per page, shared by the chat panel, the lobby and the guest forms.
     calls.length = 0;
     next = mkRes(502, 'text/html', '<html>502</html>');
     r = await outcome(Api.rules());

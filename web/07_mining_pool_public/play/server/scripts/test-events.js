@@ -1,6 +1,6 @@
 'use strict';
 
-// Part 7 (design §19.9, §19.11, D15, D17, D19): leaderboards, events, the admin API.
+// Events (design §19.9, §19.11, D15, D17, D19): leaderboards, events, the admin API.
 //
 //   [a] units: UTC periods, ranking, kind rule validation
 //   [b] leaderboards over HTTP: boards, periods, tie-breaks, masking, own rank, cache, params
@@ -75,7 +75,7 @@ function request(port, { method = 'GET', path: p, headers = {}, body } = {}) {
 async function main() {
   // ── [a] units ───────────────────────────────────────────────────────────────────────
   console.log('\n[a] units: periods, ranking, kind rules\n');
-  const wed = Date.UTC(2026, 9, 7, 12, 0, 0) / 1000;     // Wednesday 2026-10-07
+  const wed = Date.UTC(2026, 9, 7, 12, 0, 0) / 1000;     // a Wednesday
   const pr = (p, t) => JSON.stringify(periodRange(p, t));
   ok('a. day = the current UTC day', pr('day', wed) === '{"from":"2026-10-07","to":"2026-10-07"}');
   ok('a. week = ISO Monday–Sunday', pr('week', wed) === '{"from":"2026-10-05","to":"2026-10-11"}');
@@ -116,7 +116,7 @@ async function main() {
   ok('a. mining_minutes takes no rules at all', rulesErr('mining_minutes', { x: 1 }) === 'x' && rulesErr('mining_minutes', []) === 'rules');
 
   // ── setup ───────────────────────────────────────────────────────────────────────────
-  let T = Date.UTC(2026, 9, 7, 12, 0, 0);          // ms — Wednesday 2026-10-07 12:00 UTC
+  let T = Date.UTC(2026, 9, 7, 12, 0, 0);          // ms — a Wednesday, 12:00 UTC
   const nowS = () => Math.floor(T / 1000);
   const D0 = Date.UTC(2026, 9, 7) / 1000;
   const SECRET = 'k'.repeat(20) + 'Q7'.repeat(22);  // 64 chars

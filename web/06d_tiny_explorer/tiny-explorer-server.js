@@ -127,7 +127,7 @@ function isNotFound(e) { return !!e && /^"?NotFound"?$/.test(e.message || ''); }
 
 // ── Node circuit breaker + in-flight sharing ─────────────────────────────────
 // An archive node can stop answering its API for HOURS while it runs chain
-// compaction (it holds the chain's write lock; seen 2026-09-24/25 on a 4 GB box,
+// compaction (it holds the chain's write lock; seen on a 4 GB box,
 // 8-10 h per episode — see scripts/patches/grin/README.md). Before this, every
 // page view opened fresh node connections that each waited the full 10 s
 // timeout: ~90 dead sockets piled up in CLOSE-WAIT on :3413 and every visitor
@@ -624,9 +624,8 @@ async function getPrice() {
     if (Array.isArray(btc) && btc[0]) btcUsd = parseFloat(btc[0].last) || 0;
     if (price_usd && btcUsd) { price_btc = price_usd / btcUsd; sources.push('gate.io'); }
   } catch {}
-  // CoinGecko refines the BTC price. Was nonlogs.io until its GRIN/BTC book went
-  // offline in July 2026 (api.nonlogs.io is now NXDOMAIN); with no native GRIN/BTC
-  // market left, CoinGecko's aggregate is the best available. On failure the
+  // CoinGecko refines the BTC price. No native GRIN/BTC order book exists any
+  // more, so CoinGecko's aggregate is the best available. On failure the
   // Gate.io block above has already set price_btc by division, so this is additive.
   try {
     const cgRaw = await httpsGetJson('api.coingecko.com',
@@ -992,7 +991,7 @@ app.post('/api/proof/verify', proofBody, async (req, res) => {
 //      that stays true only as long as nobody swaps in a fetch/agent that does.)
 //   3. ONE ATTEMPT PER QUESTION, SHORT TIMEOUT, CAPPED BODY. No retry loop — a
 //      retry turns one visitor request into two outbound ones, which is how a
-//      checker becomes an amplifier. Count them honestly. There are now TWO
+//      checker becomes an amplifier. Count them honestly. There are TWO
 //      legs, run in parallel against the same pinned address:
 //        · the API leg — get_tip, plus a best-effort get_version on success
 //          only. One outbound request when it fails, two when it succeeds.
@@ -1000,7 +999,7 @@ app.post('/api/proof/verify', proofBody, async (req, res) => {
 //          it resolves. It is skipped entirely when the API leg already dialled
 //          that same port, so the pair never double-dials one socket address.
 //      So: 2 outbound on a failing check, 3 on a fully successful one. That is
-//      up from 1 and 2, and it is the whole cost of the second leg — a connect
+//      the whole cost of the second leg (a single-leg check was 1 and 2) — a connect
 //      is a SYN, not a request. Any further call added here needs this sentence
 //      rewritten again rather than quietly appended to.
 //   4. NOTHING HERE LOGS THE HOST. Not the target, not the resolved address, not
@@ -1013,11 +1012,10 @@ app.post('/api/proof/verify', proofBody, async (req, res) => {
 // An exact-match location wins outright over the /api/ prefix, so this route gets
 // the probe bucket and only that one. Reached directly on :8471, bypassing nginx,
 // this route is still unrated. The service binds 127.0.0.1 (app.listen below), so
-// reaching :8471 means already being on the box — accepted, and reviewed as such
-// in R5. What holds the public path is the nginx zone alone, so do not add a
+// reaching :8471 means already being on the box — accepted after review. What holds the public path is the nginx zone alone, so do not add a
 // second listen address without re-reading that acceptance.
 //
-// It does now have an in-flight cap of its own (R5 finding 1, landed in R8), and
+// It also has an in-flight cap of its own, and
 // that is a DIFFERENT control from the nginx zone: the limiter counts requests
 // PER IP, this counts outbound sockets IN TOTAL. Node's default outbound agent is
 // keepAlive:true / maxSockets:Infinity, so without a total cap enough distinct
@@ -1032,7 +1030,7 @@ const NODE_CHECK_MAX_BYTES  = 64 * 1024;
 // where a Tor probe builds a circuit and is retried, so it holds its slot for
 // far longer. Operator-tunable; 0 or a non-number falls back to the default.
 //
-// ⚠ THE UNIT IS THE CHECK, AND A CHECK NOW HOLDS TWO SOCKETS — the API leg and
+// ⚠ THE UNIT IS THE CHECK, AND A CHECK HOLDS TWO SOCKETS — the API leg and
 // the P2P leg run at the same time. The cap counts checks, so 8 in flight is up
 // to 16 outbound sockets; that is the number to reason about against the
 // process's file-descriptor limit, not the 8. It is deliberately still counted
@@ -1225,10 +1223,10 @@ app.post('/api/node-check', nodeCheckBody, async (req, res) => {
     // request, which is rule 3 above. A retry is a new question from the
     // visitor, so the count per question is unchanged.
     //
-    // ⚠ THE DIRECTION FLIPPED ON 2026-09-10, with the default. It used to dial
-    // 3413 and suggest https; it now dials https and suggests 3413. If you are
-    // reading this next to a suggestion that points at 443, one of the two ends
-    // has been changed without the other.
+    // ⚠ THE DIRECTION IS TIED TO THE DEFAULT. A name dials https and suggests 3413;
+    // dialling 3413 and suggesting https is the retired direction — do not restore it.
+    // If you are reading this next to a suggestion that points at 443, one of the
+    // two ends is out of step with the other.
     //
     // ⚠ NAMES ONLY. A bare IP is `assumed` too, but it is assumed onto 3413,
     // which is already the right guess for an address with no name — and the
@@ -1304,9 +1302,8 @@ app.post('/api/node-check', nodeCheckBody, async (req, res) => {
 
     // ── The API leg ──────────────────────────────────────────────────────────
     // Returns the PATCH to merge into `base` rather than answering directly, so
-    // the two legs compose into one response. Every branch below was a
-    // `return res.json(Object.assign(base, …))` before and is now the same
-    // object without the wrapper — the response shapes are unchanged.
+    // the two legs compose into one response. Each branch builds the
+    // same object a `res.json(Object.assign(base, …))` would send, minus the wrapper.
     async function apiLeg() {
       let answer;
       try {
@@ -1429,7 +1426,7 @@ app.post('/api/node-check', nodeCheckBody, async (req, res) => {
 //      onion is the same key again; someone checking their own wallet is
 //      telling us where their money lives. It is theirs, not ours. Keep it so.
 //   4. RATE LIMIT IS IN NGINX. `location = /api/wallet-check` carries
-//      zone=tinyx_probe (10r/m, burst 5) — written in Part 7, in its own conf
+//      zone=tinyx_probe (10r/m, burst 5) — in its own conf
 //      file script06d-probe-rate-limit.conf, NOT the tinyx_api zone. The
 //      in-flight cap below is a different control for a different failure: the
 //      limiter counts requests per IP, this counts Tor circuits in total, and
@@ -1680,7 +1677,7 @@ function injectGlobals(html, pageKey) {
   // page asking not to be indexed is noise at best.
   //
   // Two rules this markup has to obey, both learned the expensive way on the
-  // pool (audit §J15-3). First, it may only assert what THIS deployment can
+  // pool (script07_security_audit.md §J15-3). First, it may only assert what THIS deployment can
   // actually back: no `sameAs` naming accounts the operator does not own, no
   // SearchAction pointing at an endpoint nobody serves, no aggregateRating
   // invented out of nothing. Second, `url` is emitted only when base_url is

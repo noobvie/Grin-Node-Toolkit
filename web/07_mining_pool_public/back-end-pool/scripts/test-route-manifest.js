@@ -6,7 +6,7 @@
 //
 //   1. Golden  — the set of {method, path, chain, handler} equals scripts/fixtures/route-manifest.json.
 //   2. Order   — every pair of entries that can match ONE request keeps the golden's relative order
-//                (Express takes the first match). With --exact (refactor parts P1–P2) the WHOLE
+//                (Express takes the first match). With --exact the WHOLE
 //                sequence must equal the golden.
 //   3. Guard   — every /api/admin/* route has requireAdmin() or requireFreshAuth(…) in its chain,
 //                except the ADMIN_GUARD_ALLOWLIST below (one reason per entry).
@@ -14,7 +14,7 @@
 //                or a TypeError "x is not a function" naming a bare identifier, thrown from route
 //                code — INCLUDING one the handler's own try/catch swallows into a 500 (an in-thread
 //                inspector pauses on caught exceptions). This is the request-time failure of a
-//                missing identifier (plan H2) — secondary to the eslint no-undef pass (T3).
+//                missing identifier — secondary to the eslint no-undef pass (T3).
 //
 // Plus: the keys registerRoutes reads from ctx == the keys index.js passes (a key index.js forgets
 // is `undefined` at request time, which neither T3 nor the golden can see); every name a route file
@@ -23,13 +23,13 @@
 //
 // Middleware names: a factory TAG for requireAdmin()/requireFreshAuth(<maxAge>) and multer.<fn>(…)
 // (require.cache is seeded with wrappers BEFORE routes/ is loaded — requireAdmin() returns an
-// anonymous arrow, so fn.name cannot identify it, plan H16); a stub-ctx function is named by its
+// anonymous arrow, so fn.name cannot identify it); a stub-ctx function is named by its
 // access path, literal args included (`rateLimiter.middleware('admin')`); else fn.name; else
 // `anon#<sha1 of the function's source>` — never '' (two different anonymous middlewares must not
 // compare equal), and stable when a route is MOVED verbatim between files, which a file:line name
 // would not be (failure messages print the file:line). A middleware ARRAY expands to its members.
 //
-// gamesLink (plan H15): the REAL lib's mountAdmin() registers its two routes (so their chain is the
+// gamesLink: the REAL lib's mountAdmin() registers its two routes (so their chain is the
 // true one), but attach() — which starts a 60 s setInterval probe — is a no-op here.
 //
 //   node scripts/test-route-manifest.js [--exact] [--write-golden] [--print]
@@ -58,8 +58,8 @@ function ok(name, cond, extra = '') {
 }
 
 // /api/admin/* routes that legitimately carry NEITHER requireAdmin() nor requireFreshAuth(…),
-// keyed 'METHOD path' with a one-line reason each. R1 audits every line; adding one is a reviewed
-// act like a golden edit. EMPTY as derived from the code at P1 (2026-10-10): everything reachable
+// keyed 'METHOD path' with a one-line reason each. Every line is audited; adding one is a reviewed
+// act like a golden edit. EMPTY as derived from the code: everything reachable
 // before an admin session exists lives under /api/auth/ (captcha, register, login, login/totp,
 // refresh, logout), and /api/admin/_authcheck, /reauth and /2fa/* each carry requireAdmin() or
 // requireFreshAuth(300) themselves.
@@ -268,7 +268,7 @@ console.log(`\nT2 route manifest — ${entries.length} entries recorded${EXACT ?
   const seq = literal.map((m) => `${m[1]} ${m[2] !== undefined ? m[2] : m[3].replace(/\s+/g, '')}`);
   const recSeq = recordedRoutes.filter((e) => e.file.startsWith('routes/'))
     .map((e) => `${e.method} ${Array.isArray(e.path) ? JSON.stringify(e.path).replace(/"/g, "'") : e.path}`);
-  // From P3 on the routes live in several files, so registration order is no longer the order
+  // The routes live in several files, so registration order is no longer the order
   // readAppSource() concatenates them in — compare as a multiset; ORDER is asserted against the golden (2.).
   const norm = (arr) => arr.map((x) => x.replace(/\s+/g, '')).sort();
   const ns = norm(seq), nr = norm(recSeq);
@@ -298,9 +298,9 @@ console.log(`\nT2 route manifest — ${entries.length} entries recorded${EXACT ?
 
 // ─── requires: every name a route file destructures from a module exists on it ─────────────────
 // T3 (no-undef) cannot see this: `const { x } = require('../lib/y')` DEFINES x, so a name y does
-// not export is `undefined` until a request calls it — a 500 on one button (plan H2), and the smoke
-// only notices if a stub request happens to reach the call (R1 2026-10-10: `hubRttMs` taken from the
-// wrong lib passed T3, the smoke and the golden). Every route file writes its own require list (H17),
+// not export is `undefined` until a request calls it — a 500 on one button, and the smoke
+// only notices if a stub request happens to reach the call (`hubRttMs` taken from the
+// wrong lib passed T3, the smoke and the golden). Every route file writes its own require list,
 // so this is checked for all of them. Also covers `const { … } = createX(ctx)` where createX is a
 // required factory (guards/csv: called again with the stub ctx, its result checked) and
 // `const { … } = caches` where caches is a required module binding.
@@ -321,7 +321,7 @@ console.log(`\nT2 route manifest — ${entries.length} entries recorded${EXACT ?
       else {
         const name = m[5];
         if (name === 'guards' && /module\.exports\s*=\s*function\s+\w+\(\s*ctx\s*,\s*guards\s*\)/.test(code)) {
-          // The hand-off parameter (P3+): routes/index.js passes ITS createGuards(ctx) result. Check the names
+          // The hand-off parameter: routes/index.js passes ITS createGuards(ctx) result. Check the names
           // against a fresh createGuards(stubCtx) — a typo'd `stepUpRefusd` is otherwise `undefined` until a request.
           from = 'the `guards` hand-off'; source = require(path.join(APP, 'routes/_shared/guards'))(stubCtx);
         } else {

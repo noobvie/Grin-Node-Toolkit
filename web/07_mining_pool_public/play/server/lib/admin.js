@@ -10,7 +10,7 @@
 //   1. no X-Forwarded-For / X-Real-IP, and a loopback peer — the proxy connects straight to
 //      127.0.0.1 and sends neither; nginx always adds them, so a request that reached us
 //      through any proxy location gets 404 before the secret is looked at (the pool's third
-//      guard, §19.15 Part 2 #3, mirrored);
+//      guard, mirrored here — script07_implementation_games.md, Pool link);
 //   2. the link secret (X-Games-Link), compared inside pool-link.js — 503 when this side has
 //      no secret file, 401 for a missing or wrong one (the same answer);
 //   3. X-Admin-User: printable ASCII, 1–64 chars — it is written to mod_actions;

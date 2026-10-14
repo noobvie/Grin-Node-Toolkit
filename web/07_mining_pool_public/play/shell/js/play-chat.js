@@ -1,4 +1,4 @@
-/* play-chat.js — the Chat panel on /play/ (design §19.10, D9, D21; Part 9).
+/* play-chat.js — the Chat panel on /play/ (design §19.10, D9, D21).
  *
  * Reading is public while the games are open and the pool's chat switch is on, so the panel
  * shows signed in or out (it follows play-shell.js's `play:view`, like the boards panel).
@@ -6,7 +6,7 @@
  * announces as `play:me` (null when signed out).
  *
  * The message list, the change feed, the row markup and the refusal sentences are the shared
- * chat core (play-chat-core.js, Part C7) — the floating bubble on the pool's other pages draws
+ * chat core (play-chat-core.js) — the floating bubble on the pool's other pages draws
  * the same rows from the same code. What stays here is what only /play/ has: the moderator
  * tools (D21), the rules fold, and this panel's polling budget.
  *
@@ -300,8 +300,8 @@
   EL['mod-fold'].addEventListener('toggle', function () { if (EL['mod-fold'].open) loadQueue(); });
   EL['mod-refresh'].addEventListener('click', loadQueue);
 
-  // ── The live rules (§19.15 Part 6 #10) ─────────────────────────────────────────────
-  // The visible word is "tickets" (operator, C0); the API keeps `plays`.
+  // ── The live rules (script07_implementation_games.md, the shell section) ─────────────────────────────────────────────
+  // The visible word is "tickets" (the operator's choice); the API keeps `plays`.
   function loadRules() {
     if (S.rules) return;
     Api.rules().then(function (r) {

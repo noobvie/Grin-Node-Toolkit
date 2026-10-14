@@ -184,7 +184,7 @@ CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INT
 `,
   },
   {
-    // Part 8 (design §19.10, D21): chat moderators appointed by the operator, and the
+    // Chat moderation (design §19.10, D21): chat moderators appointed by the operator, and the
     // operator-edited word list. New tables only — no ALTER, so the stored CREATE text of
     // every v1 table is unchanged and §19.4's block stays comparable as text.
     version: 2,
@@ -200,7 +200,7 @@ CREATE TABLE chat_words (
 `,
   },
   {
-    // Part 12 (design §19.16): approved nicknames. A request log, not a column on players —
+    // Approved nicknames (design §19.16): approved nicknames. A request log, not a column on players —
     // history and the operator's decisions come free, and the three partial unique indexes
     // make "one pending + one live per address" and "no two live nicknames alike" database
     // facts rather than checks a race could slip past.
@@ -225,7 +225,7 @@ CREATE INDEX idx_nick_norm ON nicknames(norm, state);
 `,
   },
   {
-    // Part C3 (design §19.17.5, D27): names are checked automatically and live at once. A
+    // Schema v4 (design §19.17.5, D27): names are checked automatically and live at once. A
     // banned-name table (the matching form is the key, so every spelling of a banned name is
     // refused), and four player columns: the nickname block, the last change (the cooldown),
     // and the refused-attempt counter (so the word list cannot be probed). ADD COLUMN rewrites
@@ -247,12 +247,12 @@ ALTER TABLE players ADD COLUMN nick_refused_day TEXT;
 ALTER TABLE players ADD COLUMN nick_refused_n INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX idx_players_nick_blocked ON players(nick_blocked) WHERE nick_blocked = 1;
 `,
-    // Part 12's rows under the v2 rule, deterministically (§19.17.5): a live name that fails it
+    // The v1 nickname rows under the v2 rule, deterministically (§19.17.5): a live name that fails it
     // → removed; a pending one → approved when it passes and no other live name reads the same,
     // else rejected. Only the parts of the rule this DB can know apply here — the seed, the
     // reserved words and the chat word list; the pool's name and its list arrive later over the
     // link. Nothing had deployed v3 when this was written, so no real player is affected; the
-    // step exists so a box that did install Part 12 lands in a defined state.
+    // step exists so a box that already holds v1 nicknames lands in a defined state.
     run(raw, now) {
       const rule = require('./name-rule');
       const ctx = { words: rule.compileList(raw.prepare('SELECT word FROM chat_words').all().map((r) => r.word)) };
@@ -276,7 +276,7 @@ CREATE INDEX idx_players_nick_blocked ON players(nick_blocked) WHERE nick_blocke
     },
   },
   {
-    // Part C5 (design §19.17.3/§19.17.4, D24/D25): guest accounts. A guest is a `players` row
+    // Schema v5 (design §19.17.3/§19.17.4, D24/D25): guest accounts. A guest is a `players` row
     // like any other (id 'g:' + 16 base32 in the address column, so every games table works
     // unchanged) plus a `guests` row holding the credentials. Deleting a guest deletes the
     // `guests` row (the login name is free at once) and KEEPS the players row, marked
@@ -404,7 +404,7 @@ function migrate(raw, transaction, now) {
     if (m.version <= from) continue;
     transaction(() => {
       raw.exec(m.sql);
-      // A data step (v4: re-checking Part 12's rows) runs in the SAME transaction, so the
+      // A data step (v4: re-checking the v1 nickname rows) runs in the SAME transaction, so the
       // schema change and the data it implies land together or not at all.
       if (typeof m.run === 'function') m.run(raw, now);
       raw.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', ?) " +

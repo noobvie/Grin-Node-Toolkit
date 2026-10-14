@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 'use strict';
 
-// Page wiring + script order (code-layout R3 L6).
+// Page wiring + script order.
 //
-// F2–F5 turned every inline on*= handler into TWO strings in two places — a data-action value in
+// Every inline on*= handler is TWO strings in two places — a data-action value in
 // the markup (or in markup a script builds) and a `case` in a delegated document listener — plus
 // an event-type choice and, for a non-bubbling event, a capture flag. Nothing executed that pairing:
-// R3 planted 21 wiring / script-order defects and the suite caught 3. This test is the static half
+// Planting 21 wiring / script-order defects was caught by only 3 before this test. This test is the static half
 // of that review, run on every page (the jsdom old-vs-new smoke in the plan tooling is the dynamic
 // half, and A2 is the live one):
 //
@@ -191,7 +191,7 @@ function checkPage(label, html, scripts) {
 }
 
 // [5] on one page's tag list. pageSpecific(file) decides which tags are the page's own; isTrailer
-// marks the public shell scripts that run AFTER the page's own code (they did before F2 too).
+// marks the public shell scripts that run AFTER the page's own code.
 function checkOrder(label, html, tags, pageSpecific, isRedirect, isTrailer = () => false) {
   const problems = [];
   for (const t of tags) {

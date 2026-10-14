@@ -1,6 +1,6 @@
 'use strict';
 
-// Part 5 (design §19.7, §19.8, D13, D14, D17, D20): chess rules (perft), the bot, the game
+// Matches (design §19.7, §19.8, D13, D14, D17, D20): chess rules (perft), the bot, the game
 // registry, and the match platform in bot mode over a real loopback server.
 //
 // The pool is a stub (in-process fakes); a planted "toy" game drives the settle paths the
@@ -355,7 +355,7 @@ async function main() {
   res = await create(null, { game_id: 'chess', mode: 'bot', bot_level: 1 });
   ok('d. create without a session → 401', res.status === 401);
   ok('d. unknown game → 404 unknown_game', (await create(ca, { game_id: 'nope', mode: 'bot', bot_level: 1 })).json.error === 'unknown_game');
-  // PvP (Part 10) is covered by test-pvp.js; here only that its fields do not mix with bot's.
+  // PvP is covered by test-pvp.js; here only that its fields do not mix with bot's.
   ok('d. pvp with a bot_level / bot with a target → 400, nothing created',
     (await create(ca, { game_id: 'chess', mode: 'pvp', bot_level: 1 })).json.field === 'bot_level'
     && (await create(ca, { game_id: 'chess', mode: 'bot', bot_level: 1, target: B })).json.field === 'target' && countMatches() === 0);

@@ -178,7 +178,7 @@ section h2 {
 }
 
 /* ============== TESTNET BANNER ============== */
-/* Moved to css/dashboard.css. The banner is injected by public-shell.js on PUBLIC
+/* Defined in css/dashboard.css, not here. The banner is injected by public-shell.js on PUBLIC
    pages only, and no public page loads this file — pool.css is the admin-panel
    stylesheet — so the rules here never applied to the element they styled. The
    admin panel actively strips .testnet-banner (admin-shell.js), so nothing on this

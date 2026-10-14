@@ -1,8 +1,8 @@
 'use strict';
 
-// Donor profiles (design §18.4–§18.6, §18 Part 2; names §19.17.6, Part C4) — lib/donor-profiles.js
+// Donor profiles (script07_design.md §18.4–§18.6; names v2: script07_design_games.md §19.17.6) — lib/donor-profiles.js
 // against an in-memory copy of the real schema. Covers: the name shape (length, charset,
-// whitespace collapse, case kept, homoglyph / bidi / NBSP / zero-width refused); names v2 (C4 —
+// whitespace collapse, case kept, homoglyph / bidi / NBSP / zero-width refused); names v2 (
 // live at once, unchanged, the 7-day limit, the generic refusals, taken in any spelling, nothing
 // stored on a refusal, a real conflict on the approved index, ban / unban, the startup migration
 // and the Live / Removed names list); the banner sniff + header-parsed
@@ -12,8 +12,7 @@
 // `conflict`; the approved-banner file writes (one file, 0644, a second approval deletes the
 // first, a failed write leaves the request pending); the donor's own view never carrying the
 // pending name, image bytes or the deciding admin; the public view excluding pending / rejected /
-// expired; the donor_banner_slots setting bounded on read and write; leagueRank(); and (§18
-// Part 3) the admin reads: the review queue, the image-bytes read and its
+// expired; the donor_banner_slots setting bounded on read and write; leagueRank(); and the admin reads: the review queue, the image-bytes read and its
 // refusals, the per-address admin view, the pending count, and a block emptying the queue.
 // Run: node scripts/test-donor-profiles.js   (no server; temp dirs under the OS temp dir, removed)
 
@@ -83,7 +82,7 @@ const rowsOf = (a, kind) => db.prepare('SELECT * FROM donor_requests WHERE grin_
 const byStatus = (a, kind, st) => rowsOf(a, kind).filter((r) => r.status === st);
 const auditOf = (a) => db.prepare("SELECT admin_id, action, details FROM admin_audit_log WHERE target_type = 'donor' AND target_id = ? ORDER BY id").all(a);
 const DONOR = { isDonor: true, now: NOW };
-// A PENDING name as only a pre-C4 pool could write it (since §19.17.6 a submit goes live or is
+// A PENDING name as only a pre-C4 pool could write it (since §19.17.6 (script07_design_games.md) a submit goes live or is
 // refused; nothing writes `pending` for a name). The generic admin transitions still have to
 // handle one — the startup migration and approve/reject/block see them on an upgraded box.
 const legacyPending = (a, name, at = NOW) => Number(db.prepare(
@@ -224,7 +223,7 @@ try {
   check('submit: isDonor truthy-but-not-true → not_a_donor', DP.submitName(db, A, 'Acme', { isDonor: 1, now: NOW }).code === 'not_a_donor');
   check('submit: an invalid name is refused before any write', DP.submitName(db, A, 'x', DONOR).code === 'name_length' && rowsOf(A, 'name').length === 0);
 
-  // ── names v2 (§19.17.6, Part C4): checked automatically, live at once ──────────────────
+  // ── names v2 (§19.17.6 (script07_design_games.md), Part C4): checked automatically, live at once ──────────────────
   {
     const N1 = ADDR('s'); mkAcct(N1);
     const N2 = ADDR('t'); mkAcct(N2);
@@ -625,7 +624,7 @@ try {
   check('routes: the submits validate the input BEFORE spending a proof attempt',
         rName.indexOf('validateName') > 0 && rName.indexOf('validateName') < rName.indexOf('requireBothProofs') &&
         rBan.indexOf('validateBanner') > 0 && rBan.indexOf('validateBanner') < rBan.indexOf('requireBothProofs'));
-  // C4 (§19.17.6): the checks that read no word list run before the proofs; the lists, banned
+  // C4 (§19.17.6 (script07_design_games.md)): the checks that read no word list run before the proofs; the lists, banned
   // and taken only after them, so a stranger holding the address cannot probe the operator's list.
   check('routes: C4 — namePrecheck BEFORE the proofs, submitName (with the rule context) AFTER',
         rName.indexOf('DonorProfiles.namePrecheck(') > 0 && rName.indexOf('DonorProfiles.namePrecheck(') < rName.indexOf('requireBothProofs') &&
@@ -644,14 +643,14 @@ try {
         acct.includes('donor_profile: donorProfile') && acct.includes('DonorProfiles.profileFor(') && !acct.includes('donor_requests'));
   check('the Goblin route still calls the gate with the default (destination) wording',
         src.includes("requireBothProofs(addr, req.body, reqIp, 'nostr_destination_register');"));
-  // §18 Part 6 review: a proof that VERIFIED as the other kind (an IP in the password box, or the
-  // reverse) used to be refused with the verifier's own success code, `match` — so the response
-  // and the owner-proof audit row read `ok:false, reason:'match'`. It is `wrong_kind` now.
+  // A proof that VERIFIED as the other kind (an IP in the password box, or the reverse) is
+  // refused as `wrong_kind`, never with the verifier's own success code `match` (which would
+  // read `ok:false, reason:'match'` in the response and the owner-proof audit row).
   const gate = src.slice(src.indexOf('const requireBothProofs = async'), src.indexOf('const alertPreviousDestination'));
   check("gate: a proof verified as the OTHER kind is refused as 'wrong_kind', never with the success code 'match'",
         gate.includes("deny('ip', ipProof.ok ? 'wrong_kind' : (ipProof.reason || 'ip_no_match'))") &&
         gate.includes("deny('password', passProof.ok ? 'wrong_kind' : (passProof.reason || 'password_no_match'))"));
-  // ══ 9. Admin reads (§18 Part 3): queue, image bytes, per-address view, pending count ════
+  // ══ 9. Admin reads: queue, image bytes, per-address view, pending count ════
   console.log('');
   console.log('[9] admin reads');
   console.log('');
@@ -841,7 +840,7 @@ try {
   fs.rmSync(TMP, { recursive: true, force: true });
 }
 
-// ── The account page mirrors these rules as HINTS (design §18.8, §18 Part 5) ─────────────
+// ── The account page mirrors these rules as HINTS (design §18.8) ─────────────
 // public_html/account-settings.html re-states the name rules and the banner limits so a miner
 // learns about a bad name or file before spending a rate-limited request. The server stays the
 // check, but a page that drifted from it would block a name the server accepts (the page refuses

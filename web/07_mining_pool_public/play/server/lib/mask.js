@@ -7,7 +7,7 @@
 // A mask is not an identity: matching another address's 9…4 takes ~2^40 key generations
 // (§19.13 #10). Nothing may treat two equal masks as the same player.
 //
-// Guests (§19.17.3, Part C5) are not addresses: their id is 'g:' + 16 base32 characters, and
+// Guests (§19.17.3) are not addresses: their id is 'g:' + 16 base32 characters, and
 // the pool's 9…4 mask would print 13 of those 18 characters. A guest's mask is instead
 // `Guest-XXXX` — four base32 characters of sha256(id), so it says nothing about the id. It is
 // a label, not an identity: 20 bits collide among a few thousand guests, and nothing may

@@ -1,7 +1,7 @@
 /* =============================================================================
    Grin Node Status Page — stylesheet
    web/04_node_api/public_html/css/status.css
-   Shared CSS variable system matches web/06 (dark / light themes).
+   Shared CSS variable system matches web/06_stats_map (dark / light themes).
 ============================================================================= */
 
 :root {

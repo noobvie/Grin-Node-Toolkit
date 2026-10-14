@@ -67,7 +67,7 @@ function buildApp({ config, db, log, startedAt = Date.now(), clock = () => Date.
   const chat = createChat({ db, sessions, settings, auth, mode: modeCache, log, names, now: nowS });
   const moderation = createModeration({ db, chat, sessions, settings, auth, admin, ledger, log, config, names, guests, tickets, now: nowS });
 
-  // The live rules a player can see (§19.15 Part 6 #10): how plays are earned and what chat
+  // The live rules a player can see (script07_implementation_games.md, the shell section): how plays are earned and what chat
   // asks for. Settings only — nothing per player, nothing the operator would not publish.
   function rules() {
     const v = settings.all();
@@ -88,7 +88,7 @@ function buildApp({ config, db, log, startedAt = Date.now(), clock = () => Date.
         slow_seconds: v.chat_slow_seconds, posts_per_hour: v.chat_posts_per_hour, retention_days: v.chat_retention_days,
       },
       // §19.17.3/§19.17.4: what a guest gets and waits for — the "How tickets are earned" fold
-      // (C6) explains miner vs guest from these, never from numbers baked into the page.
+      // explains miner vs guest from these, never from numbers baked into the page.
       guests: {
         signup_enabled: v.guest_signup_enabled, daily_tickets: v.guest_daily_plays,
         chat_enabled: v.chat_guests_enabled, chat_min_age_s: Math.max(CHAT_MIN_AGE_FLOOR, v.guest_chat_min_age),
@@ -105,7 +105,7 @@ function buildApp({ config, db, log, startedAt = Date.now(), clock = () => Date.
   //     it, so 'off' here is exactly the pool's 'off' — preview vs on changes the nav, not this.
   //   - a write must be same-origin (CSRF layer 3; layers 1–2 are SameSite=Strict and the JSON
   //     content type, enforced by the cookie and http.js).
-  // Admin routes (/internal/admin/*, Part 7+) do NOT use this: they are gated by the link
+  // Admin routes (/internal/admin/*) do NOT use this: they are gated by the link
   // secret and must keep working while the games are off, so the operator can prepare them.
   function publicRoute(method, pattern, handler, opts) {
     router.add(method, pattern, (ctx) => {
@@ -239,7 +239,7 @@ function listen(server, port, host) {
   });
 }
 
-// Stop accepting, let in-flight requests finish (graceMs cap, §19 Part 1: 5 s), then stop
+// Stop accepting, let in-flight requests finish (graceMs cap, 5 s), then stop
 // maintenance and close the DB. New requests on a kept-alive socket get 503 + close.
 function shutdown({ server, app, maintenance, db, log, graceMs = 5000 }) {
   app.markShuttingDown();

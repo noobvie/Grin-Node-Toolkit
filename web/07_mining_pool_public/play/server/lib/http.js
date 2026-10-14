@@ -40,7 +40,7 @@ const MESSAGES = {
   login_failed: 'Login failed.',
   banned: 'This account is banned from the games.',
   pool_unavailable: 'The pool is unreachable. Try again in a minute.',
-  // The visible word is "tickets" (operator, C0); the code keeps `plays`.
+  // The visible word is "tickets" (the operator's choice); the code keeps `plays`.
   no_plays: 'No tickets left. Miners earn them from mining minutes; a guest account gets new ones at 00:00 UTC.',
   unknown_game: 'That game is not available.',
   mode_unavailable: 'That game mode is not available yet.',
@@ -293,7 +293,7 @@ const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 function createRouter() {
   const routes = [];
 
-  // add('GET', '/play/api/matches/:id', handler, { bodyLimit, guard })
+  // Usage: add('GET', '/play/api/matches/:id', handler, { bodyLimit, guard })
   // guard(ctx): runs BEFORE the body is read (the admin routes check the link secret there,
   // so a caller without it never gets a body parsed). It throws an HttpError to refuse.
   function add(method, pattern, handler, opts = {}) {

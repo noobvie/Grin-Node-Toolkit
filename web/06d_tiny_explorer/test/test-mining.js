@@ -21,7 +21,7 @@
 //
 // So this asserts the estimate function AND the sub-line each card falls back to.
 // It reads the shipped file as text and evaluates the pure functions out of it;
-// §7 additionally drives initMining() through a ~40-line listener-capturing shim,
+// section [7] additionally drives initMining() through a ~40-line listener-capturing shim,
 // because "number of units" is pure interaction and nothing read off the source
 // would prove it. There is no jsdom and no devDependency either way (06d has one
 // npm dependency, express, and that is not negotiable).

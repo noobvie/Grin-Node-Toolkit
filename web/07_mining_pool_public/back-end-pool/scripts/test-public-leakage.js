@@ -5,14 +5,14 @@
 //   §J11-1  The address mask keeps 9 leading + 4 trailing bech32 chars, which is a UNIQUE key:
 //           a masked row re-attaches to its full address by joining against ANY feed that
 //           publishes one. So it is only a control while no public LIST emits a full address —
-//           the invariant asserted below across all seven feeds that used to. The four
+//           the invariant asserted below across all seven feeds. The four
 //           independent copies of the mask must also stay in agreement.
 //   §J11-2  /api/account/:addr/withdrawals (per-address, all-time, JSON + CSV) may not publish
 //           kernel_excess. The kernel names a specific transaction in the Grin chain forever;
 //           published beside a FULL address it is a public address-to-chain index. It comes
 //           from an ownership-gated POST, on the `withdraw` bucket — never `public`, because
-//           verifyOwnerProof runs scrypt (§F2).
-//           The pool-wide /api/pool/payments feed DOES publish it since 2026-09-25 (operator
+//           verifyOwnerProof runs scrypt (§F2 (script07_security_audit_archive.md)).
+//           The pool-wide /api/pool/payments feed DOES publish it (operator
 //           decision: payment-history.html P-05 Tx ID column). What is pinned there instead is
 //           the two conditions that decision rests on — the address beside it is masked (§J11-1
 //           list below) and only a shape-checked 66-hex value is emitted.
@@ -40,12 +40,11 @@
 //           because both spread their row into the response.
 //   §16.10  Donor names (design §16, reworked by §18.9): /api/pool/donors and /api/account/:addr
 //   §18.9   may emit a donor's APPROVED `name` and its state — never a pending name, image
-//           bytes, a decider, or anything from the six v1 donor_* columns (unread since §18
-//           Part 3, when the censor + marker machinery was deleted). Every route that touches
+//           bytes, a decider, or anything from the six v1 donor_* columns (unread; the v1 censor + marker machinery is gone — design §18). Every route that touches
 //           donor_requests is enumerated and pinned: the public ones use only the public-safe
 //           readers, the admin readers sit behind secureAdmin/freshAdmin. The address on the
 //           wall stays masked; the mask is a REQUIRED argument of the lib builder. A card's
-//           approved `banner` is built only under the Top-N slot guard (§18 Part 4), and
+//           approved `banner` is built only under the Top-N slot guard (design §18), and
 //           donate.html keeps its own exact-shape fence on the banner URL.
 //
 // Pure in-process assertions against the real modules — no server, no DB, nothing left
@@ -78,7 +77,7 @@ function routeSrc(verb, routePath) {
   return routeSource(verb, routePath);
 }
 
-// One API_DOC_META row's source line, by its `'VERB /path':` key (line-anchored, like §1b).
+// One API_DOC_META row's source line, by its `'VERB /path':` key (line-anchored).
 function routeMeta(key) {
   const lines = indexSrc.split('\n');
   const hit = lines.find((l) => l.trimStart().startsWith(`'${key}':`));
@@ -149,8 +148,7 @@ ok('§J11-1 dormancy.js carries the same 9+4 mask',
   /a\.slice\(0,\s*9\)\s*\+\s*['"…]/.test(dormancySrc) && /a\.slice\(-4\)/.test(dormancySrc));
 
 // THE INVARIANT. Every public LIST route that carries an address must pass it through
-// maskAddr() before it reaches res.json(). These seven are the ones that did not before
-// 2026-09-02; /api/pool/miners and /api/stratum/stats already did. If a new list route is
+// maskAddr() before it reaches res.json(). These seven, plus /api/pool/miners and /api/stratum/stats, are the lists. If a new list route is
 // added, add it here — the mask is worthless the moment any one of them leaks a full address.
 const MASKED_LIST_ROUTES = [
   ['get', '/api/pool/blocks'],
@@ -184,14 +182,14 @@ console.log('\n[4] §J11-2 — the per-address kernel needs an ownership proof; 
 
 const paymentsRoute = routeSrc('get', '/api/pool/payments');
 ok('§J11-2 the /api/pool/payments route exists', paymentsRoute.length > 0);
-// Published by operator decision (2026-09-25). The SELECT reads the raw column, so the response
+// Published by operator decision. The SELECT reads the raw column, so the response
 // must overwrite it: `...p` alone would ship whatever the wallet log or a manual record stored.
 ok('§J11-2 /api/pool/payments overwrites kernel_excess with the shape-checked value',
   /kernel_excess: kernel\b/.test(paymentsRoute) &&
   /KERNEL_EXCESS_RE\.test\(p\.kernel_excess\)/.test(paymentsRoute));
 const kRe = (indexSrc.match(/const KERNEL_EXCESS_RE = (\/[^\n]+\/[a-z]*);/) || [])[1];
 ok('§J11-2 KERNEL_EXCESS_RE is an anchored 66-hex pattern', kRe === '/^[0-9a-f]{66}$/i', `got ${kRe}`);
-// Operator revenue withdrawals (2026-10-05) are listed under a fixed label — every OTHER row is
+// Operator revenue withdrawals are listed under a fixed label — every OTHER row is
 // still masked, and the operator's destination wallet is never even selected.
 ok('§J11-2 /api/pool/payments still masks the address it pairs the kernel with',
   /grin_address: operator \? 'Pool operator' : maskAddr\(p\.grin_address\)/.test(paymentsRoute));
@@ -227,13 +225,13 @@ ok('§J11-2 an ownership-gated proofs route exists', proofsRoute.length > 0);
 ok('§J11-2 it calls verifyOwnerProof and audits both paths',
   /verifyOwnerProof\(/.test(proofsRoute) &&
   (proofsRoute.match(/auditOwnerProof\(/g) || []).length >= 2);
-// §F2's lesson: verifyOwnerProof runs scrypt (16 MB), so a proof endpoint on the loose
+// §F2 (script07_security_audit_archive.md)'s lesson: verifyOwnerProof runs scrypt (16 MB), so a proof endpoint on the loose
 // `public` bucket (1200/min) is a CPU exhaustion lever, not a read.
 ok('§J11-2 the proofs route is on the `withdraw` bucket, not `public`',
   /rateLimiter\.middleware\('withdraw'\)/.test(proofsRoute) &&
   !/rateLimiter\.middleware\('public'\)/.test(proofsRoute));
 
-// The signed payment proof (§H6) names the miner's address AND the kernel in one signed
+// The signed payment proof (§H6 (script07_security_audit_archive.md)) names the miner's address AND the kernel in one signed
 // document, so it is at least as linking as the kernel and gets the identical treatment:
 // the per-address GET may only drop it or coerce it to a boolean; the value travels only on
 // the ownership-gated POST; and that POST must not reach for the wallet (a per-address list of
@@ -388,12 +386,12 @@ ok('§16.10 no card key starts with donor_ (word / by / at / raw censor state st
   cardKeys.length > 0 && !cardKeys.some((k) => /^donor_/.test(k)), cardKeys.join(','));
 ok('§16.10 the card address goes through the mask, and only the mask',
   /address:\s*opts\.mask\(r\.address\)/.test(cardBlock) && !/address:\s*r\.address/.test(cardBlock));
-// Names (design §18.7, since §18 Part 3): the card's name comes from publicProfiles() — the
+// Names (design §18.7): the card's name comes from publicProfiles() — the
 // APPROVED, unexpired donor_requests row, nothing else. The v1 displayState/censor/marker
 // machinery is deleted, and the lib must not read the v1 donor_* columns for the wall.
 ok('§18.7 name + name_state come from publicProfiles (approved rows only), not a v1 column',
   /publicProfiles\(db,/.test(wallFn) && /name:\s*st\.name,/.test(cardBlock) && /name_state:\s*st\.name_state/.test(cardBlock));
-// Banners (design §18.7/§18.9, §18 Part 4). Behaviour (rank N has one, N+1 and the past strip
+// Banners (design §18.7/§18.9). Behaviour (rank N has one, N+1 and the past strip
 // never, slots 0 = none, non-approved rows never) is swept in scripts/test-donor-league.js;
 // here, the card builder's guard itself: the banner is built only under the slot test, the
 // slot count is the bounded helper's, and past cards reach the builder with rank null.
@@ -475,7 +473,7 @@ ok('§18.9 the public routes that touch donor_requests are exactly the reviewed 
 ok('§18.9 no public route calls an admin reader (adminQueue / requestImage / adminProfiles)',
   touching.filter((r) => !r.path.startsWith('/api/admin/'))
     .every((r) => !ADMIN_READERS.test(handlerSrc(r.verb, r.path))));
-// Part C4 (§19.17.6): the donor-names admin surface — full addresses and which list a live name
+// Part C4 (§19.17.6 (script07_design_games.md)): the donor-names admin surface — full addresses and which list a live name
 // hits — is admin-only: reads secureAdmin, the ban writes step-up. And the public name route
 // never sends `hit` (which list matched) or tells a banned name from a taken one.
 const C4_ADMIN = { 'get /api/admin/donors/names': 'secureAdmin', 'get /api/admin/donors/banned-names': 'secureAdmin',
@@ -496,10 +494,10 @@ ok('§18.9 every admin route that touches donor_requests is secureAdmin or fresh
   touching.filter((r) => r.path.startsWith('/api/admin/')).every((r) => r.guard === 'secureAdmin' || r.guard === 'freshAdmin'),
   touching.filter((r) => r.path.startsWith('/api/admin/')).map((r) => `${r.path}:${r.guard}`).join(', '));
 
-// The miner's own view. The account route reads no v1 column, and since §18 Part 5 it no
-// longer sends the v1 aliases either: `donation_percent` (= pct_max) and the donor_name /
-// donor_name_state pair (derived from donor_profile) went once the page read `donation` and
-// `donor_profile` directly (§18.3 "then dropped").
+// The miner's own view. The account route reads no v1 column and sends no v1 alias:
+// `donation_percent` (= pct_max) and the donor_name / donor_name_state pair (derived from
+// donor_profile) are gone — the page reads `donation` and `donor_profile` directly
+// (design §18.3 "then dropped").
 const acctRoute = routeSrc('get', '/api/account/:addr');
 const acctJs = acctRoute.replace(/\/\/[^\n]*/g, '');
 ok('§18.7 /api/account/:addr reads no v1 donor_* column',
@@ -511,7 +509,7 @@ ok('§18.3 /api/account/:addr sends donation + donor_profile (profileFor), and n
 ok('§18.3 the account api-docs row no longer documents the dropped aliases',
   !/donation_percent|donor_name_state/.test(routeMeta('GET /api/account/:addr')));
 
-// The page (design §18.8, §18 Part 5). account-settings.html renders the donor's own view:
+// The page (design §18.8). account-settings.html renders the donor's own view:
 // no v1 copy, no dropped alias read, a live banner only through the exact-shape URL fence,
 // previews from data: URLs (the public CSP's img-src has no blob:), and the two proof boxes
 // cleared after every change that went through.
@@ -530,7 +528,7 @@ ok('§18.8 banner previews are data: URLs — createObjectURL appears only in th
 ok('§18.8 every donor-profile success clears both proof boxes (name, banner, delete)',
   (acctPageJs.match(/dpClearProofs\(\);/g) || []).length === 3 &&
   /function dpClearProofs\(\) \{ \$id\('dp-ip-proof'\)\.value = ''; \$id\('dp-pass-proof'\)\.value = ''; \}/.test(acctPageJs));
-// Since C4 (§19.17.6) a name is live at once, so the page names it only in its own POST answer
+// Since C4 (§19.17.6 (script07_design_games.md)) a name is live at once, so the page names it only in its own POST answer
 // ("Done — “X” is on the donor wall now") and otherwise reads the LIVE name from the summary.
 ok('§18.6 the page never reads a pending name or image from the API (only its own POST response)',
   !/pending_name|pending_image|\.pending\.name|name\.pending\b/.test(acctPageJs) &&
@@ -577,9 +575,9 @@ ok('§17.4 owner-proof.js interpolates no proof value, digest or salt into a log
   loggedExprs.length > 0 && loggedExprs.every((x) => !SECRET_IDENT.test(x)),
   `logged: ${loggedExprs.join(', ')}`);
 
-// ─── F5 (Part 6): the step-by-step Tor send's two columns ─────────────────────────────────────
+// ─── the step-by-step Tor send's two columns ─────────────────────────────────────
 // withdrawals.tor_final_slate can hold a complete signed transaction; tor_step is operator state.
-// The sender that wrote them was deleted 2026-09-26 and both columns are inert, but an old row may
+// The sender that wrote them no longer exists and both columns are inert, but an old row may
 // still carry a value — so neither may reach any non-admin route, and the two admin routes that
 // SELECT * FROM withdrawals and serve the rows must still drop the slate.
 console.log('\n[F5] stepwise columns stay off every public route');
@@ -604,7 +602,7 @@ console.log('\n[F5] stepwise columns stay off every public route');
       .every(([v, p]) => (v === 'get' && (p === '/api/admin/withdrawals' || p === '/api/admin/miners/:addr'))));
 }
 
-// ─── Stored manual-rail S1 (2026-09-25) ───────────────────────────────────────────────────────
+// ─── Stored manual-rail S1 ───────────────────────────────────────────────────────
 // withdrawals.slatepack_s1 is served by exactly ONE route: the owner's ownership-gated re-fetch,
 // narrowed in its SQL to their own pending manual-rail payout. Encrypted to the owner, so a leak
 // would not steal — but a Goblin row must never carry one (plain armor), and a second route
@@ -638,7 +636,7 @@ console.log('\n[S1] the stored slatepack is served by one gated route only');
     /p\.status === 'slatepack_pending' && p\.method === 'slatepack'/.test(pageSync));
 }
 
-// ─── One-attempt Tor payouts (2026-09-26): fail_code public, fail_detail admin-only ─────────────
+// ─── One-attempt Tor payouts: fail_code public, fail_detail admin-only ─────────────
 // withdrawals.fail_detail is the CLI error behind a failed / Held Tor payout. On a pool-wallet
 // shortfall it carries grin-wallet's available/needed figures — wallet figures never reach a miner.
 // fail_code is the public-safe enum the account page words.
@@ -661,7 +659,7 @@ console.log('\n[fail] fail_detail stays admin-only; fail_code and the Tor pause 
     pauseFn.length > 100 && /return \{ failures_24h: times\.length, max: TOR_FAIL_MAX, paused_until: pausedUntil \};/.test(pauseFn));
   ok('the account api-docs row names neither fail_detail nor a wallet figure',
     !/fail_detail|available_disp|NotEnoughFunds/.test(routeMeta('GET /api/account/:addr') + routeMeta('GET /api/account/:addr/withdrawals')));
-  // The page half (Session 3): it words fail_code and nothing else. A page that read fail_detail
+  // The page half it words fail_code and nothing else. A page that read fail_detail
   // would show it the day a route leaked it, so the page must not even know the name.
   const pageFiles = ['public_html/account-settings.html', 'public_html/js/payout-methods.js'];
   const pageSrc = pageFiles.map((f) => (/\.html$/.test(f) ? readPageSource(path.join(WEB, f)) : fs.readFileSync(path.join(WEB, f), 'utf8'))).join('\n');
@@ -670,7 +668,7 @@ console.log('\n[fail] fail_detail stays admin-only; fail_code and the Tor pause 
   ok('…and name no grin-wallet figure (available / needed / NotEnoughFunds)', !/available_disp|amount_needed|NotEnoughFunds/.test(pageSrc));
 }
 
-// ─── Games platform link (design §19.3, plan Part 2) ─────────────────────────────────────────
+// ─── Games platform link (design §19.3, script07_design_games.md) ─────────────────────────────────────────
 // The games service's three routes live under /internal/, which nginx never proxies — putting one
 // under /api/ would publish it through the vhost's /api/ location. And the branding payload is
 // the most-fetched public document: it may carry the games nav flag, never where the games
@@ -696,7 +694,7 @@ console.log('\n[games] /internal stays off /api/; branding carries only { mode, 
 
 // A form whose submit JavaScript handles still submits NATIVELY whenever that script is missing:
 // a 404 on the page's js/pages/*.js mid-deploy, a network blip, or any top-level throw before the
-// delegated listeners at the END of the file (code-layout F2 — the old onsubmit= attribute did not
+// delegated listeners at the END of the file (the old onsubmit= attribute did not
 // depend on the rest of the script running). With no method that fallback is a GET, so the admin
 // password lands in the URL: nginx access log, browser history, sync. POST keeps it in the body.
 console.log('\n[forms] a form holding a password field never falls back to GET');

@@ -1,4 +1,4 @@
-// Operator revenue regression tests (2026-10-05) — the pool_fee bucket's way out, and the
+// Operator revenue regression tests — the pool_fee bucket's way out, and the
 // network-fee booking that makes its balance honest.
 //
 // Before this, the bucket grew by the full flat withdrawal fee on every payout while the pool
@@ -198,7 +198,7 @@ const poolFee = () => db.prepare("SELECT balance, balance_locked FROM miner_acco
     st = s.revenueStatus();
     ok('new fee is unbooked (0.02); available = 0.072 − 0.02', near(st.unbooked_network_fees, 0.02) && near(st.available, 0.052), JSON.stringify(st));
 
-    // ═══ 8. Review 2026-10-05: a ledger bucket is never a miner payout's address ═══
+    // ═══ 8. A ledger bucket is never a miner payout's address ═══
     console.log('\n[8] miner payout paths refuse pool_fee / prize_pool');
     credit('prize_pool', 30, 'topup');
     const countBefore = db.prepare('SELECT COUNT(*) AS c FROM withdrawals').get().c;
@@ -214,7 +214,7 @@ const poolFee = () => db.prepare("SELECT balance, balance_locked FROM miner_acco
     }
     ok('…and no row was written', db.prepare('SELECT COUNT(*) AS c FROM withdrawals').get().c === countBefore);
 
-    // ═══ 9. Review 2026-10-05: the address-change alarm cannot be silenced during the hold ═══
+    // ═══ 9. The address-change alarm cannot be silenced during the hold ═══
     console.log('\n[9] address-change alert is locked for the 24 h hold');
     const AlertMonitor = require(path.join(APP, 'lib/alert-monitor.js'));
     const { REVENUE_ADDRESS_HOLD_S } = require(path.join(APP, 'lib/config.js'));

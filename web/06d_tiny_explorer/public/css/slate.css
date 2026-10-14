@@ -101,7 +101,7 @@
   overflow: hidden;
 }
 /* Accent rule along the top edge of every panel — the one decorative flourish
-   kept from the old standalone page, retuned to the shared gold. */
+   in the shared gold. */
 .sp-panel::before {
   content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px;
   background: var(--gold);

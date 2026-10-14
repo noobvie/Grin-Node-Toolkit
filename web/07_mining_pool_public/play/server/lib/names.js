@@ -1,6 +1,6 @@
 'use strict';
 
-// Nicknames v2 (design §19.17.5, D27/D28; v1 was Part 12's pre-moderation, §19.16).
+// Nicknames v2 (design §19.17.5, D27/D28; v1 was pre-moderation, §19.16).
 //
 //   POST /play/api/nickname          { name }   checked → live at once (replaces your live one)
 //   POST /play/api/nickname/remove   {}         your live one → removed (always allowed)
@@ -23,7 +23,7 @@
 // The rules this module owns:
 //   - A nickname is NEVER shown alone: label() returns `Nick (grin1abcd…wxyz)` (§19.13 #10: a
 //     mask costs ~2^40 key generations to grind; a nickname costs nothing to copy). Unchanged
-//     from Part 12, and the reason a name may go live without a human looking at it first.
+//     from v1, and the reason a name may go live without a human looking at it first.
 //   - The word checks are lib/name-rule.js (one rule, two copies, one fixture). A reserved or
 //     blocked hit answers only `name_not_allowed`; a banned or taken name only
 //     `name_unavailable` — which list, or that a ban exists, is the admin's to know.
@@ -118,7 +118,7 @@ function createNames({ db, auth, settings, admin, ledger, config, log = null, wo
   const invalidate = () => { liveMap = null; };
 
   // THE public name of an address: the mask, or `Nick (mask)`. Never the nickname alone.
-  // A guest (§19.17.5, Part C5): `Nick · guest`, or `Guest-XXXX` with no nickname (maskAddr's
+  // A guest (§19.17.5): `Nick · guest`, or `Guest-XXXX` with no nickname (maskAddr's
   // guest branch), or "deleted guest" once the account is gone — a guest's nickname is not
   // pinned to an unforgeable mask, and the " · guest" says so: a name that matters (the operator,
   // a moderator) is never a guest's (D21/D32: guests are never moderators).
@@ -154,7 +154,7 @@ function createNames({ db, auth, settings, admin, ledger, config, log = null, wo
   })();
   let compiledPool = rule.compileList(poolLists.blocked);
 
-  // From the config fetch (lib/mode.js). A pool that sends neither field (a build before C3)
+  // From the config fetch (lib/mode.js). A pool that sends neither field (an older build)
   // changes nothing; one that sends them replaces the copy, and a change is persisted.
   function updatePoolLists(c) {
     if (!c || (c.blocked_words === undefined && c.pool_name === undefined)) return false;
@@ -308,7 +308,7 @@ function createNames({ db, auth, settings, admin, ledger, config, log = null, wo
     return { ok: true, changed: changed === 1, nickname: meView(s) };
   }
 
-  // ── Guest sign-up (§19.17.3, Part C5) ──────────────────────────────────────────────
+  // ── Guest sign-up (§19.17.3) ──────────────────────────────────────────────
   // The sign-up name is the rule's, like a nickname, and must be free as a nickname; guests.js
   // adds the login-name check, which ONLY sign-up makes (a rename must never be an oracle for
   // the login namespace). No refusal counter here: there is no account yet, and each attempt
@@ -540,8 +540,8 @@ function createNames({ db, auth, settings, admin, ledger, config, log = null, wo
   };
 }
 
-// The fallback every module uses when it is built without names (the Part 1–10 tests
-// construct some directly): the mask, exactly as before Part 12.
+// The fallback every module uses when it is built without names (older tests
+// construct some directly): the mask, exactly as before nicknames existed.
 const MASK_ONLY = Object.freeze({ label: maskAddr });
 
 module.exports = {

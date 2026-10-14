@@ -1,7 +1,7 @@
 'use strict';
 
-// Matches — the v1 `match` kind (design §19.8): BOT mode (Part 5) and PvP correspondence
-// between two addresses (Part 10), on one engine.
+// Matches — the v1 `match` kind (design §19.8): BOT mode and PvP correspondence
+// between two addresses, on one engine.
 //
 //   GET  /play/api/games                          the loaded games (public)
 //   POST /play/api/matches                        bot:  { game_id, mode:'bot', bot_level, colour?, move_seconds? }
@@ -320,7 +320,7 @@ function createMatches({ db, registry, ledger, settings, sessions, auth, admin, 
 
   // Points for one human seat (§19.6). A match pays points only out of a SPENT play: a free
   // game (cost 0) pays nothing — plays come from mining (D10), and a free game would be a
-  // points tap that needs no mining at all (§19.15 Part 5 #2). PvP pays only when rated.
+  // points tap that needs no mining at all (script07_implementation_games.md, Match platform). PvP pays only when rated.
   function pointsFor(game, m, params, res) {
     if (!(params.cost > 0)) return 0;
     const pts = game.manifest.points;
@@ -376,7 +376,7 @@ function createMatches({ db, registry, ledger, settings, sessions, auth, admin, 
       if (m.mode === 'pvp' && m.rated !== 1) continue;
       // Nor does a FREE match (cost 0): results_daily feeds the wins boards and game_results
       // events, whose rewards skip the daily points cap, so a free level-1 bot would be the
-      // same no-mining tap pointsFor() closes (§19.15 Part 11 review).
+      // same no-mining tap pointsFor() closes (see script07_implementation_games.md).
       if (!(params.cost > 0)) continue;
       const res = result === 'draw' ? 'draw' : result === `seat${seat}` ? 'win' : 'loss';
       const pts = pointsFor(game, m, params, res);

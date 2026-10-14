@@ -1,13 +1,13 @@
 'use strict';
 /**
- * listen_route.js — the /listen WebSocket rail (packet S4b).
+ * listen_route.js — the /listen WebSocket rail (Script 052).
  *
  * This replaces upstream's `WebSocket-Listener` C++ daemon, which we may not
  * ship: it carries no LICENSE, LICENSE.md, LICENSE.txt or COPYING and no licence
  * mention in its README, so it is all-rights-reserved. It is also the ONE
  * component that decides whether Accio can receive at all. Everything here is
  * written against the protocol spec in `docs/reference/script052_design.md`
- * §"Listen protocol", which packet S4a produced by reading the MIT *client*
+ * §"Listen protocol", produced by reading the MIT *client*
  * (`listener.js`) alone. Section references below are to that spec.
  *
  * ─── The three traps that are silent when you get them wrong ─────────────────
@@ -70,7 +70,7 @@ const FOREIGN_API = '/v2/foreign';
 
 // A connection that keeps breaching its message-rate bucket is not a wallet.
 // Well short of this, over-rate requests are answered with an Error rather than
-// dropped, because silence costs the client a 120 s stall (§11.9).
+// dropped, because silence costs the client a 120 s stall (script052_design.md §11 item 9).
 const RATE_VIOLATIONS_BEFORE_CLOSE = 50;
 
 class ListenHub {
@@ -82,10 +82,10 @@ class ListenHub {
 		this.connections = new Set();
 		this.bySession = new Map();      // sid → Set<conn>
 		this.inFlight = 0;
-		this.reading = 0;                // inbound bodies being buffered (S8)
+		this.reading = 0;                // inbound bodies being buffered
 		this.shuttingDown = false;
 
-		// ⚠ R6. `state.owned` is a MIRROR of the store's table, and a mirror nobody
+		// ⚠ `state.owned` is a MIRROR of the store's table, and a mirror nobody
 		// updates is a leak. The store removes suffixes on four paths we do not
 		// call — the per-session evictor, the global evictor, an expiring session
 		// and a load-time trim — and before this hook existed none of them reached
@@ -171,8 +171,8 @@ class ListenHub {
 		// for a moment, BOTH its old and its new socket counted. An evicting cap
 		// then fires on a connection that is perfectly alive, and the victim is
 		// whichever tab looks stalest — i.e. reload one tab and a DIFFERENT tab
-		// gets disconnected, possibly mid-payment. (Written that way first, and
-		// caught by this packet's own end-to-end run.)
+		// gets disconnected, possibly mid-payment. (Found by the end-to-end
+		// run.)
 		//
 		// Refusing instead makes the same race harmless: the reloading tab may be
 		// refused once and retries 250 ms later, by which time the corpse is
@@ -197,7 +197,7 @@ class ListenHub {
 		const extraHeaders = [
 			`Set-Cookie: ${buildCookie(cfg, sid, front, req)}`,
 			// Upstream sets both of these on /listen with nginx add_header. We
-			// emit them here instead, by the rule S3 established: an add_header
+			// emit them here instead, by the rule that an add_header
 			// anywhere inside a location block discards every add_header
 			// inherited from the server block, which is how CSP and HSTS go
 			// missing from exactly the routes that matter.
@@ -230,7 +230,7 @@ class ListenHub {
 			front,
 			opened: now,
 			pending: new Map(),          // interaction id → pending inbound
-			// ⚠ S8. The addresses THIS socket has claimed — minted on it, or
+			// ⚠ The addresses THIS socket has claimed — minted on it, or
 			// confirmed on it by `Own URL`. Delivery is routed by this set, not
 			// by the session alone; see deliver().
 			owned: new Set(),
@@ -250,7 +250,7 @@ class ListenHub {
 		this.stats.listen_open = this.connections.size;
 		// NOTE what is not logged: no suffix, no session id, no IP, no origin.
 		// A suffix is a payee address and an interaction is a payment, so those
-		// three must never meet in a log line (§11.11).
+		// three must never meet in a log line (script052_design.md §11 item 11).
 		this.log.info(`/listen open (${front}, ${minted ? 'new' : 'resumed'} session) — ${this.connections.size} live`);
 
 		wsConn.on('message', (text) => this._onMessage(state, text));
@@ -292,7 +292,7 @@ class ListenHub {
 		if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
 
 		// The rate check runs AFTER the parse, not before, so that an over-rate
-		// request can still be ANSWERED — §11.9's rule, which an earlier
+		// request can still be ANSWERED — script052_design.md §11 item 9's rule, which an earlier
 		// return-before-parse quietly broke. Silence costs the client a 120 s
 		// stall for a request it will never hear about; an Error is refused
 		// immediately and its own retry brings it straight back. Parsing first is
@@ -317,7 +317,7 @@ class ListenHub {
 	_takeToken(state) {
 		const cfg = this.cfg;
 		const now = Date.now();
-		// ⚠ R6, same clamp as server.js makeBucket(). `Date.now()` is not monotonic
+		// ⚠ Same clamp as server.js makeBucket(). `Date.now()` is not monotonic
 		// and this box runs a time daemon: a BACKWARD step made the elapsed term
 		// negative, and with only Math.min clamping the top the balance could go
 		// arbitrarily far below zero. The socket would then be rate-limited into
@@ -370,7 +370,7 @@ class ListenHub {
 			case 'Delete URL':
 				return this._deleteUrl(state, index, url);
 			default:
-				// §11.9 — answer rather than drop. Silence here costs the client
+				// script052_design.md §11 item 9 — answer rather than drop. Silence here costs the client
 				// a 120 s stall for a request it will never get an answer to.
 				return this._error(state, index, 'unknown request');
 		}
@@ -453,7 +453,7 @@ class ListenHub {
 	 * has already 404-ed anyway — harmless today, and exactly the kind of stale
 	 * claim that stops being harmless the moment a suffix is ever reissued.
 	 *
-	 * ⚠ R6. This is also the store's `onForget` target, wired in the constructor,
+	 * ⚠ This is also the store's `onForget` target, wired in the constructor,
 	 * so it now runs for EVERY removal — evictions and expiries included, not just
 	 * the two calls below that name it directly. Those two are left in place as
 	 * belt-and-braces on a money-relevant path; both are idempotent Set deletes.
@@ -464,13 +464,12 @@ class ListenHub {
 		for (const c of set) c.owned.delete(suffix);
 	}
 
-	// ─── Inbound admission (S8) ──────────────────────────────────────────────
-	// max_inbound_in_flight used to be checked in deliver(), i.e. AFTER
-	// wallet_route had buffered the whole body. It therefore capped relays and
-	// not memory: N senders could each hold inbound_body_bytes (1 MB then; R7
-	// dropped the default to 128 KB) in this process before anything counted
-	// them. These two make the budget cover the read as well, so the cap is a
-	// memory cap again.
+	// ─── Inbound admission ──────────────────────────────────────────────
+	// max_inbound_in_flight is checked before the body is read, not in deliver(),
+	// which runs AFTER wallet_route has buffered the whole body: checked there it
+	// caps relays and not memory, as N senders could each hold inbound_body_bytes
+	// (default 128 KB) in this process before anything counted them. These two make
+	// the budget cover the read as well, so the cap is a memory cap.
 	beginRead() {
 		if (this.reading + this.inFlight >= this.cfg.max_inbound_in_flight) return false;
 		this.reading += 1;
@@ -482,7 +481,7 @@ class ListenHub {
 	}
 
 	/**
-	 * ⚠ R7. Does this suffix exist at all?
+	 * ⚠ Does this suffix exist at all?
 	 *
 	 * Asked by wallet_route BEFORE it reserves a read slot and starts buffering,
 	 * so an address that has never existed costs the 404 and nothing else.
@@ -533,9 +532,9 @@ class ListenHub {
 		const set = this.bySession.get(row.sid);
 		const live = set ? [...set].filter((c) => !c.ws.closed) : [];
 		if (!live.length) {
-			// §11.5 was ours to decide. Upstream holds the request open for
+			// script052_design.md §11 item 5 was ours to decide. Upstream holds the request open for
 			// `proxy_read_timeout 208w` — an unbounded resource hold any stranger
-			// can take out for free, the same objection S3 raised on the /tor/
+			// can take out for free, the same objection as on the /tor/
 			// rail. We answer immediately instead: a self-custodial wallet that
 			// is not open genuinely cannot receive, and telling the sender so
 			// lets them retry when the payee is back.
@@ -543,7 +542,7 @@ class ListenHub {
 			return sendJson(res, 503, { error: 'the payee wallet is not connected' }, { 'retry-after': '30' });
 		}
 
-		// ⚠ S8 + R7, AND THIS IS THE MONEY-RELEVANT PART. Delivery is routed ONLY
+		// ⚠ AND THIS IS THE MONEY-RELEVANT PART. Delivery is routed ONLY
 		// to a socket that has CLAIMED this specific suffix — minted it here, or
 		// confirmed it here with `Own URL`, which §10 says every client does for
 		// every address on every reconnect.
@@ -558,17 +557,15 @@ class ListenHub {
 		// payee does not receive, and nothing in either UI looks wrong. An
 		// attacker cannot claim what they cannot name, and a suffix is 80 bits.
 		//
-		// ⚠ R7 DELETED the "fall back to any live socket when nobody claims"
-		// branch that used to stand here. It was written to cover the window
-		// between a reconnect and that connection's first `Own URL` — but it did
-		// not cover only that window. `claimants` is empty in EVERY case where
-		// the legitimate tab is not connected, which for a browser wallet is the
-		// ordinary state, so the cookie holder above never needed to win a race:
+		// ⚠ There is deliberately NO "fall back to any live socket when nobody
+		// claims" branch. It would cover the window between a reconnect and that
+		// connection's first `Own URL` — but `claimants` is empty in EVERY case
+		// where the legitimate tab is not connected, which for a browser wallet is
+		// the ordinary state, so the cookie holder above never needed to win a race:
 		// they only had to connect while the victim's tab was closed, and the
-		// fallback handed them the slate. It restored, in full, the hole S8 was
-		// written to close. Answering 503 costs a real client one retry inside a
-		// sub-second window — the same 503 the branch above already gives every
-		// payer whose payee is away, and their sender retries it.
+		// fallback would hand them the slate. Answering 503 costs a real client one
+		// retry inside a sub-second window — the same 503 the branch above already
+		// gives every payer whose payee is away, and their sender retries it.
 		const claimants = live.filter((c) => c.owned.has(suffix));
 		if (!claimants.length) {
 			this.stats.inbound_unclaimed += 1;
@@ -590,7 +587,7 @@ class ListenHub {
 			return sendJson(res, 503, { error: 'too many requests in flight for this address' }, { 'retry-after': '5' });
 		}
 
-		// §11.10 was ours too: which socket owns delivery when several sockets of
+		// script052_design.md §11 item 10 was ours too: which socket owns delivery when several sockets of
 		// one session have claimed the SAME suffix. The most recently opened one
 		// — a user with two tabs is working in the one they just opened, and
 		// broadcasting to all of them would ask several tabs to receive the same
@@ -637,7 +634,7 @@ class ListenHub {
 		this.inFlight += 1;
 		this.stats.inbound_in_flight = this.inFlight;
 
-		// §11.5: bounded, because unbounded is a resource hold. Generous, because
+		// script052_design.md §11 item 5: bounded, because unbounded is a resource hold. Generous, because
 		// the tab may be waiting on a human to approve the receive.
 		pending.timer = setTimeout(() => {
 			this.stats.inbound_timeout += 1;
@@ -725,7 +722,7 @@ class ListenHub {
 		this._settle(pending);
 		this.stats.inbound_delivered += 1;
 
-		// ⚠ R7. The session ttl IS the address lifetime (store.js), and it was
+		// ⚠ The session ttl IS the address lifetime (store.js), and it was
 		// refreshed only by a handshake or by a client Request — never by the one
 		// activity that matters most. A tab held open across the ttl without
 		// asking us for anything therefore had its session swept out from under a
@@ -790,7 +787,7 @@ class ListenHub {
 
 /** Refuse an upgrade with a plain HTTP response on the raw socket. */
 function refuse(socket, status, message, extraHeaders) {
-	// ⚠ R7. Coerced, never trusted to be a string. This is called from
+	// ⚠ Coerced, never trusted to be a string. This is called from
 	// handleUpgrade's catch blocks with whatever `err.message` happens to be, and
 	// one of those calls passes it through unguarded — an error carrying no
 	// message made `message.replace` raise a TypeError, which propagated out of
@@ -853,7 +850,7 @@ function buildCookie(cfg, sid, front, req) {
  *  · The onion front is http://<onion> — an origin most browsers do not treat
  *    as secure — so a Secure cookie would simply never be stored, and the user
  *    would get a new receiving address on every reconnect.
- *  · Between S2's first vhost reload and certbot finishing, the clearnet front
+ *  · Between the first vhost reload and certbot finishing, the clearnet front
  *    is http:// too, with the same effect.
  * Hence the "auto" default: trust X-Forwarded-Proto, but ONLY on the nginx
  * front, where nginx sets it and a client cannot. On the onion front the header

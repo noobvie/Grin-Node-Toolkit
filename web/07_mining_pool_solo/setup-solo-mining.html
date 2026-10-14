@@ -572,7 +572,7 @@ ERROR grin_wallet_impls::node_clients::http - Unable to contact Node to get vers
   // Base URL of an OFF-BOX port-check service (the Office Tools backend). It must run on
   // a different host than this node, otherwise probing our own public IP can hairpin
   // through the local stack and report a false "open". Set via data/config.json →
-  // "portcheck_api". When unset, we fall back to the old static recommended/optional chips.
+  // "portcheck_api". When unset, we fall back to static recommended/optional chips.
   var PORTCHECK_API = '';
 
   // A reachability pill (live) or the legacy chip (fallback when no prober configured).

@@ -428,10 +428,10 @@
 
   // ── chart recorders (P-04) ────────────────────────────────────────────────
   // Rendered with PoolCharts (Chart.js, charts-init.js) — the same recorder the other
-  // public pages use, replacing the old hand-rolled 24h strip chart (2026-07-17). Pool
+  // public pages use, not a hand-rolled strip chart. Pool
   // and network hashrate are two ALIGNED single-axis charts, never one dual-axis chart:
   // network GPS runs orders of magnitude above pool GPS and would flatten the pool trace.
-  // Opens on 30D (operator request 2026-09-26) — must match the button index.html marks active.
+  // Opens on 30D (operator request) — must match the button index.html marks active.
   var chartRange = 'month'; // 24H | 7D | 30D → /api/pool/metrics/history range vocabulary
 
   function toggleChartEmpty(id, show) {
@@ -625,7 +625,7 @@
       // The hover carries the long form; every other branch (and the catch below) clears it so
       // a stale "available for N days" never lingers on an offline lamp. "N peers" is joined by
       // a no-break space for the same width: with a wider Mac mono font "123 peers" alone split
-      // in two at 901–940px, which made even the old "123 peers · sync" three lines.
+      // in two at 901–940px, which made even "123 peers · sync" three lines.
       var nodeUp = nodeSynced ? fmtUpDays(s.node.up_days) : null;
       var nodeLampEl = $('an-node');
       if (nodeLampEl) {
@@ -695,10 +695,9 @@
   // colour walks --warn → --accent with the same ratio (CSS reads it from --mat).
   // Always 10 rods on a fixed grid (reactor.css), so nothing scrolls sideways.
   var ROD_COUNT = 10;
-  // Fetched IN PARALLEL with /api/pool/status, not behind it (2026-09-26). The rods used to
-  // wait for the status call because nodeHeight sets their depth — but that call is the one
-  // that touches the node and the wallet, and every other panel queued behind it too. Now the
-  // rods paint as soon as their own feed answers (depth from nodeHeight if an earlier refresh
+  // Fetched IN PARALLEL with /api/pool/status, not behind it: nodeHeight sets the rods'
+  // depth, but that call is the one that touches the node and the wallet, and waiting on it
+  // would queue every other panel too. The rods paint as soon as their own feed answers (depth from nodeHeight if an earlier refresh
   // has one, else estimated from found_at at ~1 block/min) and repaint once status lands with
   // a height they did not have.
   async function loadBlocks(statusP) {
@@ -802,8 +801,8 @@
     }
   }
 
-  // Rail tag for a teletype line, from withdrawals.method. This used to be a hard-coded
-  // '[TOR OK]', so a Slatepack or Goblin payout printed as Tor. The column is
+  // Rail tag for a teletype line, from withdrawals.method. Never a hard-coded
+  // '[TOR OK]': a Slatepack or Goblin payout would print as Tor. The column is
   // `NOT NULL DEFAULT 'tor'` (db.js — the Tor rail's INSERT relies on that default), so a
   // missing value can only mean an older API response and still reads as Tor. Any other
   // unknown rail prints its own name rather than being passed off as one we know.
@@ -852,8 +851,8 @@
       paintPayouts();
       // Print oldest → newest so the freshest line sits at the bottom (printer style).
       payments.slice().reverse().forEach(function (p) {
-        // Elapsed time, not a clock time: the old "HH:MM UTC" carried no date, so a payout
-        // from three days ago read as today's. The exact UTC stamp rides on hover.
+        // Elapsed time, not a clock time: "HH:MM UTC" carries no date, so a payout
+        // from three days ago would read as today's. The exact UTC stamp rides on hover.
         var ts = p.confirmed_at || p.created_at || 0;
         var line = document.createElement('div');
         var ago = document.createElement('span');
@@ -928,8 +927,8 @@
       compact: true
     });
     renderPoolShare(pool, net);
-    // A fixed-30d "miners online" trace was rendered here until 2026-07-19 — removed with its
-    // canvas (see index.html P-04); miners-stats.html P-02 covers it with a full range toggle.
+    // No fixed-30d "miners online" trace here (see index.html P-04); miners-stats.html P-02
+    // covers it with a full range toggle.
   }
 
   // Pool share of network hashrate, printed on the network sub-label. This is the one honest
@@ -991,7 +990,7 @@
   }
   // host:port only — iPollo G1/G1-Mini and lolMiner/GMiner all accept a bare
   // host:port; the stratum+tcp:// scheme prefix is unnecessary and just clutters
-  // the field (operator request 2026-07-14).
+  // the field.
   function regionStratumUri(r) { return regionHostPort(r); }
   function statusCls(s) {
     // The public regions API emits 'online' | 'idle' | 'offline' | 'checking'.
@@ -1598,8 +1597,8 @@
     readTokens();
     // The dial BANDS (gradient sweep / effort zones) are baked colour stops, not tokens read
     // at draw time — render() alone repaints the needle and numerals in the new palette but
-    // leaves the band on the old accent, so a Reactor→light switch left a phosphor-green
-    // sweep on a white dial until the next 60s refresh happened to re-apply it. Re-derive
+    // leaves the band on the old accent, so a Reactor→light switch would leave a phosphor-green
+    // sweep on a white dial until the next 60s refresh re-applies it. Re-derive
     // them here; the effort zones keep whatever scale the last refresh set.
     applyHashState();  // idle needle holds a colour value too — re-pick it from the new C.warn
     if (gaugeHash) { gaugeHash.setGradient(HASH_GRAD()); gaugeHash.render(); }
@@ -1614,10 +1613,10 @@
 
   // ── refresh cycle ─────────────────────────────────────────────────────────
   async function refresh() {
-    // Everything fires at once. This used to `await loadStatus()` before the rest, because
-    // nodeHeight feeds the fuel-rod depths — which parked every panel below (blocks, payouts,
-    // charts, gauges) behind the one call that waits on the node AND the wallet (2026-09-26,
-    // operator report: P-06/P-07 sometimes appeared minutes late). Only the rods need the
+    // Everything fires at once. Do NOT `await loadStatus()` before the rest (nodeHeight feeds
+    // the fuel-rod depths): that parks every panel below (blocks, payouts,
+    // charts, gauges) behind the one call that waits on the node AND the wallet — P-06/P-07
+    // appeared minutes late. Only the rods need the
     // height, so only they get the status promise; they repaint when it arrives.
     loadRegions();
     var statusP = loadStatus();

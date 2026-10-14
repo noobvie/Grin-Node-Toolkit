@@ -769,7 +769,7 @@
         var lit = orphan || mature ? ROD_SEGS : Math.max(1, Math.ceil(conf / ROD_SEG_CONF));
         for (var i = 0; i < ROD_SEGS; i++) {
           var seg = document.createElement('div');
-          seg.className = 'seg' + (i < lit ? ' on' : '') + (!orphan && !mature && i === lit - 1 ? ' lead' : '');
+          seg.className = 'seg' + (i < lit ? ' on' : '') + (!orphan && !mature && i === lit - 1 ? ' seg-lead' : '');
           tube.appendChild(seg);
         }
         // Face label = the last 4 digits ("…4,399"): always 6 characters, so a rod never widens

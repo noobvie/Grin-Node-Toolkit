@@ -956,7 +956,8 @@ class AlertMonitor {
   }
 
   // The rolling payout alerts the withdrawal scheduler raises, folded into the admin health page's
-  // Grin Wallet card (/api/admin/health) — the alerts-table rows alone are shown on no admin page. All but the last are resolved
+  // Grin Wallet card (/api/admin/health), because a row in the alerts table alone is shown on no
+  // admin page. All but the last are resolved
   // by the scheduler itself, so there is no time window here:
   //   payout_held   (critical) — a Tor payout held > 24 h with an unknown outcome
   //   payout_unmined (warning | critical) — paid but not seen mined after 1 h

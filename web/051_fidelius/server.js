@@ -685,7 +685,7 @@ app.get('/api/setup/binary-status', (_req, res) => {
 // still reads the pipe. So the shared pin is v5.5.0 and only Fidelius pins v5.4.1:
 // a deliberate "verify before moving" rather than a barricade. Keep it in sync
 // with _WW_PIN_TAG in scripts/051_grin_fidelius.sh. To move it: smoke-test an
-// with _WW_PIN_TAG in scripts/051_grin_fidelius.sh. To move it: smoke-test an
+// unlock on the new binary, bump both, then commit.
 const GRIN_WALLET_PIN = 'v5.4.1';
 
 app.post('/api/setup/install-binary', async (req, res) => {

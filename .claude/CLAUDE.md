@@ -107,7 +107,7 @@ scripts/
        an edited or added byte there stops the build; the fix is a re-vendor in this
        repo, NEVER regenerating the manifest on the VPS.
        Design → docs/reference/script052_design.md;
-       the build handoff is script052_implementation.md's session log, never the chat.
+       the build handoff is script052_implementation.md's Open items + Build notes, never the chat.
   053_ WooCommerce payment gateway
   054–058 FREE — assign a number when a build STARTS, not to an idea. Pick one that
        keeps the 05 hub menu ascending (menu groups run wallets → payments →
@@ -233,6 +233,22 @@ curl -s "https://api.nonlogs.io/api/markets/GRIN-BTC" | python3 -m json.tool
   Fixed slots are meant to end key churn, so this should now be history, not a live risk.
 - Interactive SESSION logs use `_$(date +%Y%m%d_%H%M%S).log`; continuous fixed-name
   logs (watchdogs, daemons) are rotated via logrotate, not per-run dated.
+- **Comments (code and docs-in-code).** A comment states what is true NOW and why; git holds
+  history. Checked mechanically by `docs/tools/check_comments.js scan` (→ `docs/tools/README.md`).
+  1. **No plan tags** — no `Part N`, `R1-2`, `delta #N`, `S3 packet`. Cite the durable doc § or
+     state the fact. Design-decision ids that live in a design doc (`D21`) are fine if they resolve.
+  2. **No diary** — no "was X, now Y" / "used to". One clause is allowed only where it prevents
+     a regression ("3334 was planned and dropped — do not move it back").
+  3. **A date is evidence only** — "verified live 2026-08-09 against grin 5.5" stays; "added
+     2026-09-27" goes.
+  4. **Pointers resolve** — paths exist; `§N` resolves, naming its doc unless it is the
+     product's own design doc.
+  5. **No commented-out code** unless the line above says why it is kept.
+  6. **Header = what the file is + its contract + its traps.** History already in a doc → a 2–4
+     line summary + pointer. A trap never leaves the code. Add a comment only for a provable trap.
+  7. A comment-only change must pass `check_comments.js diffgate`; a comment inside a heredoc is
+     file CONTENT written onto the VPS, i.e. behaviour — not a comment edit. Never touch
+     `web/052_accio/vendor/` or an `ACCIO PATCH` marker.
 
 ## Server Deployment Paths (target VPS, not local)
 ```
@@ -546,6 +562,17 @@ ALL generated docs go to `docs/reference/` — never scatter into `web/` etc. Th
 `flowcharts/` dir was merged into `docs/reference/` (2026-07-09); don't recreate it.
 **`docs/reference/README.md` is the index** — read it to find a doc, and add a row to it when
 you add a file. (The folder name is historical: nothing in it is machine-generated.)
+
+**Doc shape.** `design` = what + why + contract. `implementation` = as-built + runbook, in this
+order: *What shipped* (by SUBJECT, never by date) · *Runbook* · *Build notes — obstacles &
+lessons* · *Open items*. A Build note is `### <title>` + **Symptom · Cause · Fix · Lesson**
+(≤ 8 lines, fixing commit hash where known, no hostnames/IPs/secrets), grouped by subject.
+A section carries one `**Status:**` line (designed · built, not VPS-tested · VPS-accepted
+<date>), not a dated heading, and no plan vocabulary (`Part N`, deltas, review-round ids).
+**A new feature folds into its SUBJECT section; obstacles go to Build notes; never append a
+dated section or a session log.** `§N` numbers are permanent IDs (code and memory cite them) —
+reorder freely, never renumber. Moving text: use a script, don't retype; diff the non-blank
+lines old vs new so nothing is lost.
 
 **Every doc in `docs/reference/` carries a freshness header** directly under its title — a
 blockquote naming three things: **Covers code as of** (when the doc was last written against

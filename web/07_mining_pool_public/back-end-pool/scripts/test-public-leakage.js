@@ -659,7 +659,7 @@ console.log('\n[fail] fail_detail stays admin-only; fail_code and the Tor pause 
     pauseFn.length > 100 && /return \{ failures_24h: times\.length, max: TOR_FAIL_MAX, paused_until: pausedUntil \};/.test(pauseFn));
   ok('the account api-docs row names neither fail_detail nor a wallet figure',
     !/fail_detail|available_disp|NotEnoughFunds/.test(routeMeta('GET /api/account/:addr') + routeMeta('GET /api/account/:addr/withdrawals')));
-  // The page half it words fail_code and nothing else. A page that read fail_detail
+  // The page half: it words fail_code and nothing else. A page that read fail_detail
   // would show it the day a route leaked it, so the page must not even know the name.
   const pageFiles = ['public_html/account-settings.html', 'public_html/js/payout-methods.js'];
   const pageSrc = pageFiles.map((f) => (/\.html$/.test(f) ? readPageSource(path.join(WEB, f)) : fs.readFileSync(path.join(WEB, f), 'utf8'))).join('\n');

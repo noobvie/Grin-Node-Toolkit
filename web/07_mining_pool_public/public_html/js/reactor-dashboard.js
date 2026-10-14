@@ -691,10 +691,13 @@
     }
   }
 
-  // Fuel rods: one column per recent block; fill = confirmation depth / 1440, and the rod's
-  // colour walks --warn → --accent with the same ratio (CSS reads it from --mat).
-  // Always 10 rods on a fixed grid (reactor.css), so nothing scrolls sideways.
+  // Fuel rods: one column per recent block, drawn as a 24-segment LED stack; lit segments =
+  // confirmation depth / 1440, and the rod's colour walks --warn → --accent with the same
+  // ratio (CSS reads it from --mat). Always 10 rods on a fixed grid (reactor.css), so nothing
+  // scrolls sideways.
   var ROD_COUNT = 10;
+  var ROD_SEGS = 24;                 // 1,440 confirmations / 24 = one segment per ~hour
+  var ROD_SEG_CONF = 1440 / ROD_SEGS;
   // Fetched IN PARALLEL with /api/pool/status, not behind it: nodeHeight sets the rods'
   // depth, but that call is the one that touches the node and the wallet, and waiting on it
   // would queue every other panel too. The rods paint as soon as their own feed answers (depth from nodeHeight if an earlier refresh
@@ -744,12 +747,14 @@
       // The orphan LAMP is owned by loadStats (24 h window); rods still mark each orphan.
       blocks.slice(0, ROD_COUNT).forEach(function (b) {
         var height = Number(b.height || 0);
+        var orphan = b.status === 'orphaned';
+        // 'paid' is the normal end state: distribution moves 'confirmed' → 'paid' ~30 s after
+        // maturity, so testing 'confirmed' alone left nearly every old rod reading "100%".
+        var mature = b.status === 'confirmed' || b.status === 'paid';
         var conf;
-        if (b.status === 'confirmed') conf = 1440;
+        if (mature) conf = 1440;
         else if (nodeHeight && height) conf = Math.max(0, Math.min(1440, nodeHeight - height));
         else conf = Math.max(0, Math.min(1440, Math.floor((Date.now() / 1000 - (b.found_at || b.created_at || 0)) / 60)));
-        var orphan = b.status === 'orphaned';
-        var mature = b.status === 'confirmed';
 
         var pct = orphan || mature ? 100 : Math.floor(100 * conf / 1440);
 
@@ -758,11 +763,15 @@
         rod.style.setProperty('--mat', pct + '%');
         var tube = document.createElement('div');
         tube.className = 'tube';
-        // The fill is always full height; maturity is where green meets yellow (CSS, --mat).
-        // A proportional-height fill left a busy hour's rods all at ~3% and looking dead.
-        var fill = document.createElement('div');
-        fill.className = 'fill';
-        tube.appendChild(fill);
+        // LED stack: one segment per ROD_SEG_CONF confirmations (~1 h), lit bottom-up, the top
+        // lit one blinking while the block still matures. A fresh block lights at least one
+        // segment — a height-proportional fill left a busy hour's rods at ~3% and looking dead.
+        var lit = orphan || mature ? ROD_SEGS : Math.max(1, Math.ceil(conf / ROD_SEG_CONF));
+        for (var i = 0; i < ROD_SEGS; i++) {
+          var seg = document.createElement('div');
+          seg.className = 'seg' + (i < lit ? ' on' : '') + (!orphan && !mature && i === lit - 1 ? ' lead' : '');
+          tube.appendChild(seg);
+        }
         // Face label = the last 4 digits ("…4,399"): always 6 characters, so a rod never widens
         // as the chain grows, and it is the part that tells neighbouring blocks apart. Never an
         // abbreviation like "4M399" — that reads as a different number. Full height is in the

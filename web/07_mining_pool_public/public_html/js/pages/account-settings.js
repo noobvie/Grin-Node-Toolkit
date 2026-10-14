@@ -426,7 +426,7 @@
             // stored value would be ordinary churn (an ISP re-lease or a second site rotating the
             // window lights a seven-day alarm about a theft that has not happened). A new value sits
             // BESIDE the old ones instead of pushing one out, so there is no displacement to
-            // report. Both facts such a warning would carry are still shown: "last added" is in the on-record hint above, and
+            // report. Both facts such a warning would carry still have a home: "last added" is in the on-record hint above, and
             // the "someone else mined to this address" explanation is not shown on the
             // page; it lives only in the HTML comment above the P-04 gate label.
 

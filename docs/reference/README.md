@@ -25,6 +25,22 @@ repo rather than a script, takes the `script00_` prefix.
 
 Before creating any `.md` here, check whether it belongs inside an existing core file instead.
 
+## Shape of a doc
+
+- **`design`** = what + why + contract. **`implementation`** = as-built + runbook, sections in
+  this order: *What shipped* (by subject, never by date) · *Runbook* · *Build notes — obstacles
+  & lessons* · *Open items*.
+- **Build notes** are the most valuable part for a reader: one entry per real obstacle,
+  `### <title>` then **Symptom · Cause · Fix · Lesson** (≤ 8 lines, fixing commit hash where
+  known), grouped by subject. Only generalisable lessons — no hostnames, IPs or secrets.
+- **Status, not diary.** One `**Status:** designed · built, not VPS-tested · VPS-accepted <date>`
+  line per section replaces dated headings. No plan vocabulary (`Part N`, deltas, review rounds).
+- **A new feature folds into its SUBJECT section; its obstacles go to Build notes. Never append
+  a dated section or a session log** — git holds the history.
+- **`§N` numbers are permanent IDs** — code comments and memory cite them. Reorder, never renumber.
+- When restructuring, move text by script and check nothing was lost (diff the sorted non-blank
+  lines old vs new); a re-org is not a verification, so `Last verified` does not change.
+
 ---
 
 ## Read the freshness header first

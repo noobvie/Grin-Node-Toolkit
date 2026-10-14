@@ -487,7 +487,7 @@ body.winxp-theme, body.aqua-theme, body.comic-theme {
   /* reactor instruments */
   & .master-lamp, & .master-lamp .led { box-shadow: none; }
   & .rgn .rgn-led, & .rgn-legend i, & .gauge-peakkey .pk,
-  & .ledbar span, & .rod .fill, & .mimic .mnode.core { box-shadow: none; }
+  & .ledbar span, & .rod .seg, & .mimic .mnode.core { box-shadow: none; }
   /* unlit annunciator lamps: the dark-room value (45% dim over the background) is a
      ~1.8:1 grey on a light recess. --text-mute is the readable "off, not broken" ink. */
   & .lamp { color: var(--text-mute); }

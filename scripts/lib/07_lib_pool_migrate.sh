@@ -1055,7 +1055,7 @@ _pmg_in_cleanup() {
 # A "no" only counts when the OLD BOX ITSELF said it. A firewall answers for a box too — a
 # DROP times out, and a REJECT answers with ICMP (firewalld's default: icmp-host-prohibited,
 # "No route to host") or a RST — so a box filtered FROM HERE reads as dark while its
-# pool still served (security audit, hub-move review C6). Hence: only a RST counts as a stratum "no", and only
+# pool still serves (security audit, hub-move review C6). Hence: only a RST counts as a stratum "no", and only
 # an HTTP answer that is not the pool counts as an API "no"; everything else proves nothing.
 # rc 0 = connected · 1 = REFUSED (a TCP RST) · 2 = timed out, or any other error: proves nothing
 _pmg_tcp_probe() {  # <host> <port>

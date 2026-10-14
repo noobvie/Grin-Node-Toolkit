@@ -51,7 +51,7 @@ function gwctl(args, timeoutMs) {
 // Returns { available, regions } — `available` says whether we could READ WireGuard at all,
 // which is NOT the same as "there are peers". Returning an empty `regions` for both
 // "wg unreadable" and "wg readable, zero peers configured" would make a pool with no gateway paired
-// yet judge every declared region live and painted the whole patch bay blue/idle. Keep the
+// yet judge every declared region live and paint the whole patch bay blue/idle. Keep the
 // two apart: available=true + no entry for a region means that region has NO tunnel.
 async function readGatewayStatus() {
   try {

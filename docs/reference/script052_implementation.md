@@ -1684,7 +1684,7 @@ which a live test would have shown only as "the send hangs". It does not replace
 outside the only review method (grep the marker) through the build and five reviews; it also compared the
 toolkit's release tags with the upstream wallet's `VERSION_NUMBER`, so it never could have worked.
 **Fix:** the marker, and `patches/README.md` now states the rule with a table of every patch file — the
-table is the marker for the five whose format cannot hold a comment (`10e39ee`). **Lesson:** put a rule
+table is the marker for the five whose format cannot hold a comment (`bdf1afa`). **Lesson:** put a rule
 where the person doing the work looks, not in the three docs they do not open.
 
 ### The brand map was identical in both files and still missing 27 strings

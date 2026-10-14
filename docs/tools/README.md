@@ -14,6 +14,28 @@ server.
 
 ---
 
+## Comment checker — `check_comments.js`
+
+The code → doc twin of the drift checker. It enforces the *Comments* rules in `CLAUDE.md`
+Conventions (no plan tags, no diary, dates as evidence only, resolving pointers, no
+commented-out code). Zero dependencies; exit `0` clean, `1` findings, `2` tool error.
+
+```bash
+node docs/tools/check_comments.js scan [--summary] [--show-allowed] [PATH ...]
+node docs/tools/check_comments.js diffgate [REV] [PATH ...]   # fails if a "comments only" change touched code
+node docs/tools/check_comments.js --map section_map.tsv [--write] [PATH ...]   # re-point § / doc pointers after a doc re-org
+```
+
+- `scan` classes: `PLAN_TAG DIARY_DATE DEAD_PATH DEAD_SECTION STALE_TERM COMMENTED_CODE TODO PATCH_MARKER`.
+  A hit is either fixed in the comment or added to `comment_allowlist.txt`
+  (`file-glob:regex  CLASS|*  reason`, reason mandatory). `comment_stale_terms.txt` holds
+  CANDIDATES only — confirm in code before acting.
+- Run `diffgate` before committing any comment sweep. Heredoc bodies count as code (they are
+  file content written onto the VPS). A pure path rewrite also fails it — expected.
+- `--map` is a dry run without `--write`; applied maps are recorded in `<map>.applied` so a
+  chained map can't run twice. Keep the section map with the re-org plan, not in the repo.
+- Never touches `vendor/`; `patches/` only gets the marker check.
+
 ## Why the drift checker exists
 
 A doc names `scripts/lib/07_lib_satellite.sh` in a status table with a green tick. The file

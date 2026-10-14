@@ -584,9 +584,9 @@ class StratumServer {
     let ip = socket.remoteAddress || 'unknown';
     // The address observed at ACCEPT time, frozen. This is the key the per-IP cap counts, and it
     // must never move (audit §J6-3b): `cleanup` must not decrement `this.connectionsByIp.get(ip)`
-    // — the MUTABLE binding — or a connection whose `ip` had been rewritten decremented a key
-    // holding nothing and left the real address counted for the life of the process. 320
-    // connect-header-disconnect cycles then permanently exhausted one source address's budget,
+    // — the MUTABLE binding — or a connection whose `ip` has been rewritten decrements a key
+    // holding nothing and leaves the real address counted for the life of the process. 320
+    // connect-header-disconnect cycles then permanently exhaust one source address's budget,
     // which is self-inflicted for a lone attacker and a denial of service against everyone else
     // when the address is shared (CGNAT, mining-farm NAT) — precisely the population the cap's
     // generous default exists to protect. Keep the increment and the decrement on THIS constant.

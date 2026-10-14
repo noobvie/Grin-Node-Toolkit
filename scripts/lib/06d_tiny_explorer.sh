@@ -330,8 +330,8 @@ tinyx_configure() {
     # The current value is READ BACK from the existing config first, and reads
     # BOTH values, not just true. This function rewrites config.json wholesale,
     # so a one-sided read-back silently overwrites whichever choice is not the
-    # default when Configure is re-run for a new domain (ON lost by an operator
-    # who turned it OFF, or the reverse). An explicit value in the config is a
+    # default when Configure is re-run for a new domain (with the default ON, an
+    # operator's deliberate OFF would be lost; with it OFF, a deliberate ON). An explicit value in the config is a
     # decision and outranks the default in both directions — only an install whose config does not
     # already record a choice gets the default. That is very nearly "a new
     # install" but not exactly: a config written before this key existed

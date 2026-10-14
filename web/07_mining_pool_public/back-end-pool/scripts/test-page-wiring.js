@@ -6,7 +6,7 @@
 // Every inline on*= handler is TWO strings in two places — a data-action value in
 // the markup (or in markup a script builds) and a `case` in a delegated document listener — plus
 // an event-type choice and, for a non-bubbling event, a capture flag. Nothing executed that pairing:
-// Planting 21 wiring / script-order defects was caught by only 3 before this test. This test is the static half
+// A review planted 21 wiring / script-order defects and the rest of the suite caught 3. This test is the static half
 // of that review, run on every page (the jsdom old-vs-new smoke in the plan tooling is the dynamic
 // half, and A2 is the live one):
 //

@@ -41,7 +41,7 @@ for (const root of [PUBLIC_ROOT, ADMIN_ROOT]) {
 }
 ok('walked at least 40 pages (the loop is not vacuous)', compared + extracted >= 40, `${compared} + ${extracted}`);
 
-// Every extracted script is still LOADED, by exactly one page Nothing above notices a page
+// Every extracted script is still LOADED, by exactly one page. Nothing above notices a page
 // that lost its <script src>: the page then holds no page-specific src, so it is classed as
 // "never extracted" and compared byte for byte against itself — green — while its code sits in
 // js/pages/ unused. R3 planted exactly that (fortune-board.html) and the whole suite stayed green.

@@ -306,8 +306,8 @@
 
   // Sticky TESTNET banner so visitors never mistake test tGRIN for real coins. Idempotent;
   // styled by .testnet-banner in css/dashboard.css (NOT pool.css — that is the admin
-  // stylesheet and no public page loads it, which is why this banner carries its own
-  // styling). Pushes the sticky header down by the banner height
+  // stylesheet and no public page loads it, so a rule there would leave this banner as bare
+  // unstyled text). Pushes the sticky header down by the banner height
   // via the body.has-testnet-banner rule.
   function showTestnetBanner() {
     if (document.querySelector('.testnet-banner')) return;

@@ -200,7 +200,7 @@ CREATE TABLE chat_words (
 `,
   },
   {
-    // Approved nicknames (design §19.16): approved nicknames. A request log, not a column on players —
+    // Nicknames (design §19.16): approved nicknames. A request log, not a column on players —
     // history and the operator's decisions come free, and the three partial unique indexes
     // make "one pending + one live per address" and "no two live nicknames alike" database
     // facts rather than checks a race could slip past.

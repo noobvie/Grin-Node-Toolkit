@@ -5,7 +5,7 @@
  * This file replaces upstream's `Block-Access` nginx C module. That module was
  * a battle-tested filter and this is not, so it is deliberately kept in one
  * small, pure, side-effect-free file: no sockets, no I/O, no config writes —
- * inputs in, a verdict out. the security audit covers this file specifically, and it is the
+ * inputs in, a verdict out. The security audit covers this file specifically, and it is the
  * only part of the gateway that is worth unit-testing exhaustively.
  *
  * ─── The directives being replaced, and their exact semantics ────────────────

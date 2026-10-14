@@ -1,7 +1,7 @@
 # file-glob:regex   CLASS|*   reason (mandatory)   — matched against the comment text
 # Entries are added only after a hit is confirmed legitimate; one line per pattern, no spaces in the regex (use \s).
 docs/tools/check_doc_drift.sh:07_lib_satellite  DEAD_PATH  worked example of a deleted file the drift checker was built from
-docs/tools/check_doc_drift.sh:satellite  STALE_TERM  same worked example
+docs/tools/check_doc_drift.sh:(2026-06-22|f2ebade)  DIARY_DATE  same worked example: the deletion date is the point of the example
 scripts/lib/02_lib_landing.sh:web/grin-money-2026/grin_black_white.svg  DEAD_PATH  file lives in the sibling repo Grin-Landing-Pages (verified present), not this one
 scripts/051_grin_fidelius.sh:web/03_web_wallet  DEAD_PATH  path inside the sibling GrinSuite repo (noobvie/GrinSuite), named as the port's source
 scripts/051x_grin_xp_wallet.sh:TODO:\ssecurity\srecommendations  TODO  deliberate checklist of optional hardening for a future integration, not a stale marker

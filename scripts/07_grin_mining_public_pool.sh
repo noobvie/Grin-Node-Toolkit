@@ -173,8 +173,9 @@ pool_check_exclusivity() {
         [[ -e "$m" ]] && found+=("$m")
     done
     # /opt/grin/solo-stats counts ONLY when it holds solo collector data — the
-    # node-sync watchdog (installed with EVERY node build) keeps its
-    # node_watchdog_*.json state here, which must not hard-block the pool on
+    # node-sync watchdog (installed with EVERY node build) kept its
+    # node_watchdog_*.json state here (GNK_LEGACY_STATE_DIR in grin_node_keepalive.sh;
+    # an un-migrated box may still hold them), which must not hard-block the pool on
     # every plain node box.
     for m in /opt/grin/solo-stats/*; do
         [[ -e "$m" ]] || continue                      # unmatched glob stays literal

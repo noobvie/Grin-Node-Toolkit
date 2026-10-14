@@ -1703,7 +1703,7 @@ run_nginx_share_for_port() {
     create_status_in_progress
     # Steps 5-8 are bracketed so that step 9 runs on BOTH paths. The node is
     # stopped from step 1 onward; a compress that dies here must not exit the
-    # script outright and leave the node stopped until someone noticed. Publishing is
+    # script outright and leave the node stopped until someone notices. Publishing is
     # skipped on failure — with RETAIN_PREVIOUS the previous archive is still
     # sitting there intact, so the mirror carries on serving it.
     if compress_chain_data; then

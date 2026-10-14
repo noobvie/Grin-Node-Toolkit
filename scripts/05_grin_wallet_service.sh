@@ -35,9 +35,9 @@
 #  stays ascending for free, but every insertion silently re-points every key
 #  below it — which is how '2' came to mean Drop and then WooCommerce.
 #
-#  What the change costs: the spare in each category is finite. When Wallets
+#  What fixed slots cost: the spare in each category is finite. When Wallets
 #  outgrows slot 4, the next wallet CANNOT take 5 (that is WooCommerce) — the
-#  categories below have to shift, one deliberate migration, done the way the
+#  categories below have to shift, one deliberate migration, done the way
 #  Drop's move from 052 to 059 was done. That is the trade: rare, explicit renumbering
 #  instead of constant, invisible key drift.
 #

@@ -432,7 +432,7 @@ class PoolSettings {
       // AND the recovery codes with no CLI means no way back into the panel.
       require_admin_totp: 'false',
     },
-    // There is no `alerts` section — nine keys, three of them live credentials — (audit §J8-3,
+    // There is no `alerts` section (nine keys, three of them live credentials; audit §J8-3,
     // ruling §J13-2, decided in §J17). Every one of them was stored here, served
     // back to the browser in cleartext and read by NOTHING: AlertDelivery takes its channels
     // from `config` (lib/alert-delivery.js:14-21), i.e. pool.json, and AlertMonitor takes its

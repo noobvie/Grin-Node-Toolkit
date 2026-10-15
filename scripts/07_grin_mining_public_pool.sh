@@ -626,12 +626,18 @@ pool_install() {
         --exclude='custom_assets' --exclude='uploads' \
         "$POOL_APP_SRC/" "$POOL_APP_DIR/" \
         2>/dev/null || cp -r "$POOL_APP_SRC/"* "$POOL_APP_DIR/"
+    # Install replaces the code and node_modules/ but never restarts, so a pool running
+    # through a re-run keeps the old code. Leave the restart marker: the next 9) Deploy
+    # new code restarts it, and any start after this (menu 6) makes the marker stale.
+    _pool_restart_mark_set "$POOL_RESTART_MARK" "$POOL_SERVICE"
 
     local npm_cmd="install"
     [[ -f "$POOL_APP_DIR/package-lock.json" ]] && npm_cmd="ci"
     info "Installing Node.js dependencies (npm $npm_cmd)..."
+    printf 'pending\n' > "$POOL_DEPS_STAMP" 2>/dev/null || warn "Could not write $POOL_DEPS_STAMP."
     (cd "$POOL_APP_DIR" && npm "$npm_cmd" --omit=dev 2>&1 | tail -20) \
         || { error "npm $npm_cmd failed in $POOL_APP_DIR — see /root/.npm/_logs/ (latest *-debug-0.log)."; return 1; }
+    _pool_pkg_hash "$POOL_APP_DIR" > "$POOL_DEPS_STAMP" 2>/dev/null || warn "Could not write $POOL_DEPS_STAMP."
     success "Node.js dependencies installed."
 
     # No separate DB-init step: lib/db.js initDb() creates/migrates the schema
@@ -912,6 +918,14 @@ EOF
 # deploy, so neither timestamps nor ownership may count as a change.
 POOL_RUNTIME_PATHS=(index.js lib routes package.json package-lock.json)
 POOL_RESTART_MARK="$(dirname "$POOL_APP_DIR")/.${POOL_NET}.restart-pending"
+# "pending" while npm runs, else the package hash node_modules/ was installed from
+# (rationale at the npm gate in pool_deploy_code; 1) Install keeps it current too).
+POOL_DEPS_STAMP="$(dirname "$POOL_APP_DIR")/.${POOL_NET}.deps-installed"
+
+# Hash of the package files npm installs from, as one stream (both, never package.json alone).
+_pool_pkg_hash() { # <dir>
+    cat "$1/package.json" "$1/package-lock.json" 2>/dev/null | sha1sum | awk '{print $1}'
+}
 
 _pool_runtime_manifest() { # <dir> <path>... — absent paths simply contribute nothing
     local dir="$1"; shift
@@ -1039,11 +1053,23 @@ pool_deploy_code() {
     # byte-identical. Hashing package.json alone rsynced the new lock into place and then
     # skipped npm, so the box kept running the vulnerable tree while the lockfile on disk
     # claimed it was patched — and nothing compares the two.
-    local old_pkg_hash new_pkg_hash
-    old_pkg_hash=$(cat "$POOL_APP_DIR/package.json" "$POOL_APP_DIR/package-lock.json" 2>/dev/null | sha1sum | awk '{print $1}')
-    new_pkg_hash=$(cat "$POOL_APP_SRC/package.json" "$POOL_APP_SRC/package-lock.json" 2>/dev/null | sha1sum | awk '{print $1}')
+    #
+    # ⚠ Compare against what was INSTALLED, not what was copied. The rsync below puts the
+    # new package files in place BEFORE npm runs, so after a failed or interrupted npm the
+    # deployed files already match the source and a re-run would skip npm, leaving the old
+    # tree under the new lockfile. The stamp says "pending" while npm runs and holds the
+    # package hash once it succeeded. It lives beside the restart marker, NOT in
+    # node_modules/: `npm ci` deletes node_modules first, so a stamp there would vanish
+    # with the failure it records. No stamp (a box that predates it) falls back to the
+    # deployed files, which is what this gate always trusted; no node_modules/ at all
+    # forces npm.
+    local old_pkg_hash new_pkg_hash installed_hash deps_stamp="$POOL_DEPS_STAMP"
+    old_pkg_hash=$(_pool_pkg_hash "$POOL_APP_DIR")
+    new_pkg_hash=$(_pool_pkg_hash "$POOL_APP_SRC")
+    installed_hash=$(head -n1 "$deps_stamp" 2>/dev/null || true)
+    [[ -n "$installed_hash" ]] || installed_hash="$old_pkg_hash"
+    [[ -d "$POOL_APP_DIR/node_modules" ]] || installed_hash="missing"
 
-    # package*.json are runtime paths, so a run that needs npm is always a "changed" run.
     local rt_before rt_after rt_changed=0
     rt_before=$(_pool_runtime_manifest "$POOL_APP_DIR" "${POOL_RUNTIME_PATHS[@]}")
 
@@ -1070,12 +1096,25 @@ pool_deploy_code() {
         _pool_restart_mark_set "$POOL_RESTART_MARK" "$POOL_SERVICE"
     fi
 
-    if [[ "$old_pkg_hash" != "$new_pkg_hash" ]]; then
+    if [[ "$installed_hash" != "$new_pkg_hash" ]]; then
         local npm_cmd="install"
         [[ -f "$POOL_APP_DIR/package-lock.json" ]] && npm_cmd="ci"
-        warn "package.json / package-lock.json changed — running npm $npm_cmd ..."
+        if [[ "$installed_hash" == pending ]]; then
+            warn "The last dependency install did not finish — running npm $npm_cmd again ..."
+        elif [[ "$installed_hash" == missing ]]; then
+            warn "node_modules/ is missing — running npm $npm_cmd ..."
+        else
+            warn "package.json / package-lock.json changed — running npm $npm_cmd ..."
+        fi
+        # A new tree under a running process is runtime even when no .js changed.
+        rt_changed=1
+        _pool_restart_mark_set "$POOL_RESTART_MARK" "$POOL_SERVICE"
+        printf 'pending\n' > "$deps_stamp" 2>/dev/null \
+            || warn "Could not write $deps_stamp — if npm fails, a re-run may not retry it."
         (cd "$POOL_APP_DIR" && npm "$npm_cmd" --omit=dev 2>&1 | tail -20) \
-            || { error "npm $npm_cmd failed — see /root/.npm/_logs/ (latest *-debug-0.log)."; return 1; }
+            || { error "npm $npm_cmd failed — see /root/.npm/_logs/ (latest *-debug-0.log). Re-run 9) Deploy new code to retry."; return 1; }
+        printf '%s\n' "$new_pkg_hash" > "$deps_stamp" 2>/dev/null \
+            || warn "Could not write $deps_stamp — the next deploy will run npm again."
         success "Dependencies updated."
     else
         info "package.json + package-lock.json unchanged — skipping npm (deps untouched)."
@@ -3628,6 +3667,7 @@ pool_cleanup() {
         read -r a || true
         if [[ "${a,,}" != "n" ]]; then
             rm -rf "${POOL_APP_DIR:?}"
+            rm -f "$POOL_RESTART_MARK" "$POOL_DEPS_STAMP" 2>/dev/null || true   # deploy state beside it
             [[ -d "$legacy_app" ]] && { rm -rf "${legacy_app:?}"; info "Legacy app dir removed ($legacy_app)."; }
             success "Pool app + database removed."
             log "Cleanup: removed $POOL_APP_DIR (+ legacy $legacy_app if present)"

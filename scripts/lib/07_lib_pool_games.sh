@@ -24,8 +24,9 @@
 #   log    /opt/grin/logs/grin-games[-testnet].log   written by systemd (append:), copytruncate
 #
 # Sourced by 07_grin_mining_public_pool.sh AFTER the POOL_* constants are set. pool_*
-# helpers (pool_read_conf, pool_write_conf_key, pool_setup_nginx, _pool_step_done) are
-# referenced at CALL time. Convention: sourced lib → NO shebang / NO `set -e`, and every
+# helpers (pool_read_conf, pool_write_conf_key, pool_setup_nginx, _pool_step_done, and the
+# restart-only-what-changed set _pool_runtime_* / _pool_restart_*) are referenced at CALL
+# time. Convention: sourced lib → NO shebang / NO `set -e`, and every
 # create/copy/move/delete carries its own guard — a function called as `fn || true` runs
 # with errexit off for its whole body (memory project_lib_errexit_suppression).
 # =============================================================================
@@ -58,6 +59,10 @@ PGS_APP_DIR="/opt/grin/pubgames/${POOL_NET:-mainnet}"
 PGS_DATA_DIR="/opt/grin/pubgames-data/${POOL_NET:-mainnet}"
 PGS_DB="$PGS_DATA_DIR/grinium-games.db"
 PGS_RESTORE_MARK="$PGS_DATA_DIR/.restore-info"   # written by pgs_restore_db_from_archive
+PGS_RESTART_MARK="$PGS_DATA_DIR/.restart-pending" # deployed code not yet loaded (pgs_deploy_code)
+# What the games process loads: a change here needs a restart, anything else is static.
+# server/scripts/ (tests) is copied into the code dir but never loaded, so it is left out.
+PGS_RUNTIME_PATHS=(index.js lib package.json games)
 PGS_LINK="/opt/grin/conf/grin_pubgames_link_${POOL_NET:-mainnet}"
 PGS_LOG="/opt/grin/logs/${PGS_SERVICE}.log"
 PGS_UNIT="/etc/systemd/system/${PGS_SERVICE}.service"
@@ -327,9 +332,22 @@ pgs_deploy_code() {
         || { error "mktemp failed — nothing deployed."; return 1; }
     if ! _pgs_stage_trees "$st"; then rm -rf "$st"; return 1; fi
 
+    # Restart only when the runtime tree changed (helpers + rationale beside
+    # pool_deploy_code). PGS_WEB_DIR is static: nginx serves it, version.js busts caches.
+    local rt_before rt_after rt_changed=0
+    rt_before=$(_pool_runtime_manifest "$PGS_APP_DIR" "${PGS_RUNTIME_PATHS[@]}")
+
     info "Refreshing games code → $PGS_APP_DIR ..."
     if ! rsync -a --delete "$st/app/" "$PGS_APP_DIR/" 2>/dev/null; then
+        rt_after=$(_pool_runtime_manifest "$PGS_APP_DIR" "${PGS_RUNTIME_PATHS[@]}")
+        if [[ "$rt_before" != "$rt_after" ]]; then _pool_restart_mark_set "$PGS_RESTART_MARK" "$PGS_SERVICE"; fi
         rm -rf "$st"; error "rsync to $PGS_APP_DIR failed — the service may hold a partial tree; re-run P → 2."; return 1
+    fi
+    # Mark NOW: the perms and web steps below can return before the restart.
+    rt_after=$(_pool_runtime_manifest "$PGS_APP_DIR" "${PGS_RUNTIME_PATHS[@]}")
+    if [[ "$rt_before" != "$rt_after" ]]; then
+        rt_changed=1
+        _pool_restart_mark_set "$PGS_RESTART_MARK" "$PGS_SERVICE"
     fi
     # rsync -a carries the staging copy's owner (root) and the checkout's modes.
     if ! _pgs_fix_app_perms; then rm -rf "$st"; return 1; fi
@@ -344,15 +362,35 @@ pgs_deploy_code() {
     [[ -d "$PGS_SHELL_SRC" ]] || warn "No shell at $PGS_SHELL_SRC — /play/ will have no page (pull the checkout)."
     success "Games code deployed (asset version $PGS_DEPLOYED_VERSION)."
 
+    # norestart = install, which restarts the service itself; that start makes the marker
+    # written above stale (_pool_restart_pending), so install never has to clear it.
     if [[ "$mode" != "norestart" ]]; then
-        if systemctl is-active --quiet "$PGS_SERVICE" 2>/dev/null; then
-            info "Restarting $PGS_SERVICE (games only — the pool is not touched)..."
-            systemctl restart "$PGS_SERVICE" 2>/dev/null \
-                || { error "Restart failed — check: journalctl -u $PGS_SERVICE -n 50 / $PGS_LOG"; return 1; }
-            _pgs_wait_health 10 || warn "The games service did not answer its health check yet — see P → 6 Logs."
-        else
-            info "$PGS_SERVICE is not running — start it via P → 4."
-        fi
+        local decision
+        decision=$(_pool_restart_decision "$PGS_SERVICE" "$PGS_RESTART_MARK" "$rt_changed")
+        case "$decision" in
+            changed|pending)
+                if [[ "$decision" == changed ]]; then
+                    info "Games runtime code changed:"
+                    _pool_runtime_diff "$rt_before" "$rt_after"
+                else
+                    info "Games runtime unchanged this run, but an earlier deploy is still not loaded"
+                    echo -e "  ${DIM}(marker from $(_pool_restart_mark_age "$PGS_RESTART_MARK")).${RESET}"
+                fi
+                info "Restarting $PGS_SERVICE (games only — the pool is not touched)..."
+                if ! systemctl restart "$PGS_SERVICE" 2>/dev/null; then
+                    _pool_restart_mark_set "$PGS_RESTART_MARK" "$PGS_SERVICE"
+                    error "Restart failed — check: journalctl -u $PGS_SERVICE -n 50 / $PGS_LOG"; return 1
+                fi
+                rm -f "$PGS_RESTART_MARK" 2>/dev/null || warn "Could not remove $PGS_RESTART_MARK — the next deploy will restart games once more."
+                _pgs_wait_health 10 || warn "The games service did not answer its health check yet — see P → 6 Logs."
+                ;;
+            current)
+                info "Games runtime code unchanged (static files only) — $PGS_SERVICE NOT restarted."
+                ;;
+            *)
+                info "$PGS_SERVICE is not running — start it via P → 4."
+                ;;
+        esac
     fi
     return 0
 }
@@ -1293,7 +1331,7 @@ pool_games_menu() {
         echo -e "  Service: $(_pgs_menu_state)"
         echo ""
         echo -e "  ${GREEN}1${RESET}) Install / repair       ${DIM}(user, dirs, link secret, code, unit, start)${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Deploy games code      ${DIM}(refresh from checkout, restart games only)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Deploy games code      ${DIM}(refresh from checkout, restart games only if needed)${RESET}"
         echo -e "  ${GREEN}3${RESET}) Nginx                  ${DIM}(write /play/ locations + reload + route check)${RESET}"
         echo -e "  ${GREEN}4${RESET}) Service control        ${DIM}(start / stop / restart games)${RESET}"
         echo -e "  ${GREEN}5${RESET}) Status                 ${DIM}(unit, listener, DB, mode, internal auth)${RESET}"

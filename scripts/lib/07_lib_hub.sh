@@ -43,7 +43,7 @@ hub_menu() {
     echo -e "  ${GREEN}6${RESET}) $(_pool_step_mark 6) Service control     ${DIM}(start before creating admin)${RESET}"
     echo -e "  ${GREEN}7${RESET}) $(_pool_step_mark 7) Create admin account ${DIM}(needs service running)${RESET}"
     echo -e "  ${GREEN}8${RESET}) Status"
-    echo -e "  ${GREEN}9${RESET}) Deploy new code     ${DIM}(refresh js/html/media from checkout + restart)${RESET}"
+    echo -e "  ${GREEN}9${RESET}) Deploy new code     ${DIM}(refresh from checkout · restarts only what changed)${RESET}"
     echo ""
     echo -e "${DIM}  ─── Multi-region ─────────────────────────────────${RESET}"
     echo -e "  ${GREEN}W${RESET}) Multi-region          ${DIM}(WireGuard server + add regional gateways)${RESET}"

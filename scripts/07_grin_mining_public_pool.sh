@@ -29,7 +29,8 @@
 #   6) Service control       (start / stop / restart)
 #   7) Create admin account  (first admin user — needs service running)
 #   8) Pool status           (service state, DB size, recent logs)
-#   9) Deploy new code       (refresh backend+frontend from checkout, then restart)
+#   9) Deploy new code       (refresh backend+frontend from checkout; restarts only
+#                             the service whose runtime code changed)
 #   A) Admin recovery        (locked out: clear 2FA / reset password — break-glass)
 #   W) Multi-region          (WireGuard server + add regional gateways)
 #   P) Play & chat (games)   (/play/ games service — lib/07_lib_pool_games.sh; never
@@ -900,16 +901,105 @@ window.POOL_NAME = ${escaped_name};
 EOF
 }
 
+# ─── Restart only what changed (shared with pgs_deploy_code) ───────────────────
+# A deploy restarts a service only when the files its Node process LOADS changed;
+# static files are served by nginx from disk and go live without one. A pool restart
+# drops every miner's stratum connection, so a CSS fix must not cost that.
+#
+# Runtime manifest = "sha256  path" per file under <dir>, restricted to the named
+# paths. Contents and names only: rsync -a copies the checkout's mtimes (a fresh
+# clone changes every timestamp, no code) and pool_deroot re-chowns the tree on every
+# deploy, so neither timestamps nor ownership may count as a change.
+POOL_RUNTIME_PATHS=(index.js lib routes package.json package-lock.json)
+POOL_RESTART_MARK="$(dirname "$POOL_APP_DIR")/.${POOL_NET}.restart-pending"
+
+_pool_runtime_manifest() { # <dir> <path>... — absent paths simply contribute nothing
+    local dir="$1"; shift
+    [[ -d "$dir" ]] || return 0
+    (cd "$dir" 2>/dev/null && find "$@" -type f -print0 2>/dev/null | LC_ALL=C sort -z \
+        | xargs -0 -r sha256sum 2>/dev/null) || true
+}
+
+# Print the runtime files that differ between two manifests (added, changed or
+# deleted), at most 8 plus a count — this explains a restart, it does not decide one.
+_pool_runtime_diff() { # <manifest before> <manifest after>
+    # comm (coreutils), not diff: diffutils is not guaranteed on a minimal install.
+    local -a files
+    mapfile -t files < <(LC_ALL=C comm -3 <(printf '%s\n' "$1" | LC_ALL=C sort) \
+            <(printf '%s\n' "$2" | LC_ALL=C sort) 2>/dev/null \
+        | sed -n 's/^\t\{0,1\}[0-9a-f]\{64\} [ *]//p' | LC_ALL=C sort -u)
+    local i
+    for (( i = 0; i < ${#files[@]} && i < 8; i++ )); do
+        echo -e "      ${DIM}${files[i]}${RESET}"
+    done
+    if (( ${#files[@]} > 8 )); then echo -e "      ${DIM}…and $(( ${#files[@]} - 8 )) more${RESET}"; fi
+}
+
+# The pending marker exists ⇒ runtime code is on disk that <service> has not loaded.
+# A deploy writes it the moment runtime code lands and removes it only after a
+# successful restart, so a deploy that stops anywhere in between (npm failure, Ctrl-C,
+# a dropped SSH session, a failed restart) still leaves it behind. It goes stale once the
+# service has started at or after the marker's mtime — by ANY route (menu 6, P → 4, a
+# reboot, systemd Restart=, Migrate IN) — so no other start site has to clear it.
+_pool_restart_pending() { # <marker> <service> → rc 0 = still pending
+    local marker="$1" svc="$2" started mark
+    [[ -f "$marker" ]] || return 1
+    systemctl is-active --quiet "$svc" 2>/dev/null || return 0
+    # TZ=UTC: systemctl prints the box's local zone, whose abbreviation `date` may not parse.
+    started=$(TZ=UTC systemctl show -p ActiveEnterTimestamp --value "$svc" 2>/dev/null)
+    # An empty timestamp must not reach `date -d ""`, which answers today's midnight.
+    [[ -n "$started" ]] && started=$(date -d "$started" +%s 2>/dev/null) || started=0
+    mark=$(stat -c %Y "$marker" 2>/dev/null) || mark=0
+    if (( started >= mark )); then
+        rm -f "$marker" 2>/dev/null || warn "Could not remove the stale restart marker $marker." >&2
+        return 1
+    fi
+    return 0
+}
+
+_pool_restart_mark_set() { # <marker> <service>
+    printf 'Runtime code deployed %s is not yet loaded by %s.\n' \
+        "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" "$2" > "$1" 2>/dev/null \
+        || warn "Could not write the restart marker $1 — the next deploy cannot tell $2 is behind." >&2
+}
+
+# One word on stdout: what a deploy should do with <service>. Called as $(…), so every
+# message inside it goes to stderr. The caller has already written the marker if this
+# run changed runtime code.
+#   changed — running, and this deploy changed its runtime code → restart
+#   pending — running, and an earlier deploy's code is still not loaded → restart
+#   current — running the code on disk → leave it alone
+#   stopped — not running; the marker stays for the next start / deploy
+_pool_restart_decision() { # <service> <marker> <changed 0|1>
+    local svc="$1" marker="$2" changed="$3"
+    if ! systemctl is-active --quiet "$svc" 2>/dev/null; then
+        echo stopped
+    elif [[ "$changed" == 1 ]]; then
+        echo changed
+    elif _pool_restart_pending "$marker" "$svc"; then
+        echo pending
+    else
+        echo current
+    fi
+}
+
+_pool_restart_mark_age() { # <marker> → "YYYY-MM-DD HH:MM UTC" of the marker's mtime
+    local m; m=$(stat -c %Y "$1" 2>/dev/null) || { echo "unknown time"; return 0; }
+    date -u -d "@$m" '+%Y-%m-%d %H:%M UTC' 2>/dev/null || echo "unknown time"
+}
+
 # ───────────────────────────────────────────────────────────────────────────────
-# 9) DEPLOY NEW CODE — refresh runtime copies from the checkout, then restart
+# 9) DEPLOY NEW CODE — refresh runtime copies from the checkout, restart what changed
 # ───────────────────────────────────────────────────────────────────────────────
 # A lightweight update path for an ordinary code pull (js/html/media only): it
 # refreshes BOTH trees the pool runs from —
 #   · backend  $POOL_APP_SRC  → $POOL_APP_DIR   (index.js, lib/*.js, admin-panel/…)
 #   · frontend $POOL_WEB_SRC  → $POOL_WEB_DIR   (via pool_deploy_web)
-# — and restarts the service so the new code is actually live. This fills the gap
-# between 3) Deploy web files (frontend ONLY — never touches the backend) and
-# 1) Install (heavy: re-runs npm/apt/fail2ban AND does not restart the service).
+# — and restarts the pool only when its runtime code (POOL_RUNTIME_PATHS) changed or
+# an earlier deploy's code is still unloaded; a static-only change goes live without
+# a restart. The games service gets the same treatment in pgs_deploy_code, on its own.
+# This fills the gap between 3) Deploy web files (frontend ONLY — never touches the
+# backend) and 1) Install (heavy: re-runs npm/apt/fail2ban AND does not restart).
 #
 # The backend rsync uses --delete to mirror the checkout (so a file deleted from
 # source is removed on the server too) but EXCLUDES the runtime artefacts the app
@@ -925,7 +1015,7 @@ EOF
 # itself. `uploads` was missing that exclude and was pruned on every deploy.
 pool_deploy_code() {
     echo ""
-    echo -e "  ${BOLD}Deploy new code — ${POOL_NET_LABEL}${RESET} — refresh backend + frontend from the checkout, then restart."
+    echo -e "  ${BOLD}Deploy new code — ${POOL_NET_LABEL}${RESET} — refresh backend + frontend from the checkout, restart what changed."
     echo -e "  ${DIM}Source: $TOOLKIT_ROOT${RESET}"
     echo -e "  ${YELLOW}Pull the latest first${RESET} (git pull) so the checkout holds the new code."
     echo ""
@@ -953,14 +1043,32 @@ pool_deploy_code() {
     old_pkg_hash=$(cat "$POOL_APP_DIR/package.json" "$POOL_APP_DIR/package-lock.json" 2>/dev/null | sha1sum | awk '{print $1}')
     new_pkg_hash=$(cat "$POOL_APP_SRC/package.json" "$POOL_APP_SRC/package-lock.json" 2>/dev/null | sha1sum | awk '{print $1}')
 
+    # package*.json are runtime paths, so a run that needs npm is always a "changed" run.
+    local rt_before rt_after rt_changed=0
+    rt_before=$(_pool_runtime_manifest "$POOL_APP_DIR" "${POOL_RUNTIME_PATHS[@]}")
+
     info "Refreshing backend code → $POOL_APP_DIR ..."
     rsync -a --delete \
         --exclude='pool.db' --exclude='pool.db-wal' --exclude='pool.db-shm' \
         --exclude='.wallet_pass' --exclude='node_modules' \
         --exclude='custom_assets' --exclude='uploads' \
         "$POOL_APP_SRC/" "$POOL_APP_DIR/" \
-        || { error "Backend rsync failed — server code unchanged."; return 1; }
+        || {
+            # A partial copy may already have replaced runtime files; mark them so the
+            # re-run restarts even though it then sees no difference.
+            rt_after=$(_pool_runtime_manifest "$POOL_APP_DIR" "${POOL_RUNTIME_PATHS[@]}")
+            if [[ "$rt_before" != "$rt_after" ]]; then _pool_restart_mark_set "$POOL_RESTART_MARK" "$POOL_SERVICE"; fi
+            error "Backend rsync failed — re-run 9) Deploy new code."; return 1
+        }
     success "Backend code refreshed."
+
+    # Mark NOW, not at the restart: every return between here and the restart (npm
+    # failure, Ctrl-C) would otherwise leave new code on disk that no later deploy sees.
+    rt_after=$(_pool_runtime_manifest "$POOL_APP_DIR" "${POOL_RUNTIME_PATHS[@]}")
+    if [[ "$rt_before" != "$rt_after" ]]; then
+        rt_changed=1
+        _pool_restart_mark_set "$POOL_RESTART_MARK" "$POOL_SERVICE"
+    fi
 
     if [[ "$old_pkg_hash" != "$new_pkg_hash" ]]; then
         local npm_cmd="install"
@@ -982,7 +1090,16 @@ pool_deploy_code() {
     # A pre-de-root install also needs 1) Install re-run once for the hardened unit.
     pool_gwctl_install || true
     pool_ensure_wg_prereqs
+    # pool_deroot may add grinpool to a group (grinsecret, for the node secrets); a running
+    # process gets new groups only from a restart, so a change there counts as runtime.
+    local groups_before groups_after
+    groups_before=$(id -G grinpool 2>/dev/null || true)
     pool_deroot || warn "De-root sweep failed — the service may not start as grinpool."
+    groups_after=$(id -G grinpool 2>/dev/null || true)
+    if [[ "$groups_before" != "$groups_after" ]]; then
+        rt_changed=1
+        _pool_restart_mark_set "$POOL_RESTART_MARK" "$POOL_SERVICE"
+    fi
     if grep -q '^User=root' "/etc/systemd/system/$POOL_SERVICE.service" 2>/dev/null; then
         warn "Service unit still runs as root — re-run 1) Install once to apply the hardened grinpool unit."
     fi
@@ -1004,19 +1121,44 @@ pool_deploy_code() {
     # scripts/admin-reset.js, and this must never be the stale copy on the day it's needed.
     pool_admin_reset_install || true
 
-    # Make the new backend live. Only restart if it's already running; a stopped
-    # service is left stopped (the operator starts it via 6) Service control).
-    if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
-        info "Restarting $POOL_SERVICE to load the new code..."
-        if systemctl restart "$POOL_SERVICE"; then
-            success "$POOL_SERVICE restarted — new code is live."
-        else
-            error "Restart failed — check: journalctl -u $POOL_SERVICE -n 50"
-            return 1
-        fi
-    else
-        info "$POOL_SERVICE is not running — start it via 6) Service control to load the new code."
-    fi
+    # Make the new backend live — only if its runtime code changed (or an earlier
+    # deploy's is still unloaded). A stopped service is left stopped (the operator
+    # starts it via 6) Service control).
+    local decision
+    decision=$(_pool_restart_decision "$POOL_SERVICE" "$POOL_RESTART_MARK" "$rt_changed")
+    case "$decision" in
+        changed|pending)
+            if [[ "$decision" == changed ]]; then
+                info "Pool runtime changed:"
+                _pool_runtime_diff "$rt_before" "$rt_after"
+                if [[ "$groups_before" != "$groups_after" ]]; then
+                    echo -e "      ${DIM}grinpool's group membership (new groups load only on restart)${RESET}"
+                fi
+            else
+                info "Pool runtime unchanged this run, but an earlier deploy is still not loaded"
+                echo -e "  ${DIM}(marker from $(_pool_restart_mark_age "$POOL_RESTART_MARK")).${RESET}"
+            fi
+            info "Restarting $POOL_SERVICE to load the new code..."
+            if systemctl restart "$POOL_SERVICE"; then
+                rm -f "$POOL_RESTART_MARK" 2>/dev/null || warn "Could not remove $POOL_RESTART_MARK — the next deploy will restart once more."
+                success "$POOL_SERVICE restarted — new code is live."
+            else
+                _pool_restart_mark_set "$POOL_RESTART_MARK" "$POOL_SERVICE"
+                error "Restart failed — check: journalctl -u $POOL_SERVICE -n 50"
+                return 1
+            fi
+            ;;
+        current)
+            info "Pool runtime code unchanged (static files only) — $POOL_SERVICE NOT restarted."
+            ;;
+        *)
+            if [[ "$rt_changed" == 1 ]] || [[ -f "$POOL_RESTART_MARK" ]]; then
+                info "$POOL_SERVICE is not running — start it via 6) Service control to load the new code."
+            else
+                info "$POOL_SERVICE is not running — start it via 6) Service control."
+            fi
+            ;;
+    esac
 
     # The /play/ games service rides along when it is installed (design §19.12 (script07_design_games.md)). It
     # restarts only itself; a games failure never fails the pool deploy above.
@@ -3302,7 +3444,7 @@ show_menu() {
     echo ""
     echo -e "${DIM}  ─── Administration ───────────────────────────────${RESET}"
     echo -e "  ${GREEN}8${RESET}) Pool status           ${DIM}(service, port, DB, recent logs)${RESET}"
-    echo -e "  ${GREEN}9${RESET}) Deploy new code       ${DIM}(refresh js/html/media from checkout + restart)${RESET}"
+    echo -e "  ${GREEN}9${RESET}) Deploy new code       ${DIM}(refresh from checkout · restarts only what changed)${RESET}"
     echo -e "  ${GREEN}A${RESET}) Admin recovery        ${DIM}(locked out: clear 2FA / reset password — break-glass)${RESET}"
     echo -e "  ${GREEN}W${RESET}) Multi-region          ${DIM}(WireGuard server + add regional gateways)${RESET}"
     echo -e "  ${GREEN}P${RESET}) Play & chat (games)   ${DIM}(/play/ service: $(_pgs_menu_state)${DIM} · never restarts the pool)${RESET}"

@@ -297,8 +297,9 @@ step_header() { echo ""; echo -e "${BOLD}${DIM}━━━ $* ━━━━━━�
 #             shutdown; a short kill window truncates that and forces the slow
 #             work to re-run on the next boot — so we wait generously.)
 #   Step 2 — SIGKILL any process that did not exit within the timeout.
-#   Step 3 — Kill every tmux session whose name starts with 'grin_', on BOTH
-#            tmux servers (root's socket and the grin user's gtmux socket).
+#   Step 3 — Kill every NODE tmux session on BOTH tmux servers (root's socket
+#            and the grin user's gtmux socket). Wallet listener sessions share
+#            the grin_ prefix and are left running (gnc_is_node_session).
 #   Step 4 — OS-wide sweep for surviving `grin server run` processes — one of
 #            those holds the LMDB lock and breaks the next start.
 # =============================================================================
@@ -332,7 +333,7 @@ stop_grin_gracefully() {
         fi
     done
 
-    # Step 3: close every grin_* tmux session on BOTH tmux servers — root's
+    # Step 3: close every node tmux session on BOTH tmux servers — root's
     # default socket AND the grin user's socket (gtmux). A session missed on
     # either server can re-spawn a node or hide a duplicate.
     gnc_kill_all_grin_sessions

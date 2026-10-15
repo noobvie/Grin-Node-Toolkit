@@ -17,9 +17,10 @@
 #   gnc_grin_pids_for_dir <dir>       grin node pids whose BINARY is <dir>/grin
 #   gnc_session_of_pid <pid>          toolkit session name for a grin node pid
 #   gnc_mark_planned_stop <sess> [reason]   planned-stop marker for the recorder
-#   gnc_mark_all_planned_stops [reason]     …for every running node / grin_* session
+#   gnc_is_node_session <sess> [sock]       rc 0 if <sess> is a NODE session (not a wallet)
+#   gnc_mark_all_planned_stops [reason]     …for every running node / node session
 #   gnc_kill_grin_session <sess> [reason]   kill named session on BOTH tmux servers
-#   gnc_kill_all_grin_sessions [reason]     kill every grin_* session on BOTH servers
+#   gnc_kill_all_grin_sessions [reason]     kill every NODE session on BOTH servers
 #   gnc_kill_grin_procs [dir] [grace] TERM→wait→KILL grin server processes
 #   _gnc_heal_grin_socket_dir         reclaim /tmp/tmux-<grin uid> from a foreign owner
 #   _gnc_node_run_cmd <dir> <bin> [cron]   the command a node's tmux pane runs
@@ -76,9 +77,10 @@ if ! declare -F success >/dev/null 2>&1; then success() { echo "[OK]    $*"; }; 
 # -----------------------------------------------------------------------------
 # _grin_session_name <node_dir>
 # tmux session name convention: grin_<nodetype>_<networktype>.
-# Canonical copy (01/03/07 call this, none keeps its own). Uses UNDERSCORES so the
-# name matches the `grep '^grin_'` session sweeps (a dashed name would escape
-# them). All scripts (01/03/04/07/08) derive names from this function.
+# Canonical copy (01/03/07 call this, none keeps its own). All scripts
+# (01/03/04/07/08) derive names from this function. The full-stop sweeps match
+# these names via gnc_is_node_session — `grin_` alone is NOT a node marker: the
+# 05/07 wallet listeners share that prefix.
 # -----------------------------------------------------------------------------
 _grin_session_name() {
     case "$(basename "${1:-}")" in
@@ -244,6 +246,34 @@ gnc_session_of_pid() {
     _grin_session_name "$(dirname "$exe")"
 }
 
+# -----------------------------------------------------------------------------
+# gnc_is_node_session <sess> [socket]   → rc 0 if <sess> is a grin NODE session.
+# The full-stop sweeps use this, never a bare `^grin_` match: the wallet
+# listeners share that prefix (grin_pubpoolwallet, grin_solowallet_<net>,
+# grin_<net>_cmd_wallet). Killing one in a node stop is silent damage — the
+# de-rooted pool wallet survives its session as an orphan still holding its
+# port, so its watchdog sees nothing wrong and the session never comes back.
+# A node session is a _grin_session_name name, or a grin_* session whose pane
+# was started with `grin server run` (custom node dirs, 081's remote launch).
+# [socket] = tmux socket whose panes to inspect; empty = root's default server.
+# Output is captured before matching: `tmux … | grep -q` under pipefail can
+# return 141 (SIGPIPE) on a MATCH.
+# -----------------------------------------------------------------------------
+gnc_is_node_session() {
+    local sess="${1:-}" sock="${2:-}" cmds
+    case "$sess" in
+        grin_full_mainnet|grin_pruned_mainnet|grin_pruned_testnet) return 0 ;;
+        grin_*) ;;
+        *) return 1 ;;
+    esac
+    if [[ -n "$sock" ]]; then
+        cmds=$(tmux -S "$sock" list-panes -s -t "=$sess" -F '#{pane_start_command}' 2>/dev/null) || return 1
+    else
+        cmds=$(tmux list-panes -s -t "=$sess" -F '#{pane_start_command}' 2>/dev/null) || return 1
+    fi
+    [[ "$cmds" == *"grin server run"* ]]
+}
+
 # _gnc_net_of_session <sess>   → mainnet | testnet, rc 1 if the name has neither.
 _gnc_net_of_session() {
     case "${1:-}" in
@@ -331,13 +361,30 @@ gnc_mark_planned_stop() {
     return 0
 }
 
+# _gnc_node_sessions [socket]  — one NODE session name per line on one tmux
+# server (gnc_is_node_session); empty socket = root's default server. rc 0.
+_gnc_node_sessions() {
+    local sock="${1:-}" sess names
+    if [[ -n "$sock" ]]; then
+        names=$(tmux -S "$sock" ls -F '#{session_name}' 2>/dev/null) || return 0
+    else
+        names=$(tmux ls -F '#{session_name}' 2>/dev/null) || return 0
+    fi
+    while IFS= read -r sess; do
+        [[ -n "$sess" ]] || continue
+        if gnc_is_node_session "$sess" "$sock"; then echo "$sess"; fi
+    done <<< "$names"
+    return 0
+}
+
 # -----------------------------------------------------------------------------
 # gnc_mark_all_planned_stops [reason]  — gnc_mark_planned_stop for every running
-# grin node and every grin_* session on BOTH tmux servers. For full-stop paths.
+# grin node and every node session on BOTH tmux servers. For full-stop paths.
 # -----------------------------------------------------------------------------
 gnc_mark_all_planned_stops() {
-    local reason="${1:-}" pid sess sock
+    local reason="${1:-}" pid sess sock=""
     [[ -d "$GNC_EVENTS_DIR" ]] || return 0
+    sock=$(gnc_grin_tmux_socket) || sock=""
     while IFS= read -r sess; do
         [[ -n "$sess" ]] || continue
         gnc_mark_planned_stop "$sess" "$reason"
@@ -347,11 +394,9 @@ gnc_mark_all_planned_stops() {
                 [[ -n "$pid" ]] || continue
                 gnc_session_of_pid "$pid" || true
             done < <(pgrep -f 'grin server run' 2>/dev/null || true)
-            tmux ls -F '#{session_name}' 2>/dev/null || true
-            if sock=$(gnc_grin_tmux_socket); then
-                tmux -S "$sock" ls -F '#{session_name}' 2>/dev/null || true
-            fi
-        } | grep '^grin_' | sort -u || true
+            _gnc_node_sessions ""
+            if [[ -n "$sock" ]]; then _gnc_node_sessions "$sock"; fi
+        } | sort -u || true
     )
     return 0
 }
@@ -373,21 +418,23 @@ gnc_kill_grin_session() {
 }
 
 # -----------------------------------------------------------------------------
-# gnc_kill_all_grin_sessions [reason]  — kill every grin_* session on BOTH tmux
-# servers, after writing a planned-stop marker for each node.
+# gnc_kill_all_grin_sessions [reason]  — kill every NODE session on BOTH tmux
+# servers, after writing a planned-stop marker for each node. Wallet listener
+# sessions are left alone (gnc_is_node_session). Exact-name targets (`=`): tmux
+# otherwise prefix-matches, so a vanished name could hit a longer sibling.
 # -----------------------------------------------------------------------------
 gnc_kill_all_grin_sessions() {
     local reason="${1:-}" sess sock
     gnc_mark_all_planned_stops "$reason"
     while IFS= read -r sess; do
         [[ -n "$sess" ]] || continue
-        tmux kill-session -t "$sess" 2>/dev/null && info "Tmux session '$sess' closed (root socket)." || true
-    done < <(tmux ls -F '#{session_name}' 2>/dev/null | grep '^grin_' || true)
+        tmux kill-session -t "=$sess" 2>/dev/null && info "Tmux session '$sess' closed (root socket)." || true
+    done < <(_gnc_node_sessions "")
     if sock=$(gnc_grin_tmux_socket); then
         while IFS= read -r sess; do
             [[ -n "$sess" ]] || continue
-            tmux -S "$sock" kill-session -t "$sess" 2>/dev/null && info "Tmux session '$sess' closed (grin socket)." || true
-        done < <(tmux -S "$sock" ls -F '#{session_name}' 2>/dev/null | grep '^grin_' || true)
+            tmux -S "$sock" kill-session -t "=$sess" 2>/dev/null && info "Tmux session '$sess' closed (grin socket)." || true
+        done < <(_gnc_node_sessions "$sock")
     fi
     return 0
 }

@@ -191,6 +191,18 @@ takes the node dir from its caller, and signals the port holder only if it is a 
 dir; `rebuild_chain_data_only` refuses while a grin process of the dir exists. **Lesson:** an action that deletes names its target and proves it is dead
 first; "stop all" is a loop over the table.
 
+### Menu exits
+#### "0" inside an action quit Script 01
+**Symptom:** answering `0` at a wizard prompt (legacy `~/.grin`, archive mode, existing archive or
+chain_data, no live mirror), `n` to the low-disk warning, or `0` after an error dropped the operator at
+the toolkit's main menu instead of the Script 01 menu. **Cause:** those prompts date from the linear
+wizard and call `exit 0` (`die` exits too); inside the menu loop that ends the whole script. An unbound
+variable under `set -u` did the same, since it exits whatever errexit says. **Fix:** `s01_run_action`
+runs each action in a subshell, so any exit ends only the action; inside it `die` offers only "back to
+the Script 01 menu" (its `exec "$0"` retry would fail the flock the parent holds). Uncommitted at
+writing. **Lesson:** a loop wrapped around old linear code inherits every `exit` in it — contain them,
+don't hunt them one by one.
+
 ## 4. Open items
 
 - **Not VPS-tested** — nothing in this doc has run on a VPS. Acceptance order: `bash -n` on the entry and

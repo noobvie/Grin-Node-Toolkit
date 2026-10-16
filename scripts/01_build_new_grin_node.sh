@@ -287,12 +287,20 @@ die() {
     echo -e "${RED}${BOLD}╚══════════════════════════════════════════════════╝${RESET}"
     echo -e "${RED}[ERROR]${RESET} $*"
     echo ""
+    log "[FATAL] $*"
+    # Inside a menu action (s01_run_action's subshell) leaving the subshell IS the way back to the Script 01 menu.
+    # `exec "$0"` there would start a second instance that fails the flock the parent still holds.
+    if [[ "${S01_IN_ACTION:-0}" == "1" ]]; then
+        echo -e "  ${DIM}Log: $LOG_FILE${RESET}"
+        echo -ne "${DIM}[Enter = back to the Script 01 menu]: ${RESET}"
+        read -r _ || true
+        exit 1
+    fi
     echo -e "${YELLOW}▶ Fix the issue above, then choose:${RESET}"
     echo -e "  ${GREEN}Enter${RESET} — retry from the beginning"
     echo -e "  ${RED}0${RESET}     — return to the main menu"
     echo -e "  ${DIM}Log: $LOG_FILE${RESET}"
     echo ""
-    log "[FATAL] $*"
     local _die_choice
     echo -ne "${DIM}[Enter = retry  /  0 = main menu]: ${RESET}"
     read -r _die_choice || true

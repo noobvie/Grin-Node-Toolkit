@@ -323,15 +323,22 @@ s01_act_install() {
 }
 
 s01_run_action() {
-    case "$S01_KEY" in
-        start)   s01_act_start ;;
-        stop)    s01_act_stop ;;
-        update)  s01_act_update ;;
-        rebuild) s01_act_rebuild "$S01_ARG" ;;
-        install) s01_act_install ;;
-        source)  gsb_menu || true ;;
-        auto)    run_super_auto || true ;;
-    esac
+    # In a subshell: the wizard steps still `exit 0` on their "0" prompts and die() exits too, and an unbound
+    # variable under `set -u` exits regardless of errexit. In the subshell any of those ends only this action and
+    # the menu loop carries on. Nothing is lost by it — s01_reset_state and s01_scan_nodes rebuild every global
+    # the next pass reads.
+    (
+        S01_IN_ACTION=1
+        case "$S01_KEY" in
+            start)   s01_act_start ;;
+            stop)    s01_act_stop ;;
+            update)  s01_act_update ;;
+            rebuild) s01_act_rebuild "$S01_ARG" ;;
+            install) s01_act_install ;;
+            source)  gsb_menu || true ;;
+            auto)    run_super_auto || true ;;
+        esac
+    ) || true
     return 0
 }
 

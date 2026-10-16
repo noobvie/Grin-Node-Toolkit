@@ -21,7 +21,7 @@
 # "Sync completed.").
 # If no host in the chosen zone — nor in the America fallback — passes, the user
 # is prompted to enter a custom base URL (e.g. https://myserver.com) or press 0
-# to return to the master script.
+# to return to the Script 01 menu (it exits the action subshell).
 # Custom sources are accepted if they contain a .tar.gz in their directory
 # listing (status file check is skipped for custom URLs).
 # Parses the directory index to find .tar.gz and .sha256 filenames dynamically.
@@ -347,7 +347,7 @@ download_chain_data() {
         warn "Existing archive found: $(basename "$existing_tar")"
         echo -e "  ${GREEN}y${RESET}) Remove and download a fresh copy"
         echo -e "  ${RED}n${RESET}) Keep it and continue"
-        echo -e "  ${DIM}0${RESET}) Return to main menu"
+        echo -e "  ${DIM}0${RESET}) Back to the Script 01 menu"
         echo ""
         echo -ne "${BOLD}Remove existing archive? [Y/n/0]: ${RESET}"
         read -r rm_choice || true
@@ -469,9 +469,9 @@ download_chain_data() {
         echo ""
         while true; do
             echo -e "  Enter a ${BOLD}custom base URL${RESET}  ${DIM}(e.g. https://example.com)${RESET}"
-            echo -e "  ${GREEN}0${RESET} — return to master script"
+            echo -e "  ${GREEN}0${RESET} — back to the Script 01 menu"
             echo ""
-            echo -ne "${DIM}[Custom URL / 0 = main menu]: ${RESET}"
+            echo -ne "${DIM}[Custom URL / 0 = Script 01 menu]: ${RESET}"
             local custom_url
             read -r custom_url || true
             case "${custom_url:-}" in
@@ -647,7 +647,7 @@ _prompt_remove_chain_data() {
     warn "Existing chain_data directory found: $GRIN_DIR/chain_data"
     echo -e "  ${GREEN}Y${RESET}) Remove and extract fresh  ${DIM}(default)${RESET}"
     echo -e "  ${RED}n${RESET}) Keep it (existing files may be overwritten)"
-    echo -e "  ${DIM}0${RESET}) Return to main menu"
+    echo -e "  ${DIM}0${RESET}) Back to the Script 01 menu"
     echo ""
     echo -ne "${BOLD}Remove existing chain_data? [Y/n/0]: ${RESET}"
     read -r rm_choice || true

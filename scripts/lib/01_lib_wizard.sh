@@ -27,7 +27,7 @@ check_legacy_grin_dir() {
     echo ""
     echo -e "  ${RED}D${RESET}) Delete ${BOLD}$HOME/.grin${RESET}  ${DIM}(recommended)${RESET}"
     echo -e "  ${DIM}Enter${RESET}) Keep it and continue  ${DIM}(may cause config conflicts)${RESET}"
-    echo -e "  ${DIM}0${RESET}) Return to master script"
+    echo -e "  ${DIM}0${RESET}) Back to the Script 01 menu"
     echo ""
     echo -ne "${BOLD}Choice [D/Enter/0]: ${RESET}"
     local _legacy_choice
@@ -320,7 +320,7 @@ select_archive_mode() {
     echo ""
     echo -e "  ${GREEN}1${RESET}) Pruned       (default, recommended — smaller storage, ~10 GiB)"
     echo -e "  ${YELLOW}2${RESET}) Full archive (mainnet only — full UTXO history, ~25 GiB)"
-    echo -e "  ${DIM}0${RESET}) Return to main menu"
+    echo -e "  ${DIM}0${RESET}) Back to the Script 01 menu"
     echo ""
 
     if [[ "$network" == "testnet" ]]; then

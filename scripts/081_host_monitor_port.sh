@@ -124,7 +124,7 @@ show_local_grin_instances() {
 # Results are written to MASTER_LOG_FILE.
 # =============================================================================
 # Staleness threshold, per site_key. Must stay in step with _max_age_for_site_key
-# in 01_build_new_grin_node.sh — that is the function that decides whether a mirror
+# in lib/01_lib_chain_data.sh — that is the function that decides whether a mirror
 # is fresh enough to DOWNLOAD from, and a monitor that disagrees with it is worse
 # than no monitor: it either cries stale about hosts Script 01 happily uses, or
 # stays quiet about hosts Script 01 has already started skipping.
@@ -1249,7 +1249,9 @@ for SOPT in "" "-S /tmp/tmux-$GUID/default"; do
         tmux $SOPT kill-session -t "=$sess" 2>/dev/null && echo "  closed tmux: $sess" || true
     done < <(tmux $SOPT ls -F "#{session_name}" 2>/dev/null | grep "^grin_" || true)
 done
-pkill -KILL -f "grin server run" 2>/dev/null || true
+for p in $(pgrep -x grin 2>/dev/null || true); do
+    if tr "\0" " " < "/proc/$p/cmdline" 2>/dev/null | grep -q "server run"; then kill -KILL "$p" 2>/dev/null || true; fi
+done
 '
 
 _MD_NODE_START_SNIPPET='

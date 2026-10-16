@@ -79,7 +79,8 @@ resolver, the allowlist rules, and what is still open.
 | Doc | What it covers |
 |---|---|
 | [script01_design_ipv6.md](script01_design_ipv6.md) | IPv6 support for the node builder |
-| [script01_reference_flowchart.md](script01_reference_flowchart.md) | Node build flow — chain sync, binary install |
+| [script01_implementation.md](script01_implementation.md) | Script 01 as built: fixed-key menu, node table, per-node actions, file layout · key × state runbook · Build notes · Open items (not VPS-tested) |
+| [script01_reference_flowchart.md](script01_reference_flowchart.md) | Entry menu + node build flow — chain sync, binary install |
 | [script02_reference_flowchart.md](script02_reference_flowchart.md) | Nginx file-server manager flow |
 | [script03_design.md](script03_design.md) · [_implementation](script03_implementation.md) | Chain-data sharing: mirrors, landing page, remote pull — design, and as-built + build notes |
 | [script03_reference_flowchart.md](script03_reference_flowchart.md) | Chain-data sharing flow |

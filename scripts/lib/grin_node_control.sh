@@ -187,11 +187,11 @@ gnc_has_grin_session() {
     local sess="${1:-}" sock
     GNC_SESSION_SOCKET=""
     [[ -n "$sess" ]] || return 1
-    if sock=$(gnc_grin_tmux_socket) && tmux -S "$sock" has-session -t "$sess" 2>/dev/null; then
+    if sock=$(gnc_grin_tmux_socket) && tmux -S "$sock" has-session -t "=$sess" 2>/dev/null; then
         GNC_SESSION_SOCKET="grin"
         return 0
     fi
-    if tmux has-session -t "$sess" 2>/dev/null; then
+    if tmux has-session -t "=$sess" 2>/dev/null; then
         GNC_SESSION_SOCKET="root"
         return 0
     fi
@@ -410,9 +410,9 @@ gnc_kill_grin_session() {
     local sess="${1:-}" reason="${2:-}" sock
     [[ -n "$sess" ]] || return 0
     gnc_mark_planned_stop "$sess" "$reason"
-    tmux kill-session -t "$sess" 2>/dev/null || true
+    tmux kill-session -t "=$sess" 2>/dev/null || true
     if sock=$(gnc_grin_tmux_socket); then
-        tmux -S "$sock" kill-session -t "$sess" 2>/dev/null || true
+        tmux -S "$sock" kill-session -t "=$sess" 2>/dev/null || true
     fi
     return 0
 }

@@ -1,7 +1,7 @@
 # =============================================================================
 # lib/01_lib_source_build.sh — compile the grin node binary from git source
 # =============================================================================
-# Sourced by 01_build_new_grin_node.sh. Reached from the Step-1 menus with key G.
+# Sourced by 01_build_new_grin_node.sh. Reached from the Script 01 menu with key G.
 #
 #   WHY THIS EXISTS
 #     Script 01 normally installs the newest *release* asset from the GitHub API
@@ -691,7 +691,7 @@ _gsb_install_to_instances() {
 
     if ! _gsb_collect_instances; then
         warn "No installed Grin node found — nothing to install into."
-        info "Build a node first (Step-1 menu), or use option 3 to have this"
+        info "Build a node first (menu key 5, Install a node), or use option 3 to have this"
         info "binary picked up by the node build you are about to run."
         return 1
     fi
@@ -819,7 +819,7 @@ _gsb_restore_previous() {
         info "Two other ways back:"
         info "  · option 2 — reinstall an older binary from $GSB_BIN_DIR"
         info "    (archived 'grin-<ver>-replaced-<id>' entries are previous binaries)"
-        info "  · Step-1 menu 'update binary only' — re-download the latest release"
+        info "  · menu key 3 (Update binary) — re-download the latest release"
         return 1
     fi
 
@@ -958,8 +958,8 @@ _gsb_build() {
 # download_grin_binary already reuses $GRIN_BIN_TMP when it is set (that is how
 # the mainnet+testnet double build avoids a second download), so pointing it at
 # the artifact is all that is needed. It is exported as GRIN_PREBUILT_BIN too
-# because several Step-1 branches re-exec the script ("exec \$0"), which would
-# otherwise drop a plain shell variable.
+# because the menu resets the session state after every action (s01_reset_state),
+# which would otherwise drop a plain shell variable.
 # -----------------------------------------------------------------------------
 _gsb_use_for_session() {
     if [[ -z "${GSB_ARTIFACT:-}" || ! -x "${GSB_ARTIFACT:-}" ]]; then
@@ -979,7 +979,7 @@ _gsb_use_for_session() {
 }
 
 # -----------------------------------------------------------------------------
-# gsb_menu — public entry point (Step-1 menus, key G).
+# gsb_menu — public entry point (Script 01 menu, key G).
 # Always returns 0: it is called from menu loops running under `set -e`.
 # -----------------------------------------------------------------------------
 gsb_menu() {

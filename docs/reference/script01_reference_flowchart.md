@@ -1,67 +1,84 @@
 ╔══════════════════════════════════════════════════════════════════════════╗
-║                    01_build_new_grin_node.sh  —  ENTRY                  ║
+║               01_build_new_grin_node.sh  —  ENTRY + MENU                 ║
 ╚══════════════════════════════════════════════════════════════════════════╝
 
-> **Covers code as of:** 2026-07-01 · **Last verified:** never systematically verified
-> **Product code last changed:** 2026-09-25 — `scripts/lib/01_lib_source_build.sh` + new `scripts/patches/grin/` (key G offers toolkit grin patches after checkout; not described here); 2026-08-18 — `scripts/01_build_new_grin_node.sh`, `scripts/lib/01_lib_source_build.sh`
+> **Covers code as of:** 2026-10-15 for the ENTRY + MENU section, the Super Auto box and the key-flow notes at the end; 2026-07-01 for Steps 1b–14 in between, which the menu work did not change but nobody has re-read against the code since · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-10-15 — `scripts/01_build_new_grin_node.sh` split into an entry plus `scripts/lib/01_lib_*.sh`; new menu (`lib/01_lib_menu.sh`) and node table (`lib/01_lib_node_table.sh`), working tree at the time of writing; 2026-09-25 — `scripts/lib/01_lib_source_build.sh` + new `scripts/patches/grin/` (key G offers toolkit grin patches after checkout; not described here); 2026-08-18 — `scripts/lib/01_lib_source_build.sh`
 
+As-built detail, keys per state and the Build notes → [script01_implementation.md](script01_implementation.md).
+
+        main():  root check → flock /var/run/grin-toolkit-01.lock → s01_menu_loop
                                     │
-                    ┌───────────────▼───────────────┐
-                    │   STEP 1 — Process & Port Check│
-                    │  scan ports 3414 / 13414       │
-                    └───────────────────────────────┘
+          ┌─────────────────────────▼──────────────────────────────────────┐
+          │  EVERY PASS of s01_menu_loop  (lib/01_lib_menu.sh)              │
+          │─────────────────────────────────────────────────────────────────│
+          │  s01_reset_state    wizard globals back to start; GRIN_BIN_TMP  │
+          │                     re-seeded from GRIN_PREBUILT_BIN (a key-G   │
+          │                     build survives)                             │
+          │  s01_scan_nodes     ONE read-only scan, per network:            │
+          │                     conf + disk + grin PROCESS (binary = dir/   │
+          │                     grin, not "port bound") + tmux session      │
+          │                     (gtmux or root) + non-grin holder of the    │
+          │                     P2P port 3414 / 13414 (never 3415: wallet)  │
+          │  s01_render_status  one line per network, conf-vs-disk verdict, │
+          │                     red line for a foreign port holder          │
+          │  s01_render_keys    a key that cannot act = DIM + its reason    │
+          └─────────────────────────┬──────────────────────────────────────┘
                                     │
-          ┌─────────────────────────┼──────────────────────────┐
-          │                         │                          │
-   Both running              Only 3414 running          Only 13414 running
-  3414 + 13414                  (mainnet)                  (testnet)
-          │                         │                          │
-  ┌───────▼──────┐         ┌────────▼────────┐       ┌────────▼────────┐
-  │ [WARN] both  │         │  free slot:     │       │  free slot:     │
-  │A/B/M/T/K/0  │         │A/B/M/S/1/0      │       │A/B/T/S/1/0      │
-  └──────────────┘         └─────────────────┘       └─────────────────┘
-   A→run_super_auto ★      A→run_super_auto ★         A→run_super_auto ★
-   B→update_binary_only     B→update_binary_only       B→update_binary_only
-   M→stop_grin_one(3414)    M→stop_grin_one(3414)      T→stop_grin_one(13414)
-     _remove_instance_dirs    _remove_instance_dirs       _remove_instance_dirs
-     mainnet                  mainnet                     testnet
-     exec "$0" ↺              exec "$0" ↺                 exec "$0" ↺
-   T→stop_grin_one(13414)    S→_start_installed_node     S→_start_installed_node
-     _remove_instance_dirs     (testnet only) → exit        (mainnet only) → exit
-     testnet                  1→RESTRICTED=testnet        1→RESTRICTED=mainnet
-     exec "$0" ↺               continue ↓                  continue ↓
-   K→stop_grin_gracefully    0→exit                      0→exit
-     _remove_instance_dirs
-     all + truncate conf
-     exec "$0" ↺
-   0→exit
+              Select [1-5 / G A / 0]    typo or dim key → re-prompt
+                                    │    (never exits; only 0 / EOF leaves)
+     ┌───────┬──────────┬───────────┼────────────┬───────────┬──────┬───────┐
+     1       2          3           4            5           G      A       0
+   Start    Stop     Update       Rebuild      Install    source   Super   leave
+   a node   a node   binary       a node       a node     build    Auto
+     │       │          │            │            │         │        │
+     │       │          │            │            │         │        │
+     ▼       ▼          ▼            ▼            ▼         ▼        ▼
+  pick net  pick net  pick net    pick net    legacy-dir   gsb_menu run_super_auto
+  (only the (only the (mainnet/   (nets with   check        (lib/    ★ (see box
+  nets that nets that  testnet/    a node dir) → OS/deps    01_lib_   below)
+  can start) run)      both,         │         → select_     source_
+     │       │         Enter=both)   │           network     build)
+     ▼       ▼          │       ┌────┴────┐      (FREE nets
+ s01_start s01_stop     ▼       1         2       only)
+ _node     _node    update_   chain_data  full      │
+  │         │       binary_   only        reinstall ▼
+  │         │       only      (typed      (typed   setup_one_node
+  │         │         │       REBUILD)    REBUILD, (Steps 4–14 below)
+  │         │         │          │        or DELETE-
+  │         │         │          ▼        ARCHIVE
+  │         │         │    rebuild_chain_ for a full
+  │         │         │    data_only      archive)
+  │         │         │    stop THAT         │
+  │         │         │    node → refuse     ▼
+  │         │         │    while a grin   s01_full_reinstall
+  │         │         │    proc of the    stop THAT node → delete its
+  │         │         │    dir lives →    dirs + conf lines →
+  │         │         │    rm chain_data  setup_one_node <that net>
+  │         │         │    only → fetch   (pruned/full asked at Step 4;
+  │         │         │    + extract →    secrets + .onion survive)
+  │         │         │    start
+  │         │         ▼
+  │         │   download release ONCE → per node (mainnet first):
+  │         │   stop → swap binary (grin.prev + /opt/grin/bin copy)
+  │         │   → start ONLY IF it was running → GRIN_STAGGER_SECS
+  │         │   gap before the second node is stopped
+  │         ▼
+  │   planned-stop marker → SIGTERM that dir's grin → kill ITS session
+  │   (exact -t "=name", both tmux servers) → sweep that dir's leftovers
+  ▼
+  gnc_launch_node_session (grin user, HOME=dir, gtmux); orphan cleared first;
+  failure is returned, not die'd
 
-   ★ A (Super Auto) is offered from EVERY Step-1 branch. On success it
-     exit 0's the script; on cancel it falls back to that branch's menu.
-     See the "SUPER AUTO — one-hit" box below.
+   Every action ends with "Press Enter" → back to the top of the loop (fresh scan).
+   Hidden aliases: s→1   b→3   m→4 mainnet   t→4 testnet.
+   Gone: K, C, N, R and the wizard's pruned↔full switch (now 4 → full reinstall).
 
-          │                         │                          │
-          │         Neither running — stale/orphan check       │
-          │         (pgrep, ss ports 3413/3414/13414/3415)     │
-          │         also detects installed-but-not-running      │
-          │         nodes (conf file or binary on disk)         │
-          │                                                     │
-          │   IF conflicts found  [A/K/C/S/(R)/N/0]:            │
-          │         A → run_super_auto ★ (wipe+rebuild both)    │
-          │         K → kill all conflicting processes          │
-          │             truncate conf → continue build          │
-          │         C → continue with warning only              │
-          │         S → _start_installed_node (all nets)        │
-          │             → exit 0                                │
-          │         R → rebuild a detected installed node       │
-          │         N/0 → abort                                 │
-          │         Enter → recheck                             │
-          │                                                     │
-          │   ELSE no conflicts  [A/1/0, Enter = 1]:            │
-          │         A → run_super_auto ★ (fresh install both)   │
-          │         1 → custom wizard (default) → continue ↓    │
-          │         0 → return to main menu                     │
-          └─────────────────────────┴──────────────────────────┘
+   ★ A (Super Auto) wipes BOTH nodes. It returns to the menu when it finishes
+     or is cancelled. See the "SUPER AUTO — one-hit" box below.
+
+   Keys 5, 4 → full reinstall, and A continue into the setup pipeline below
+   (Step 1b → Step 2 → … → Step 14), once per node.
                                     │
                     ┌───────────────▼────────────────────────┐
                     │   STEP 1b — Legacy directory check     │
@@ -73,7 +90,7 @@
                                     │
          ┌──────────────────────────▼────────────────────────────────────────┐
          │   SUPER AUTO — one-hit: wipe & rebuild BOTH nodes (run_super_auto) │
-         │   (chosen via A from any Step-1 branch; sets SUPER_AUTO=true)      │
+         │   (chosen via A on the menu; sets SUPER_AUTO=true)                 │
          │───────────────────────────────────────────────────────────────────│
          │  Opinionated, near-zero-interaction path. Hard-wired choices:      │
          │    • BOTH networks, PRUNED only   • on-the-fly STREAMED chain data │
@@ -89,7 +106,7 @@
          │            type REBUILD to proceed, else cancel (→1)               │
          │        clean box → simple [Y/n]                                    │
          │                                                                    │
-         │  3. Kill + wipe (reuses K-path helpers, no duplicated logic):      │
+         │  3. Wipe (stop = s01_stop_all, no pattern sweep):                  │
          │        stop_grin_gracefully → _remove_instance_dirs all            │
          │        → truncate INSTANCES_CONF                                   │
          │                                                                    │
@@ -115,7 +132,7 @@
          │    (gnk_* from lib/grin_node_keepalive.sh, sourced at top; all     │
          │     three steps idempotent; failures warn, don't abort)            │
          │                                                                    │
-         │  Returns: 0 = both built (caller exit 0) ; 1 = cancel (fall back). │
+         │  Returns: 0 = both built ; 1 = cancel. Either → menu.              │
          └───────────────────────────────────────────────────────────────────┘
                                     │  (Super Auto path re-enters the same
                                     │   Steps 2→14 pipeline below, per-node)
@@ -354,17 +371,33 @@
          └───────────────────────────────┘
 
 
-Key flows to highlight:
+Key flows to highlight (menu keys; the as-built table is in script01_implementation.md):
 
-A (Super Auto — one-hit wipe & rebuild both) — run_super_auto, offered from EVERY Step-1
-  branch (both-running, mainnet-only, testnet-only, stale/orphan, AND the no-conflict fresh
-  case which now prompts A/1/0). Unlike M/T/K it does NOT exec "$0" — it runs the whole
-  pipeline inline in one process:
+1 / 2 (start / stop a node) — one network per pick, via s01_start_node / s01_stop_node. Stop
+  names only that network's session (exact `-t "=name"`, root AND grin tmux servers) and only
+  grin processes whose binary is that dir's; wallet sessions that share the `grin_` prefix are
+  never touched. Start goes through gnc_launch_node_session (the node launch contract).
+
+3 (binary update) — bypasses Steps 2–14. mainnet / testnet / both (default). Downloads once,
+  then per node: stop → swap (old binary kept as grin.prev and archived under /opt/grin/bin) →
+  start only if it was running. A stopped node is updated and left stopped. Never exits.
+
+4 (rebuild a node) — pick network, then:
+  • chain_data only: rebuild_chain_data_only — stop, refuse while a grin process of the dir
+    lives, rm chain_data only, re-download + extract + start. Config, secrets, .onion kept.
+  • full reinstall: typed REBUILD (DELETE-ARCHIVE when a full archive is among the dirs) →
+    s01_full_reinstall — stop THAT node, delete its dirs and conf lines, setup_one_node for that
+    network. The other network keeps running. This is also how mainnet switches pruned ↔ full.
+
+5 (install) — only a network with no node dir. legacy-dir check → OS/deps → select_network
+  (offers the free networks; typo re-prompts, 0 returns) → setup_one_node (twice for "both").
+
+A (Super Auto — one-hit wipe & rebuild both) — run_super_auto. Inline, one process:
     1. Soft 20 GB disk gate (_super_auto_free_gb; < 20 → warn + FORCE override, else cancel).
        This gate replaces the per-node disk check → GRIN_SKIP_DISK_CHECK=1.
-    2. State-aware confirm: destructive (running port OR installed node) → type REBUILD;
-       clean box → [Y/n].
-    3. Reuses K-path wipe: stop_grin_gracefully → _remove_instance_dirs all → truncate conf.
+    2. State-aware confirm: destructive (running port OR installed node) → type REBUILD
+       (DELETE-ARCHIVE if a full archive exists); clean box → [Y/n].
+    3. Wipe: stop_grin_gracefully (= s01_stop_all) → _remove_instance_dirs all → truncate conf.
     4. check_os_and_deps → check_legacy_grin_dir → SUPER_AUTO=true →
        setup_one_node mainnet → setup_one_node testnet (both pruned + streamed).
   SUPER_AUTO=true suppresses the archive-mode prompt (forced pruned), the transfer-mode
@@ -372,23 +405,10 @@ A (Super Auto — one-hit wipe & rebuild both) — run_super_auto, offered from 
   save_instance_location, _super_auto_harden adds @reboot autostart (gnk_autostart_enable),
   the */5 node-sync watchdog (gnk_watchdog_install), and copytruncate logrotate
   (_install_grin_logrotate). gnk_* come from lib/grin_node_keepalive.sh (sourced at top).
-  On success → caller exit 0; on cancel → return 1 → caller re-shows its own menu.
+  Success or cancel → back to the menu. It wipes only the dirs the conf lists.
 
-B (binary update) — completely bypasses steps 2–14. Reads conf → downloads binary once → stop_grin_gracefully (no conf wipe) → replace binary → restart tmux per instance.
-
-s (start installed) — available from all Step 1 branches:
-  • Both nodes stopped (stale/orphan check): starts all installed nodes.
-  • Only mainnet running: S starts installed testnet node only (safe — won't touch running mainnet tmux).
-  • Only testnet running: S starts installed mainnet node only (safe — won't touch running testnet tmux).
-  _start_installed_node accepts optional network filter ("mainnet"/"testnet") to target only that network.
-
-M / T (kill one & rebuild) — stop_grin_one kills process + tmux (conf entries left intact) →
-  _remove_instance_dirs reads conf to find dirs, deletes them, then clears conf entries →
-  GRIN_SKIP_DISK_CHECK=1 exec "$0" restarts script → now in single-running-node scenario →
-  user picks install/rebuild → full steps 4–14.
-
-K (kill all & rebuild both) — stop_grin_gracefully + _remove_instance_dirs all + truncate entire conf →
-  GRIN_SKIP_DISK_CHECK=1 exec "$0" → fresh start with no restrictions.
+G (source build / rollback) — gsb_menu, lib/01_lib_source_build.sh. Stops ALL running nodes
+  while it swaps a binary (known gap, see script01_implementation.md Open items).
 
 "both" network — runs setup_one_node twice sequentially. Binary download cached after first run
   (reused for testnet). Each run independently saves to conf.

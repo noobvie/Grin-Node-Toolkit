@@ -352,7 +352,7 @@ download_chain_data() {
         echo -ne "${BOLD}Remove existing archive? [Y/n/0]: ${RESET}"
         read -r rm_choice || true
         case "${rm_choice,,}" in
-            0) exit 0 ;;
+            0) exit "${S01_RC_BACK:-0}" ;;
             n) info "Keeping existing archive. Proceeding..." ;;
             *)
                 rm -f "$existing_tar"
@@ -476,7 +476,7 @@ download_chain_data() {
             read -r custom_url || true
             case "${custom_url:-}" in
                 0)
-                    exit 0
+                    exit "${S01_RC_BACK:-0}"
                     ;;
                 "")
                     warn "No URL entered — try again or press 0 to return."
@@ -653,7 +653,7 @@ _prompt_remove_chain_data() {
     read -r rm_choice || true
     case "${rm_choice,,}" in
         n) info "Keeping existing chain_data (existing files may be overwritten)..." ;;
-        0) exit 0 ;;
+        0) exit "${S01_RC_BACK:-0}" ;;
         *) info "Removing existing chain_data..."
            rm -rf "$GRIN_DIR/chain_data"
            success "Existing chain_data removed. Starting fresh extraction..." ;;

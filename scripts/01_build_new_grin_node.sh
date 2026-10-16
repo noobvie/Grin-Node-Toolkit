@@ -294,7 +294,7 @@ die() {
         echo -e "  ${DIM}Log: $LOG_FILE${RESET}"
         echo -ne "${DIM}[Enter = back to the Script 01 menu]: ${RESET}"
         read -r _ || true
-        exit 1
+        exit "${S01_RC_BACK:-1}"
     fi
     echo -e "${YELLOW}▶ Fix the issue above, then choose:${RESET}"
     echo -e "  ${GREEN}Enter${RESET} — retry from the beginning"

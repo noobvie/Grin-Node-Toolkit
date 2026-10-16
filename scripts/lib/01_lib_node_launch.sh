@@ -169,13 +169,13 @@ save_instance_location() {
         key="PRUNEMAIN"
     fi
 
-    mkdir -p "$CONF_DIR"
+    mkdir -p "$CONF_DIR" || die "Failed to create $CONF_DIR — the node runs but is not registered."
     if [[ -f "$INSTANCES_CONF" ]]; then
         # Remove current key and, for mainnet, also remove the sibling mainnet key
         # (PRUNEMAIN and FULLMAIN are mutually exclusive — one server, one mainnet mode)
-        sed -i "/^${key}_/d" "$INSTANCES_CONF"
-        [[ "$key" == "FULLMAIN"  ]] && sed -i '/^PRUNEMAIN_/d' "$INSTANCES_CONF"
-        [[ "$key" == "PRUNEMAIN" ]] && sed -i '/^FULLMAIN_/d'  "$INSTANCES_CONF"
+        sed -i "/^${key}_/d" "$INSTANCES_CONF" || die "Failed to update $INSTANCES_CONF."
+        if [[ "$key" == "FULLMAIN"  ]]; then sed -i '/^PRUNEMAIN_/d' "$INSTANCES_CONF" || die "Failed to update $INSTANCES_CONF."; fi
+        if [[ "$key" == "PRUNEMAIN" ]]; then sed -i '/^FULLMAIN_/d'  "$INSTANCES_CONF" || die "Failed to update $INSTANCES_CONF."; fi
     fi
 
     # Cache the .onion hostname so other toolkit scripts (and the operator) can
@@ -193,7 +193,8 @@ ${key}_TOML="$GRIN_DIR/grin-server.toml"
 ${key}_CHAIN_DATA="$GRIN_DIR/chain_data"
 ${key}_ONION_HOSTNAME="${_onion}"
 __EOF__
-    chmod 600 "$INSTANCES_CONF"
+    if [[ $? -ne 0 ]]; then die "Failed to write $INSTANCES_CONF — the node runs but is not registered."; fi
+    chmod 600 "$INSTANCES_CONF" || warn "Could not chmod 600 $INSTANCES_CONF."
     log "Instance location saved: $key → $GRIN_DIR (onion=${_onion:-pending})"
 }
 
@@ -259,7 +260,7 @@ _grin_torrc_install() {
     local _old_dir="/var/lib/tor/grin-${network}"
     if [[ -d "$_old_dir" && ! -d "${hs_dir%/}" ]]; then
         info "Renaming $_old_dir → ${hs_dir%/} (preserving .onion identity)"
-        mv "$_old_dir" "${hs_dir%/}"
+        mv "$_old_dir" "${hs_dir%/}" || { warn "Could not rename $_old_dir — the .onion address would change."; return 1; }
     fi
 
     # Extract existing marker-bounded block (literal string match, no regex escaping)

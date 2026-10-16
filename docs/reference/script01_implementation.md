@@ -199,9 +199,12 @@ the toolkit's main menu instead of the Script 01 menu. **Cause:** those prompts 
 wizard and call `exit 0` (`die` exits too); inside the menu loop that ends the whole script. An unbound
 variable under `set -u` did the same, since it exits whatever errexit says. **Fix:** `s01_run_action`
 runs each action in a subshell, so any exit ends only the action; inside it `die` offers only "back to
-the Script 01 menu" (its `exec "$0"` retry would fail the flock the parent holds). Uncommitted at
-writing. **Lesson:** a loop wrapped around old linear code inherits every `exit` in it — contain them,
-don't hunt them one by one.
+the Script 01 menu" (its `exec "$0"` retry would fail the flock the parent holds). Every cancel (`0`,
+Enter at a typed token, `n`) returns or exits with `S01_RC_BACK`, and the loop skips its "Press Enter"
+pause for that status, so one key gets the operator back. The same errexit-off context meant a bare
+command in a wizard step failed silently, so the binary `install`, the `patch_config` seds and the
+registry write in `save_instance_location` now `die` on failure. Uncommitted at writing. **Lesson:** a loop
+wrapped around old linear code inherits every `exit` in it — contain them, don't hunt them one by one.
 
 ## 4. Open items
 

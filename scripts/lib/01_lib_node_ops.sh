@@ -438,7 +438,7 @@ rebuild_chain_data_only() {
     read -r _confirm || true
     if [[ "$_confirm" != "REBUILD" ]]; then
         info "Cancelled — no changes made."
-        return 1
+        return "${S01_RC_BACK:-1}"
     fi
 
     # Stop this network's node, including one still booting (lock held, P2P port not yet bound), and refuse

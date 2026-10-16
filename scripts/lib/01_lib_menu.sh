@@ -7,6 +7,12 @@
 # it names. All node work goes through the node table (lib/01_lib_node_table.sh); nothing here stops, starts or scans.
 # Trap: runs with errexit off (the caller guards every call with `|| true`), so guard each file op with `|| { error ...; return 1; }`.
 
+# S01_RC_BACK: the status an action returns (or exits its subshell with) when the operator cancelled, or when it
+# already waited for Enter itself — the menu loop then redraws at once instead of "Press Enter to return to the menu".
+# The wizard and chain-data libs use it as ${S01_RC_BACK:-0}.
+S01_RC_BACK=10
+S01_ACTION_RC=0
+
 # S01_PICK is the network chosen by s01_pick_net (mainnet|testnet|both); S01_KEY / S01_ARG the resolved menu key.
 S01_PICK=""
 S01_KEY=""
@@ -205,10 +211,10 @@ s01_pick_net() {
     echo -e "  ${DIM}0${RESET}) Cancel"
     while true; do
         echo -ne "${BOLD}Network [${hint} / 0]: ${RESET}"
-        read -r choice || return 1
+        read -r choice || return "$S01_RC_BACK"
         choice="${choice:-$def}"
         case "$choice" in
-            0) info "Cancelled."; return 1 ;;
+            0) info "Cancelled."; return "$S01_RC_BACK" ;;
             1) S01_PICK="${nets[0]}"; return 0 ;;
             2) S01_PICK="${nets[1]}"; return 0 ;;
             3) if [[ "$action" == "update" ]]; then S01_PICK="both"; return 0; fi
@@ -221,7 +227,7 @@ s01_pick_net() {
 # ── Actions ────────────────────────────────────────────────────────────────────────────────────────────────
 s01_act_start() {
     local other
-    s01_pick_net start || return 0
+    s01_pick_net start || return $?
     s01_start_node "$S01_PICK" || true
     if [[ "$S01_PICK" == "mainnet" ]]; then other=testnet; else other=mainnet; fi
     if [[ "$S01_LAST_START" == "launched" && "${NT_ON_DISK[$other]}" == "1" && "${NT_RUNNING[$other]}" != "1" ]]; then
@@ -231,13 +237,13 @@ s01_act_start() {
 }
 
 s01_act_stop() {
-    s01_pick_net stop || return 0
+    s01_pick_net stop || return $?
     s01_stop_node "$S01_PICK" || true
     return 0
 }
 
 s01_act_update() {
-    s01_pick_net update || return 0
+    s01_pick_net update || return $?
     update_binary_only "$S01_PICK" || true
     return 0
 }
@@ -248,7 +254,7 @@ s01_act_update() {
 s01_act_rebuild() {
     local net="${1:-}" dir extra tok="REBUILD" sub confirm
     if [[ -z "$net" ]]; then
-        s01_pick_net rebuild || return 0
+        s01_pick_net rebuild || return $?
         net="$S01_PICK"
     fi
     dir="${NT_DIR[$net]}"; extra="${NT_EXTRA[$net]}"
@@ -260,11 +266,11 @@ s01_act_rebuild() {
         echo -e "  ${DIM}0${RESET}) Cancel"
         while true; do
             echo -ne "${BOLD}Rebuild ${net} [1-2 / 0]: ${RESET}"
-            read -r sub || return 0
+            read -r sub || return "$S01_RC_BACK"
             case "$sub" in
-                1) rebuild_chain_data_only "$net" "$dir" || true; return 0 ;;
+                1) rebuild_chain_data_only "$net" "$dir"; return $? ;;
                 2) break ;;
-                0) info "Cancelled."; return 0 ;;
+                0) info "Cancelled."; return "$S01_RC_BACK" ;;
                 *) warn "Invalid choice '${sub}'." ;;
             esac
         done
@@ -285,7 +291,7 @@ s01_act_rebuild() {
     read -r confirm || confirm=""
     if [[ "$confirm" != "$tok" ]]; then
         info "Cancelled — no changes made."
-        return 0
+        return "$S01_RC_BACK"
     fi
     s01_full_reinstall "$net" || true
     return 0
@@ -304,7 +310,7 @@ s01_act_install() {
     if (( ${#free[@]} == 1 )); then RESTRICTED_NETWORK="${free[0]}"; fi
     if ! select_network; then
         info "Cancelled — no changes made."
-        return 0
+        return "$S01_RC_BACK"
     fi
     case "$NETWORK_TYPE" in
         mainnet|testnet)
@@ -323,10 +329,11 @@ s01_act_install() {
 }
 
 s01_run_action() {
-    # In a subshell: the wizard steps still `exit 0` on their "0" prompts and die() exits too, and an unbound
-    # variable under `set -u` exits regardless of errexit. In the subshell any of those ends only this action and
-    # the menu loop carries on. Nothing is lost by it — s01_reset_state and s01_scan_nodes rebuild every global
-    # the next pass reads.
+    # In a subshell: the wizard steps `exit` on their "0" prompts and die() exits too, and an unbound variable under
+    # `set -u` exits regardless of errexit. In the subshell any of those ends only this action and the menu loop
+    # carries on. Nothing is lost by it — s01_reset_state and s01_scan_nodes rebuild every global the next pass
+    # reads. The subshell's status lands in S01_ACTION_RC (S01_RC_BACK = skip the pause).
+    local rc=0
     (
         S01_IN_ACTION=1
         case "$S01_KEY" in
@@ -336,9 +343,10 @@ s01_run_action() {
             rebuild) s01_act_rebuild "$S01_ARG" ;;
             install) s01_act_install ;;
             source)  gsb_menu || true ;;
-            auto)    run_super_auto || true ;;
+            auto)    run_super_auto ;;
         esac
-    ) || true
+    ) || rc=$?
+    S01_ACTION_RC=$rc
     return 0
 }
 
@@ -383,7 +391,8 @@ s01_menu_loop() {
         done
         log "[MENU] action=$S01_KEY${S01_ARG:+ ($S01_ARG)}"
         s01_run_action
-        # The source-build menu is its own screen; every other action leaves output the next pass would clear.
-        if [[ "$S01_KEY" != "source" ]]; then s01_pause; fi
+        # The source-build menu is its own screen, and a cancel has nothing worth reading; every other action
+        # leaves output the next pass would clear.
+        if [[ "$S01_KEY" != "source" && "$S01_ACTION_RC" != "$S01_RC_BACK" ]]; then s01_pause; fi
     done
 }

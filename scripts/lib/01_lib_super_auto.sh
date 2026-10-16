@@ -149,7 +149,7 @@ _offer_event_recorder() {
 }
 
 # run_super_auto — the one-hit handler. Returns 0 on completion (caller exits 0),
-# 1 on cancel (caller re-shows its menu / falls through).
+# S01_RC_BACK on cancel (the menu redraws without a pause).
 run_super_auto() {
     step_header "Super Auto — Wipe & Rebuild Both Nodes (pruned)"
 
@@ -167,7 +167,7 @@ run_super_auto() {
         local _fc; read -r _fc || true
         if [[ "$_fc" != "FORCE" ]]; then
             info "Super Auto cancelled — free up space and retry."
-            return 1
+            return "${S01_RC_BACK:-1}"
         fi
         warn "Overriding disk gate on user request."
     else
@@ -246,13 +246,13 @@ run_super_auto() {
             else
                 info "Super Auto cancelled — no changes made."
             fi
-            return 1
+            return "${S01_RC_BACK:-1}"
         fi
     else
         echo ""
         echo -ne "  ${BOLD}Proceed? [Y/n]: ${RESET}"
         local _cf; read -r _cf || true
-        if [[ "${_cf,,}" == "n" ]]; then info "Super Auto cancelled."; return 1; fi
+        if [[ "${_cf,,}" == "n" ]]; then info "Super Auto cancelled."; return "${S01_RC_BACK:-1}"; fi
     fi
 
     # ── 3. Kill + wipe everything (reuse existing K-path) ────────────────────────

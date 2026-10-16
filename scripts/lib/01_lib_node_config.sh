@@ -117,7 +117,8 @@ download_grin_binary() {
         else
             info "Reusing binary downloaded earlier in this session."
         fi
-        install -m 755 "$GRIN_BIN_TMP" "$GRIN_DIR/grin"
+        install -m 755 "$GRIN_BIN_TMP" "$GRIN_DIR/grin" \
+            || die "Failed to copy the grin binary to $GRIN_DIR/grin."
         success "Binary copied to $GRIN_DIR/grin"
         return
     fi
@@ -159,7 +160,8 @@ download_grin_binary() {
 
     # Cache for reuse
     GRIN_BIN_TMP="$grin_bin"
-    install -m 755 "$grin_bin" "$GRIN_DIR/grin"
+    install -m 755 "$grin_bin" "$GRIN_DIR/grin" \
+        || die "Failed to install the grin binary to $GRIN_DIR/grin."
     success "Grin $version binary installed to $GRIN_DIR/grin"
     log "[STEP 6] Version=$version Binary=$GRIN_DIR/grin"
 }
@@ -251,7 +253,8 @@ patch_config() {
 
     # archive_mode
     if grep -q 'archive_mode' "$config"; then
-        sed -i "s/^archive_mode = .*/archive_mode = $archive_val/" "$config"
+        sed -i "s/^archive_mode = .*/archive_mode = $archive_val/" "$config" \
+            || die "Failed to patch $config."
     else
         echo "archive_mode = $archive_val" >> "$config"
         warn "archive_mode not found in config — appended."
@@ -260,7 +263,8 @@ patch_config() {
     # db_root — point to our custom directory so grin stores chain data here
     local db_root="$GRIN_DIR/chain_data"
     if grep -q 'db_root' "$config"; then
-        sed -i "s|^db_root = .*|db_root = \"$db_root\"|" "$config"
+        sed -i "s|^db_root = .*|db_root = \"$db_root\"|" "$config" \
+            || die "Failed to patch $config."
     else
         echo "db_root = \"$db_root\"" >> "$config"
         warn "db_root not found in config — appended."
@@ -268,7 +272,8 @@ patch_config() {
 
     # log_file_path — keep log in the node directory, not in HOME
     if grep -qE '^#?[[:space:]]*log_file_path' "$config"; then
-        sed -i -E "s|^#?[[:space:]]*log_file_path[[:space:]]*=.*|log_file_path = \"$GRIN_DIR/grin-server.log\"|" "$config"
+        sed -i -E "s|^#?[[:space:]]*log_file_path[[:space:]]*=.*|log_file_path = \"$GRIN_DIR/grin-server.log\"|" "$config" \
+            || die "Failed to patch $config."
     else
         echo "log_file_path = \"$GRIN_DIR/grin-server.log\"" >> "$config"
         warn "log_file_path not found in config — appended."
@@ -276,7 +281,8 @@ patch_config() {
 
     # api_secret_path — absolute path so it works regardless of working directory
     if grep -qE '^#?[[:space:]]*api_secret_path' "$config"; then
-        sed -i -E "s|^#?[[:space:]]*api_secret_path[[:space:]]*=.*|api_secret_path = \"$GRIN_DIR/.api_secret\"|" "$config"
+        sed -i -E "s|^#?[[:space:]]*api_secret_path[[:space:]]*=.*|api_secret_path = \"$GRIN_DIR/.api_secret\"|" "$config" \
+            || die "Failed to patch $config."
     else
         echo "api_secret_path = \"$GRIN_DIR/.api_secret\"" >> "$config"
         warn "api_secret_path not found in config — appended."
@@ -284,7 +290,8 @@ patch_config() {
 
     # foreign_api_secret_path — absolute path so it works regardless of working directory
     if grep -qE '^#?[[:space:]]*foreign_api_secret_path' "$config"; then
-        sed -i -E "s|^#?[[:space:]]*foreign_api_secret_path[[:space:]]*=.*|foreign_api_secret_path = \"$GRIN_DIR/.foreign_api_secret\"|" "$config"
+        sed -i -E "s|^#?[[:space:]]*foreign_api_secret_path[[:space:]]*=.*|foreign_api_secret_path = \"$GRIN_DIR/.foreign_api_secret\"|" "$config" \
+            || die "Failed to patch $config."
     else
         echo "foreign_api_secret_path = \"$GRIN_DIR/.foreign_api_secret\"" >> "$config"
         warn "foreign_api_secret_path not found in config — appended."
@@ -292,7 +299,8 @@ patch_config() {
 
     # peer_max_inbound_count — allow more inbound peers for a community node
     if grep -qE '^#?[[:space:]]*peer_max_inbound_count' "$config"; then
-        sed -i -E 's/^#?[[:space:]]*peer_max_inbound_count[[:space:]]*=.*/peer_max_inbound_count = 999/' "$config"
+        sed -i -E 's/^#?[[:space:]]*peer_max_inbound_count[[:space:]]*=.*/peer_max_inbound_count = 999/' "$config" \
+            || die "Failed to patch $config."
     else
         echo "peer_max_inbound_count = 999" >> "$config"
         warn "peer_max_inbound_count not found in config — appended."
@@ -300,7 +308,8 @@ patch_config() {
 
     # peer_max_outbound_count — more outbound connections for faster propagation
     if grep -qE '^#?[[:space:]]*peer_max_outbound_count' "$config"; then
-        sed -i -E 's/^#?[[:space:]]*peer_max_outbound_count[[:space:]]*=.*/peer_max_outbound_count = 199/' "$config"
+        sed -i -E 's/^#?[[:space:]]*peer_max_outbound_count[[:space:]]*=.*/peer_max_outbound_count = 199/' "$config" \
+            || die "Failed to patch $config."
     else
         echo "peer_max_outbound_count = 199" >> "$config"
         warn "peer_max_outbound_count not found in config — appended."
@@ -308,7 +317,8 @@ patch_config() {
 
     # peer_min_preferred_outbound_count — aggressively maintain outbound connections
     if grep -qE '^#?[[:space:]]*peer_min_preferred_outbound_count' "$config"; then
-        sed -i -E 's/^#?[[:space:]]*peer_min_preferred_outbound_count[[:space:]]*=.*/peer_min_preferred_outbound_count = 199/' "$config"
+        sed -i -E 's/^#?[[:space:]]*peer_min_preferred_outbound_count[[:space:]]*=.*/peer_min_preferred_outbound_count = 199/' "$config" \
+            || die "Failed to patch $config."
     else
         echo "peer_min_preferred_outbound_count = 199" >> "$config"
         warn "peer_min_preferred_outbound_count not found in config — appended."
@@ -317,7 +327,8 @@ patch_config() {
     # log_max_files — keep 10 rotated log files: Debug logging fills each file
     # fast, and 3 held only ~10 days even at Info (086 design F-6)
     if grep -qE '^#?[[:space:]]*log_max_files' "$config"; then
-        sed -i -E 's/^#?[[:space:]]*log_max_files[[:space:]]*=.*/log_max_files = 10/' "$config"
+        sed -i -E 's/^#?[[:space:]]*log_max_files[[:space:]]*=.*/log_max_files = 10/' "$config" \
+            || die "Failed to patch $config."
     else
         echo "log_max_files = 10" >> "$config"
         warn "log_max_files not found in config — appended."
@@ -329,7 +340,8 @@ patch_config() {
     # so the tmux pane stays readable. Debug fills log_max_size faster, so the
     # rotated history covers fewer days than at Info.
     if grep -qE '^#?[[:space:]]*file_log_level' "$config"; then
-        sed -i -E 's/^#?[[:space:]]*file_log_level[[:space:]]*=.*/file_log_level = "Debug"/' "$config"
+        sed -i -E 's/^#?[[:space:]]*file_log_level[[:space:]]*=.*/file_log_level = "Debug"/' "$config" \
+            || die "Failed to patch $config."
     else
         echo 'file_log_level = "Debug"' >> "$config"
         warn "file_log_level not found in config — appended."

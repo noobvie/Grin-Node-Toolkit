@@ -38,7 +38,7 @@ check_legacy_grin_dir() {
             success "Deleted: $HOME/.grin"
             ;;
         0)
-            exit 0
+            exit "${S01_RC_BACK:-0}"
             ;;
         *)
             warn "Keeping $HOME/.grin — this may cause config conflicts."
@@ -332,7 +332,7 @@ select_archive_mode() {
     read -r arc_choice || true
 
     case "${arc_choice:-1}" in
-        0) exit 0 ;;
+        0) exit "${S01_RC_BACK:-0}" ;;
         1) ARCHIVE_MODE="pruned" ;;
         2)
             if [[ "$network" == "testnet" ]]; then
@@ -370,7 +370,7 @@ select_archive_mode() {
             echo ""
             echo -ne "  Continue anyway? [Y/n]: "
             read -r _space_ok || true
-            [[ "${_space_ok,,}" == "n" ]] && exit 0
+            [[ "${_space_ok,,}" == "n" ]] && exit "${S01_RC_BACK:-0}"
         fi
     fi
 

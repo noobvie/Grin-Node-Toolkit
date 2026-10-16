@@ -133,6 +133,7 @@ the exact `-t "=name"`) and `081_host_monitor_port.sh` (its remote stop snippet 
 | **Installed, none running** | picker | dim — nothing is running | picker | picker | dim |
 | **Fresh** (nothing on disk) | dim | dim | dim | dim | mainnet / testnet / both |
 | **conf ≠ disk** | by disk, yellow line shows | by disk | by disk | uses the disk dir | dim while the dir exists |
+| **Broken dir** (binary or config missing) | dim — "<net> broken — repair with 4" | unaffected | skips that net | that net: full reinstall only; hint says so | dim while the dir exists |
 | **Foreign process on 3414/13414** | stays live; the start will fail to bind (red status line is the only hint) | unaffected | unaffected | unaffected | unaffected |
 
 - **Key 1** starts **one** network per pick, then warns to let it finish booting when the other

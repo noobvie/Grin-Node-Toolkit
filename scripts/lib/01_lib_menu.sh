@@ -64,10 +64,20 @@ _s01_nets_for() {
     return 0
 }
 
+# _s01_broken_nets — networks with a node dir that cannot start (binary or config missing, nothing running), one
+# per line. Only key 4's full reinstall repairs them.
+_s01_broken_nets() {
+    local net
+    for net in mainnet testnet; do
+        if [[ -n "${NT_DIR[$net]}" && "${NT_ON_DISK[$net]}" != "1" && "${NT_RUNNING[$net]}" != "1" ]]; then echo "$net"; fi
+    done
+    return 0
+}
+
 # _s01_reason <action> [net] — why the action cannot act now; prints nothing when it can. With a net (the m / t aliases)
 # the check is for that network alone.
 _s01_reason() {
-    local action="$1" net="${2:-}"
+    local action="$1" net="${2:-}" broken
     if [[ -n "$net" ]]; then
         if [[ " $(_s01_nets_for "$action" | tr '\n' ' ')" != *" $net "* ]]; then echo "no $net node to rebuild"; fi
         return 0
@@ -75,7 +85,11 @@ _s01_reason() {
     if [[ -n "$(_s01_nets_for "$action")" ]]; then return 0; fi
     case "$action" in
         start)
-            if [[ -n "$(_s01_nets_for update)" ]]; then echo "every installed node is already running"; else echo "no node installed"; fi ;;
+            # A dir whose binary or config is missing cannot start; name it, so "already running" never hides it.
+            broken="$(_s01_broken_nets | paste -sd '/' - | sed 's#/# / #g')"
+            if [[ -n "$broken" ]]; then echo "${broken} broken — repair with 4"
+            elif [[ -n "$(_s01_nets_for update)" ]]; then echo "every installed node is already running"
+            else echo "no node installed"; fi ;;
         stop)    echo "nothing is running" ;;
         update)  echo "no node installed" ;;
         rebuild) echo "no node installed" ;;
@@ -94,7 +108,10 @@ _s01_hint() {
         update|install)
             if [[ "$nets" == *" / "* ]]; then nets="both / $nets"; fi ;;
         rebuild)
-            nets+=" · chain_data or full" ;;
+            # A broken dir offers only the full reinstall (s01_act_rebuild skips the chain_data choice for it).
+            if [[ -z "$(_s01_broken_nets)" ]]; then nets+=" · chain_data or full"
+            elif [[ "$(_s01_broken_nets | wc -l)" -eq "$(_s01_nets_for rebuild | wc -l)" ]]; then nets+=" · full reinstall"
+            else nets+=" · $(_s01_broken_nets | paste -sd '/' - | sed 's#/# / #g'): full only"; fi ;;
     esac
     echo "→ $nets"
     return 0

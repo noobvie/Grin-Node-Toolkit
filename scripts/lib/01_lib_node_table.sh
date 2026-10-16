@@ -217,6 +217,9 @@ s01_render_status() {
         esac
         if [[ "${NT_ON_DISK[$net]}" != "1" ]]; then line+="  ${RED}(binary or config missing)${RESET}"; fi
         echo -e "$line"
+        if [[ "${NT_ON_DISK[$net]}" != "1" && "${NT_RUNNING[$net]}" != "1" ]]; then
+            echo -e "    ${YELLOW}cannot start — repair with 4) Rebuild a node → ${net} (full reinstall)${RESET}"
+        fi
         if [[ "${NT_AUTOSTART[$net]}" == "stale" ]]; then
             echo -e "    ${YELLOW}autostart starts ${NT_AUTOSTART_DIR[$net]}, not this node — re-point it in Script 03 → G${RESET}"
         fi

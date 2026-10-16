@@ -881,6 +881,8 @@
         line.appendChild(via);
         tty.appendChild(line);
       });
+      // The box is fixed-height; keep the newest (last) line in view.
+      tty.scrollTop = tty.scrollHeight;
     } catch (e) {
       tty.textContent = '';
       var d2 = document.createElement('div');

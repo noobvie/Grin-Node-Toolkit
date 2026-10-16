@@ -669,6 +669,10 @@ body {
   color: var(--text-dim); height: 172px; overflow: hidden; position: relative;
   font-variant-numeric: tabular-nums;
 }
+/* One payout = one row at any width. A wrapped line made 7 payouts overflow the fixed box on a
+   phone, and since the log prints oldest → newest the clipped part was the newest payout.
+   loadPayments() also scrolls the box to its bottom so the newest line is always in view. */
+.tty div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tty div b { color: var(--accent); font-weight: 600; }
 .tty div .via { color: var(--info); }
 /* Elapsed-time column: fixed width so PAID / amounts line up down the log
@@ -706,6 +710,11 @@ body {
   .deck-head { align-items: flex-start; flex-direction: column; }
 }
 @media (max-width: 480px) {
+  /* ~40 characters fit a phone row: shrink the log and drop the rail tag so the amount and
+     address stay visible instead of being ellipsised. */
+  .tty { font-size: 11px; padding: 13px 12px; }
+  .tty div .ago { min-width: 12ch; }
+  .tty div .via { display: none; }
   /* Two 190px dials + gap + page/panel padding need ~460px; below that the canvas
      (pinned at 190×150 by Gauge(), so it can't shrink without distorting) would clip,
      so stack them explicitly — flex-basis 0 above means they never wrap on their own. */

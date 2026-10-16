@@ -3,7 +3,7 @@
 ╚══════════════════════════════════════════════════════════════════════════╝
 
 > **Covers code as of:** 2026-10-15 for the ENTRY + MENU section, the Super Auto box and the key-flow notes at the end; 2026-07-01 for Steps 1b–14 in between, which the menu work did not change but nobody has re-read against the code since · **Last verified:** never systematically verified
-> **Product code last changed:** 2026-10-15 — `scripts/01_build_new_grin_node.sh` split into an entry plus `scripts/lib/01_lib_*.sh`; new menu (`lib/01_lib_menu.sh`) and node table (`lib/01_lib_node_table.sh`), working tree at the time of writing; 2026-09-25 — `scripts/lib/01_lib_source_build.sh` + new `scripts/patches/grin/` (key G offers toolkit grin patches after checkout; not described here); 2026-08-18 — `scripts/lib/01_lib_source_build.sh`
+> **Product code last changed:** 2026-10-15 — `scripts/01_build_new_grin_node.sh` split into an entry plus `scripts/lib/01_lib_*.sh`; new menu (`lib/01_lib_menu.sh`) and node table (`lib/01_lib_node_table.sh`), plus the custom wizard's Step 14c autostart offer (`lib/01_lib_super_auto.sh`), working tree at the time of writing; 2026-09-25 — `scripts/lib/01_lib_source_build.sh` + new `scripts/patches/grin/` (key G offers toolkit grin patches after checkout; not described here); 2026-08-18 — `scripts/lib/01_lib_source_build.sh`
 
 As-built detail, keys per state and the Build notes → [script01_implementation.md](script01_implementation.md).
 
@@ -329,8 +329,9 @@ As-built detail, keys per state and the Build notes → [script01_implementation
          │   recovery chown hint         │
          │   [SUPER_AUTO] show "autostart│
          │     /watchdog/logrotate being │
-         │     configured" (no manual    │
-         │     autostart reminder)       │
+         │     configured"               │
+         │   [custom] "autostart is      │
+         │     offered next (Step 14c)"  │
          └───────────────────────────────┘
                          │
          ┌───────────────▼───────────────┐
@@ -354,6 +355,15 @@ As-built detail, keys per state and the Build notes → [script01_implementation
          │  • gnk_watchdog_install       │
          │  • _install_grin_logrotate    │
          │  (idempotent; warn on fail)   │
+         ├───────────────────────────────┤
+         │  [custom wizard: key 5, and   │
+         │   key 4's full reinstall]     │
+         │  Step 14c _offer_autostart    │
+         │   [Y/n] → gnk_autostart_enable│
+         │   (replaces the net's line,   │
+         │    so a stale dir is fixed)   │
+         │  Step 14d _offer_event_       │
+         │   recorder (once per run)     │
          └───────────────────────────────┘
                          │
               ┌──────────┴──────────┐

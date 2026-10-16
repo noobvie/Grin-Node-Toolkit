@@ -24,11 +24,12 @@
 # MENU  (lib/01_lib_menu.sh — one screen in every state, status first)
 #   The script opens on the node status block (what is installed, running, in
 #   which tmux session, which version, and whether the instances conf matches
-#   disk), then fixed keys:
-#     1 Start a node    2 Stop a node     3 Update binary (mainnet / testnet / both)
+#   disk), then fixed keys, in three groups:
+#     A Super Auto (wipe all, rebuild both pruned)
+#     1 Start a node    2 Stop a node     3 Update Grin binary (mainnet / testnet / both)
 #     4 Rebuild a node  (chain_data only, or full reinstall of that network)
 #     5 Install a node  (a network with no node yet)
-#     G Compile from source / roll back   A Super Auto (wipe all, rebuild both pruned)
+#     G Compile Grin binary from source / roll back old Grin version
 #     0 Back
 #   A key that cannot act now is shown dim with its reason. Every action touches
 #   only the network it names, then returns to the menu with a fresh scan. The
@@ -189,6 +190,13 @@
 #              just built, and installs the grin-secret-sync 5-min self-heal
 #              timer. The vault (Step 8b) keeps the secret VALUES stable; this
 #              fixes the secret PATH, which moves on a prune↔full rebuild.
+#
+#   Step 14c — Reboot autostart (custom wizard; Super Auto applies it unasked)
+#              Offers the network's tagged @reboot crontab line, default yes.
+#              Accepting replaces any existing line, so it also re-points one
+#              a prune↔full rebuild left on the old dir.
+#
+#   Step 14d — Node event recorder (custom wizard, once per run, default yes)
 #
 # LOG FILE
 #   Each run creates a timestamped log file:

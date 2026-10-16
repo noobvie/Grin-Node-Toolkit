@@ -146,7 +146,7 @@ show_summary() {
     if [[ "$SUPER_AUTO" == "true" ]]; then
         echo -e "  ${GREEN}✓  Auto-start, watchdog, event recorder & log rotation${RESET} are being configured automatically."
     else
-        echo -e "  ${YELLOW}⚠  Remember:${RESET} schedule auto-start on reboot via"
+        echo -e "  ${CYAN}→${RESET}  Auto-start on reboot is offered next (Step 14c). It can also be changed later in"
         echo -e "     ${BOLD}3) Share Grin Chain Data / Schedule${RESET} → option ${GREEN}G) Auto startup Grin node${RESET}"
     fi
     echo -e "${BOLD}${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"

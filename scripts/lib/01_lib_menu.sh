@@ -84,27 +84,55 @@ _s01_reason() {
     return 0
 }
 
-# _s01_key_line <key> <label> <reason> — one menu row; DIM with its reason when the key cannot act now.
+# _s01_hint <action> — what the key would act on now, e.g. "testnet" or "both / mainnet / testnet". Mirrors the
+# choices s01_pick_net and s01_act_install would offer, so the row never promises a network the picker leaves out.
+_s01_hint() {
+    local action="$1" nets
+    nets="$(_s01_nets_for "$action" | paste -sd '/' - | sed 's#/# / #g')"
+    if [[ -z "$nets" ]]; then return 0; fi
+    case "$action" in
+        update|install)
+            if [[ "$nets" == *" / "* ]]; then nets="both / $nets"; fi ;;
+        rebuild)
+            nets+=" · chain_data or full" ;;
+    esac
+    echo "→ $nets"
+    return 0
+}
+
+# _s01_key_line <key> <label> <reason> [hint] — one menu row; DIM with its reason when the key cannot act now,
+# otherwise the label followed by the dimmed hint in the same column.
 _s01_key_line() {
-    local key="$1" label="$2" reason="$3"
+    local key="$1" label="$2" reason="$3" hint="${4:-}"
     if [[ -n "$reason" ]]; then
         echo -e "${DIM}  ${key}) $(printf '%-34s' "$label")  ${reason}${RESET}"
+    elif [[ -n "$hint" ]]; then
+        echo -e "  ${GREEN}${key}${RESET}) $(printf '%-34s' "$label")  ${DIM}${hint}${RESET}"
     else
         echo -e "  ${GREEN}${key}${RESET}) ${label}"
     fi
     return 0
 }
 
-# s01_render_keys — the key list. Reads the arrays of the last s01_scan_nodes.
+# s01_render_keys — the key list, grouped the way hub 05 draws its menu. Reads the arrays of the last s01_scan_nodes.
 s01_render_keys() {
-    _s01_key_line 1 "Start a node"      "$(_s01_reason start)"
-    _s01_key_line 2 "Stop a node"       "$(_s01_reason stop)"
-    _s01_key_line 3 "Update binary"     "$(_s01_reason update)"
-    _s01_key_line 4 "Rebuild a node"    "$(_s01_reason rebuild)"
-    _s01_key_line 5 "Install a node"    "$(_s01_reason install)"
-    _s01_key_line G "Compile from source / roll back" ""
-    echo -e "  ${GREEN}A${RESET}) Super Auto — ${BOLD}wipe all${RESET}, rebuild both pruned"
-    echo -e "  ${DIM}0) Back${RESET}"
+    echo -e "${DIM}  ── One-shot setup ─── wipe the box, rebuild both nodes${RESET}"
+    echo ""
+    echo -e "  ${GREEN}A${RESET}) Super Auto — ${BOLD}wipe all${RESET}, rebuild both pruned  ${DIM}(type REBUILD)${RESET}"
+    echo ""
+    echo -e "${DIM}  ── Nodes ──────────── start, stop, update, rebuild, install${RESET}"
+    echo ""
+    _s01_key_line 1 "Start a node"      "$(_s01_reason start)"   "$(_s01_hint start)"
+    _s01_key_line 2 "Stop a node"       "$(_s01_reason stop)"    "$(_s01_hint stop)"
+    _s01_key_line 3 "Update Grin binary" "$(_s01_reason update)"  "$(_s01_hint update)"
+    _s01_key_line 4 "Rebuild a node"    "$(_s01_reason rebuild)" "$(_s01_hint rebuild)"
+    _s01_key_line 5 "Install a node"    "$(_s01_reason install)" "$(_s01_hint install)"
+    echo ""
+    echo -e "${DIM}  ── Source build ───── your own Grin binary${RESET}"
+    echo ""
+    _s01_key_line G "Compile Grin binary from source / roll back old Grin version" ""
+    echo ""
+    echo -e "  ${RED}0${RESET}) Back to main menu"
     return 0
 }
 
@@ -305,17 +333,18 @@ s01_menu_loop() {
         echo ""
         s01_scan_nodes
         s01_render_status
+        echo -e "${DIM}  ──────────────────────────────────────────────────────────────${RESET}"
         echo ""
         s01_render_keys
         echo ""
         while true; do
-            echo -ne "${BOLD}Select [1-5 / G A / 0]: ${RESET}"
+            echo -ne "${BOLD}Select [A / 1-5 / G / 0]: ${RESET}"
             if ! read -r choice; then echo ""; return 0; fi
             choice="${choice//[[:space:]]/}"; choice="${choice,,}"
             if [[ "$choice" == "0" ]]; then return 0; fi
             if [[ -z "$choice" ]]; then continue; fi
             if ! _s01_resolve "$choice"; then
-                warn "Unknown choice '${choice}' — use 1-5, G, A or 0."
+                warn "Unknown choice '${choice}' — use A, 1-5, G or 0."
                 continue
             fi
             reason=""

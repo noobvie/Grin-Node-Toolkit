@@ -430,14 +430,15 @@ setup_one_node() {
     # the new registry entry. Also installs the 5-min self-heal timer.
     _sync_secret_consumers "$network"
 
-    # Super Auto post-build hardening — autostart + watchdog + logrotate.
-    # Runs AFTER save_instance_location so gnk_autostart_enable can resolve the
-    # node dir from INSTANCES_CONF. No-op in the custom wizard (SUPER_AUTO=false),
-    # which keeps the existing "remember to schedule autostart" reminder instead.
+    # Post-build hardening. Runs AFTER save_instance_location so gnk_autostart_enable
+    # can resolve the node dir from INSTANCES_CONF. Super Auto applies the whole
+    # bundle without asking; the custom wizard (key 5, and key 4's full reinstall)
+    # asks for autostart per node and for the event recorder once per run, both
+    # default YES.
     if [[ "$SUPER_AUTO" == "true" ]]; then
         _super_auto_harden "$network" "$GRIN_DIR"
     else
-        # The custom wizard asks instead (default YES), once per run.
+        _offer_autostart "$network" "$GRIN_DIR"
         _offer_event_recorder
     fi
 

@@ -12,7 +12,7 @@
 NT_NODE_ROOT="${NT_NODE_ROOT:-/opt/grin/node}"
 
 declare -gA NT_DIR=() NT_MODE=() NT_IN_CONF=() NT_CONF_DIR=() NT_ON_DISK=() NT_RUNNING=()
-declare -gA NT_SESSION=() NT_VERSION=() NT_FOREIGN=() NT_EXTRA=()
+declare -gA NT_SESSION=() NT_VERSION=() NT_FOREIGN=() NT_EXTRA=() NT_AUTOSTART=() NT_AUTOSTART_DIR=()
 
 # S01_LAST_START after s01_start_node: launched | running (already up) | failed.
 S01_LAST_START=""
@@ -80,6 +80,21 @@ _nt_port_foreign() {
     return 0
 }
 
+# _nt_autostart_dir <net> <crontab text> — the dir the network's tagged @reboot line starts (its `cd '<dir>'`), or
+# nothing when there is no such line. The tag is the one Script 03 → G and gnk_autostart_enable both write.
+_nt_autostart_dir() {
+    local net="$1" cron="$2" tag line re="cd '([^']*)'"
+    if [[ "$net" == "testnet" ]]; then
+        tag="${GNK_AUTOSTART_TAG_TEST:-# grin-node-toolkit: grin_autostart_testnet}"
+    else
+        tag="${GNK_AUTOSTART_TAG_MAIN:-# grin-node-toolkit: grin_autostart_mainnet}"
+    fi
+    line=$(printf '%s\n' "$cron" | grep -F "$tag" | grep -v '^[[:space:]]*#' | tail -1 || true)
+    [[ -n "$line" ]] || return 0
+    if [[ "$line" =~ $re ]]; then echo "${BASH_REMATCH[1]%/}"; else echo "?"; fi
+    return 0
+}
+
 # -----------------------------------------------------------------------------
 # s01_scan_nodes — fill the NT_* arrays (keys: mainnet, testnet). Read-only.
 #   NT_DIR       node dir the network resolves to: a dir with a live grin process, else the conf-registered
@@ -93,15 +108,19 @@ _nt_port_foreign() {
 #   NT_VERSION   output of `grin --version` ("" when not on disk)
 #   NT_FOREIGN   "pid name" when the P2P port is held by a non-grin process, else ""
 #   NT_EXTRA     a second installed dir for the same network (e.g. prune AND full), else ""
+#   NT_AUTOSTART on | stale | off — the network's @reboot line starts NT_DIR / starts another dir (NT_AUTOSTART_DIR,
+#                left behind by a pruned↔full rebuild) / does not exist
 # -----------------------------------------------------------------------------
 s01_scan_nodes() {
-    local net dir c port line
+    local net dir c port line cron
     local -a cands installed uniq
     local -A running=()
     _nt_load_conf
+    cron=$(crontab -l 2>/dev/null || true)
     for net in mainnet testnet; do
         NT_DIR[$net]=""; NT_MODE[$net]=""; NT_IN_CONF[$net]=0; NT_CONF_DIR[$net]=""; NT_ON_DISK[$net]=0
         NT_RUNNING[$net]=0; NT_SESSION[$net]=none; NT_VERSION[$net]=""; NT_FOREIGN[$net]=""; NT_EXTRA[$net]=""
+        NT_AUTOSTART[$net]=off; NT_AUTOSTART_DIR[$net]=""
 
         if [[ "$net" == "mainnet" ]]; then
             NT_CONF_DIR[$net]="${_NT_CONF[FULLMAIN]:-${_NT_CONF[PRUNEMAIN]}}"
@@ -154,6 +173,11 @@ s01_scan_nodes() {
         fi
         port="$(_nt_p2p_port "$net")"
         NT_FOREIGN[$net]="$(_nt_port_foreign "$port")"
+
+        NT_AUTOSTART_DIR[$net]="$(_nt_autostart_dir "$net" "$cron")"
+        if [[ -n "${NT_AUTOSTART_DIR[$net]}" ]]; then
+            if [[ "${NT_AUTOSTART_DIR[$net]}" == "$dir" ]]; then NT_AUTOSTART[$net]=on; else NT_AUTOSTART[$net]=stale; fi
+        fi
     done
     return 0
 }
@@ -168,6 +192,9 @@ s01_render_status() {
         label="${net^^}"
         if [[ -z "${NT_DIR[$net]}" ]]; then
             echo -e "  ${BOLD}${label}${RESET}  ${DIM}not installed${RESET}"
+            if [[ "${NT_AUTOSTART[$net]}" == "stale" ]]; then
+                echo -e "    ${YELLOW}autostart still points at ${NT_AUTOSTART_DIR[$net]} — remove it in Script 03 → G${RESET}"
+            fi
             continue
         fi
         if [[ "${NT_RUNNING[$net]}" == "1" ]]; then
@@ -183,8 +210,16 @@ s01_render_status() {
         line="  ${BOLD}${label}${RESET}  ${NT_MODE[$net]}  ${NT_DIR[$net]}  ${state}"
         if [[ -n "${NT_VERSION[$net]}" ]]; then line+="  v${NT_VERSION[$net]}"; fi
         line+="  ${sess}"
+        case "${NT_AUTOSTART[$net]}" in
+            on)    line+="  ${GREEN}autostart ✓${RESET}" ;;
+            stale) line+="  ${YELLOW}autostart ✗${RESET}" ;;
+            *)     line+="  ${DIM}autostart —${RESET}" ;;
+        esac
         if [[ "${NT_ON_DISK[$net]}" != "1" ]]; then line+="  ${RED}(binary or config missing)${RESET}"; fi
         echo -e "$line"
+        if [[ "${NT_AUTOSTART[$net]}" == "stale" ]]; then
+            echo -e "    ${YELLOW}autostart starts ${NT_AUTOSTART_DIR[$net]}, not this node — re-point it in Script 03 → G${RESET}"
+        fi
         if [[ -n "${NT_EXTRA[$net]}" ]]; then
             echo -e "    ${YELLOW}also on disk: ${NT_EXTRA[$net]} (a second ${net} dir — only one can use the port)${RESET}"
         fi

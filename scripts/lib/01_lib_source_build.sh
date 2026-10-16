@@ -819,7 +819,7 @@ _gsb_restore_previous() {
         info "Two other ways back:"
         info "  · option 2 — reinstall an older binary from $GSB_BIN_DIR"
         info "    (archived 'grin-<ver>-replaced-<id>' entries are previous binaries)"
-        info "  · menu key 3 (Update binary) — re-download the latest release"
+        info "  · menu key 3 (Update Grin binary) — re-download the latest release"
         return 1
     fi
 

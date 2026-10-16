@@ -75,6 +75,44 @@ _super_auto_harden() {
     _install_grin_logrotate "$network" "$node_dir" || warn "Log rotation setup failed for ${network}."
 }
 
+# _offer_autostart <network> <node_dir> — the custom wizard's post-build offer of the @reboot
+# line (default YES), once per node. gnk_autostart_enable REPLACES the network's
+# tagged line, so accepting also re-points a line a pruned↔full rebuild left on the
+# old dir. Declining leaves the crontab untouched. Runs after save_instance_location:
+# gnk_autostart_enable resolves the node dir from the instances conf only.
+_offer_autostart() {
+    local network="$1" node_dir="$2" cur _ans=""
+    declare -F gnk_autostart_enable >/dev/null 2>&1 || return 0
+    cur="$(_nt_autostart_dir "$network" "$(crontab -l 2>/dev/null || true)")"
+
+    step_header "Step 14c: Reboot autostart (${network})"
+    echo -e "  Adds an @reboot crontab line that starts this node as the grin user after"
+    echo -e "  the server restarts. ${DIM}Delay: mainnet 5 s, testnet 1000 s (two nodes booting together overload a small VPS).${RESET}"
+    echo -e "  ${DIM}Change it later in Script 03 → G.${RESET}"
+    echo ""
+    if [[ -n "$cur" && "$cur" == "${node_dir%/}" ]]; then
+        echo -ne "  ${BOLD}Autostart is already on for ${node_dir} — rewrite it with this toolkit version? [Y/n]: ${RESET}"
+    elif [[ -n "$cur" ]]; then
+        warn "The ${network} autostart line starts ${cur}, not this node."
+        echo -ne "  ${BOLD}Point autostart at ${node_dir}? [Y/n]: ${RESET}"
+    else
+        echo -ne "  ${BOLD}Start this node automatically after a reboot? [Y/n]: ${RESET}"
+    fi
+    # EOF declines; only an explicit n is no.
+    read -r _ans || _ans="n"
+    if [[ "${_ans,,}" == "n" || "${_ans,,}" == "no" ]]; then
+        info "Skipped — crontab not changed. Set it up later in Script 03 → G."
+        log "[STEP 14c] autostart declined for ${network}"
+        return 0
+    fi
+    if gnk_autostart_enable "$network"; then
+        log "[STEP 14c] autostart enabled for ${network} (${node_dir})"
+    else
+        warn "Autostart setup failed for ${network} — set it up later in Script 03 → G."
+    fi
+    return 0
+}
+
 # _offer_event_recorder — the custom wizard's post-build offer (default YES),
 # once per run. Super Auto installs it without asking (_super_auto_harden).
 # The recorder is READ-ONLY: it never restarts a node, so it does not compete
@@ -84,7 +122,7 @@ _offer_event_recorder() {
     RECORDER_OFFERED=true
     declare -F gne_install >/dev/null 2>&1 || return 0
     local _ans=""
-    step_header "Step 14c: Node event recorder"
+    step_header "Step 14d: Node event recorder"
     echo -e "  Records every down/up of this node (crash, hang, failed start, chain_data"
     echo -e "  corruption), keeps planned stops out of the count, and saves the node's"
     echo -e "  console and logs at the moment of failure. ${DIM}Read-only — it never restarts a node.${RESET}"
@@ -99,11 +137,11 @@ _offer_event_recorder() {
     read -r _ans || _ans="n"
     if [[ "${_ans,,}" == "n" || "${_ans,,}" == "no" ]]; then
         info "Skipped — install it later from hub 08 → Diagnostics → Node event recorder."
-        log "[STEP 14c] event recorder declined"
+        log "[STEP 14d] event recorder declined"
         return 0
     fi
     if gne_install; then
-        log "[STEP 14c] event recorder installed/refreshed"
+        log "[STEP 14d] event recorder installed/refreshed"
     else
         warn "Event recorder install failed — retry from hub 08 → Diagnostics → Node event recorder."
     fi

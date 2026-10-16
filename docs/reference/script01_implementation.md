@@ -1,7 +1,7 @@
 # Script 01 — Build a New Grin Node: implementation
 
 > **Covers code as of:** 2026-10-15 · **Last verified:** never systematically verified (written from the build record and a read of `lib/01_lib_menu.sh` and `lib/01_lib_node_table.sh`; the stub-harness result below describes the code, not this page)
-> **Product code last changed:** 2026-10-15 — `scripts/01_build_new_grin_node.sh` split into an entry plus `scripts/lib/01_lib_*.sh`; new menu and node table; `scripts/lib/grin_node_control.sh` (exact `=` session match); `scripts/081_host_monitor_port.sh` (remote stop snippet). Working tree at the time of writing.
+> **Product code last changed:** 2026-10-15 — `scripts/01_build_new_grin_node.sh` split into an entry plus `scripts/lib/01_lib_*.sh`; new menu and node table, then menu groups + per-key target hints, autostart in the status line and the wizard's Step 14c autostart offer; `scripts/lib/grin_node_control.sh` (exact `=` session match); `scripts/081_host_monitor_port.sh` (remote stop snippet). Working tree at the time of writing.
 
 **Status:** built, **not VPS-tested.** Behaviour was exercised only against a stub harness kept outside
 the repo (it sources one lib with `tmux`/`ss`/`su`/`pgrep`/`kill`/`grin` replaced by shell functions
@@ -15,20 +15,23 @@ flow and the Steps 2–14 pipeline). IPv6 → [script01_design_ipv6.md](script01
 
 ### 1.1 Menu and keys
 
-Script 01 opens on **one** status-first screen in every state: the node status block, then fixed
-keys. A key that cannot act now is printed dim with its reason; a typo or a dim key re-prompts and
-never leaves the script. Only `0` (or end of input) returns to the toolkit's main menu.
+Script 01 opens on **one** status-first screen in every state: the node status block, a rule, then
+fixed keys in three titled groups — *One-shot setup* (`A`), *Nodes* (`1`–`5`), *Source build* (`G`) —
+and `0`. A key that can act shows the network(s) it would act on (`→ testnet`,
+`→ both / mainnet / testnet`), taken from the same list the network picker offers; a key that cannot
+act is printed dim with its reason, in the same column. A typo or a dim key re-prompts and never
+leaves the script. Only `0` (or end of input) returns to the toolkit's main menu.
 
 | Key | Action |
 |---|---|
+| `A` | Super Auto — wipe both nodes, rebuild both pruned (typed `REBUILD`) |
 | `1` | Start a node |
 | `2` | Stop a node (no rebuild) |
-| `3` | Update the binary — mainnet / testnet / **both** (default) |
+| `3` | Update Grin binary — mainnet / testnet / **both** (default) |
 | `4` | Rebuild a node — `chain_data` only, or full reinstall of that network |
 | `5` | Install a node on a network that has none yet |
-| `G` | Compile from source / roll back (`lib/01_lib_source_build.sh`, unchanged) |
-| `A` | Super Auto — wipe both nodes, rebuild both pruned |
-| `0` | Back |
+| `G` | Compile Grin binary from source / roll back old Grin version (`lib/01_lib_source_build.sh`, unchanged) |
+| `0` | Back to main menu |
 
 Numbers are node actions; letters are advanced (`G`) or destructive (`A`). Hidden aliases for muscle
 memory: `s`→1, `b`→3, `m`→4 on mainnet, `t`→4 on testnet. `k`, `c`, `n`, `r` are deliberately not
@@ -58,6 +61,11 @@ share. Per network (`mainnet`, `testnet`) it fills `NT_*` arrays:
   hide a node.
 - **Foreign holder** of the P2P port (a non-`grin` process on 3414/13414) → red line; its pid is never
   signalled.
+- **Autostart** — the network's tagged `@reboot` line in root's crontab (the tag Script 03 → G and
+  `gnk_autostart_enable` both write), read once per scan: `autostart ✓` when its `cd '<dir>'` is the
+  scanned dir, `autostart ✗` plus a yellow line when it starts another dir (what a pruned↔full rebuild
+  leaves behind), `autostart —` when there is none. A line left for a network with no node is shown
+  under "not installed".
 
 ### 1.3 Per-node actions
 
@@ -135,6 +143,10 @@ the exact `-t "=name"`) and `081_host_monitor_port.sh` (its remote stop snippet 
   dirs. A node whose binary or config is missing offers only the full reinstall. Changing mainnet
   between pruned and full is a full reinstall of mainnet (Step 4 asks); testnet keeps running.
 - **Key 5** runs legacy-dir check → OS/deps → `select_network` (free networks only) → `setup_one_node`.
+  After each node's summary, Step 14c asks "Start this node automatically after a reboot? [Y/n]"
+  (default yes, EOF declines) and calls `gnk_autostart_enable` — mainnet 5 s, testnet 1000 s. It
+  replaces the network's line, so on key 4's full reinstall it also re-points a line still naming the
+  old dir; the prompt says so when that is the case. Step 14d is the event recorder offer.
 - **Key A** — wipes **both** nodes and rebuilds both pruned and streamed, with autostart, watchdog,
   event recorder and logrotate. It returns to the menu when done.
 - **Key G** stops **both** nodes while it swaps a binary (see Open items).
@@ -206,5 +218,4 @@ first; "stop all" is a loop over the table.
   when a foreign holder exists.
 - **Super Auto wipes only conf-listed dirs.** On a box whose conf was emptied by the old `K`, "wipe all"
   deletes nothing and rebuilds into the old dirs. Intended: reuse `s01_full_reinstall`'s scan-based removal.
-- **Menu polish:** no "(type REBUILD)" hint on `A`, `0` reads "Back", no *Nodes*/*Advanced* headings or
-  per-key target hint; key `3` on a stopped node never offers to start it.
+- **Key `3` on a stopped node never offers to start it** — key 1 is the only way.

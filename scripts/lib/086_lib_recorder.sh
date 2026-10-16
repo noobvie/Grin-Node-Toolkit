@@ -1,7 +1,7 @@
 # =============================================================================
 # lib/086_lib_recorder.sh — 086's read side of the node event recorder
 # =============================================================================
-# Design: docs/generated/script086_design.md §8.12 (+ as-built §8.18). The
+# Design: docs/reference/script086_design.md §8.12 (as-built: script086_implementation.md §8.18). The
 # recorder itself is lib/grin_node_events.sh; this lib only READS what it
 # writes (ledger.jsonl, status.json, evidence/) and turns that into the 086
 # sub-menu's timeline, availability summary, evidence list and masked export.

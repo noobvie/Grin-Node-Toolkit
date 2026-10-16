@@ -1,6 +1,6 @@
 // Payout-guard regression tests — the Tor rail's double-send guard and its recovery sweep.
 //
-// Guards audit §H1, §J4-1, §J4-2, §J4-3 and §J4-10. Every one of these decides whether real
+// Guards audit §H1 (script07_security_audit_archive.md), §J4-1, §J4-2, §J4-3 and §J4-10. Every one of these decides whether real
 // GRIN leaves the wallet a second time, or whether a miner's locked balance is ever released,
 // so each gets an executable test rather than a comment. §J17 found that the §J4 pass verified
 // all of this with scratchpad harnesses that were never committed — this file is that gap.
@@ -38,7 +38,7 @@ const cleanup = () => {
   }
 };
 
-const ADDR = 'tgrin1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq';
+const ADDR = 'tgrin1' + 'm'.repeat(58);   // well-formed: initSendTx validates a proof recipient
 const config = { network: 'testnet', withdrawal_fee: 0.04, wallet_send_timeout_ms: 120000 };
 
 // ─── Harness ─────────────────────────────────────────────────────────────────
@@ -175,7 +175,7 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
     ok('slate branch: TxSentCancelled → "absent" (a cancelled tx never reached the chain)',
       r.checked && r.outcome === 'absent', JSON.stringify(r));
   }
-  // (Session 4) The amount branch now counts a same-net Tor row still OPEN in tor_sending as a
+  // The amount branch counts a same-net Tor row still OPEN in tor_sending as a
   // possible owner of the tx — so each case below starts from an empty ledger, one row, one log.
   {
     reset();
@@ -219,10 +219,10 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
       r.checked === false && r.outcome === 'unknown', JSON.stringify(r));
   }
 
-  // ═══ 2. sendWithdrawal — ONE attempt per payout (2026-09-26) ════════════════
+  // ═══ 2. sendWithdrawal — ONE attempt per payout ════════════════
   // A Tor payout is tried once. A row that has ANY earlier attempt on record is never handed to
   // the wallet again, whatever the tx log says — it goes to tor_held and the Held resolution
-  // settles it (confirmed / refunded on proof of absence / held). The old code re-sent on 'absent'.
+  // settles it (confirmed / refunded on proof of absence / held).
   console.log('\n[2] sendWithdrawal — a row with an earlier attempt is never sent again');
   for (const [label, slate, log] of [
     ['CONFIRMED on chain', 'W-CONF', [tx({ slate: 'W-CONF', confirmed: true })]],
@@ -381,18 +381,18 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
       String(rowOf(id).slate_id));
   }
 
-  // ═══ 5. (removed 2026-09-26) the last-rung guard ═════════════════════════
+  // ═══ 5. (removed) the last-rung guard ═════════════════════════
   // There is no retry ladder any more, so there is no last rung: a Tor payout is tried ONCE and
   // its outcome is decided by [one-attempt] (A/B/C/D) and [held] below. Their cases cover what
   // this section proved — a send that reports failure but CONFIRMED is settled, an unconfirmed
   // or unreadable one is never refunded — without a ladder to reach it through.
 
-  // ═══ 6. Signed payment proofs (§H6) — stored only when they are provably OURS ═══
+  // ═══ 6. Signed payment proofs (§H6 (script07_security_audit_archive.md)) — stored only when they are provably OURS ═══
   // The proof is served to the miner as "your wallet signed for this payment", so a wrong one
   // is worse than none: it would hand a miner a stranger's transaction as their receipt. The
   // guard is the kernel: the excess the wallet signed over must equal the kernel the backfill
   // attached to the row, or nothing is stored. The rest is lifecycle — '' is terminal, NULL is
-  // "ask again", and non-Tor rails (which never requested a proof) are settled to '' up front.
+  // "ask again", and the Goblin rail (which never requests a proof) is settled to '' up front.
   console.log('\n[6] §H6 signed payment proofs — fetch, store, refuse');
   const PROOF = {
     amount: '99960000000', excess: '08' + 'ab'.repeat(32),
@@ -436,7 +436,21 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
     reset(); timeline = [];
     const id = seedConfirmed({ method: 'slatepack' });
     const r = await proofScheduler(PROOF).fetchAndStorePaymentProof(id);
-    ok('a slatepack row is settled to \'\' (none) without asking the wallet',
+    ok('a confirmed slatepack row whose proof matches its kernel → stored',
+      r.ok && !r.cached && rowOf(id).payment_proof === JSON.stringify(PROOF), JSON.stringify(r));
+  }
+  {
+    reset();
+    const id = seedConfirmed({ method: 'slatepack' });
+    const r = await proofScheduler(new Error('Transaction does not contain a payment proof')).fetchAndStorePaymentProof(id);
+    ok('a slatepack payout from before the rail requested proofs → \'\' (none), asked once',
+      !r.ok && r.reason === 'none' && rowOf(id).payment_proof === '', JSON.stringify(r));
+  }
+  {
+    reset(); timeline = [];
+    const id = seedConfirmed({ method: 'nostr' });
+    const r = await proofScheduler(PROOF).fetchAndStorePaymentProof(id);
+    ok('a Goblin (nostr) row is settled to \'\' (none) without asking the wallet',
       !r.ok && r.reason === 'none' && rowOf(id).payment_proof === '' && !timeline.some((t) => t.startsWith('proof:')),
       JSON.stringify(r));
   }
@@ -444,7 +458,7 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
     reset(); timeline = [];
     const id = seedConfirmed({ kernel_excess: null });
     const r = await proofScheduler(PROOF).fetchAndStorePaymentProof(id);
-    ok('a row with no kernel yet is not asked — the wallet refuses proofs for unconfirmed txs',
+    ok('a row with no kernel yet is not asked — the pool, not the wallet, gates on confirmation',
       !r.ok && r.reason === 'not_confirmed' && !timeline.some((t) => t.startsWith('proof:')), JSON.stringify(r));
   }
   {
@@ -468,10 +482,10 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
     ok('\'\' is terminal — a settled "none" row is never re-asked', !r.ok && r.reason === 'none' && rowOf(id).payment_proof === '');
   }
   {
-    // The backfill's selection: only confirmed Tor rows with a kernel and no answer yet.
+    // The backfill's selection: only confirmed Tor/slatepack rows with a kernel and no answer yet.
     reset(); timeline = [];
     const want = seedConfirmed();
-    seedConfirmed({ method: 'slatepack' });       // wrong rail
+    seedConfirmed({ method: 'nostr' });           // wrong rail: Goblin requests no proof
     seedConfirmed({ kernel_excess: null });        // not yet mined
     seedConfirmed({ payment_proof: '' });          // already settled: none
     const s = proofScheduler(PROOF);
@@ -482,10 +496,62 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
       asked.join(','));
   }
 
-  // ═══ Slatepack response window (2026-09-24) ═══
-  // The manual rail's expiry was a hardcoded 24h: the scheduler read `slatepack_ttl_hours`,
-  // which neither config.js nor the settings table ever set. It is now slatepack_ttl_minutes,
-  // 30 by default, wired end to end. Miners have no cancel, so this window is their only exit
+  // A wallet swapped or recovered before a proof was stored answers "transaction doesn't exist"
+  // forever. That must neither hold a backfill slot every tick nor settle on the first answer.
+  const GONE = new Error('Wallet error: {"PaymentProofRetrieval":"Transaction doesn\'t exist"}');
+  const nowS = () => Math.floor(Date.now() / 1000);
+  const setProofCols = (id, cols) => {
+    for (const [k, v] of Object.entries(cols)) db.prepare(`UPDATE withdrawals SET ${k} = ? WHERE id = ?`).run(v, id);
+  };
+  {
+    reset();
+    const id = seedConfirmed();
+    const r = await proofScheduler(GONE).fetchAndStorePaymentProof(id);
+    const row = rowOf(id);
+    ok('a first "transaction doesn\'t exist" → still NULL, counted once, backed off ~1 h',
+      !r.ok && row.payment_proof === null && row.payment_proof_gone_count === 1 && row.payment_proof_gone_since > 0 &&
+      row.payment_proof_retry_at >= nowS() + 3500, JSON.stringify(row));
+  }
+  {
+    reset();
+    const id = seedConfirmed();
+    setProofCols(id, { payment_proof_gone_count: 9, payment_proof_gone_since: nowS() - 3600 });
+    const r = await proofScheduler(GONE).fetchAndStorePaymentProof(id);
+    ok('many "doesn\'t exist" answers inside one day → still NULL (a wallet mid-restore keeps its proofs)',
+      !r.ok && rowOf(id).payment_proof === null && rowOf(id).payment_proof_gone_count === 10, JSON.stringify(r));
+  }
+  {
+    reset();
+    const id = seedConfirmed();
+    setProofCols(id, { payment_proof_gone_count: 2, payment_proof_gone_since: nowS() - 90000 });
+    const r = await proofScheduler(GONE).fetchAndStorePaymentProof(id);
+    ok('the 3rd answer, a day after the first → \'\' (reason wallet_lost), the backfill stops asking',
+      !r.ok && r.reason === 'wallet_lost' && rowOf(id).payment_proof === '', JSON.stringify(r));
+  }
+  {
+    reset();
+    const id = seedConfirmed();
+    setProofCols(id, { payment_proof_gone_count: 2, payment_proof_gone_since: nowS() - 90000 });
+    const r = await proofScheduler(new Error('HTTP 404: Not Found')).fetchAndStorePaymentProof(id);
+    ok('a transport "Not Found" is never a wallet answer → not counted, never settles',
+      !r.ok && r.reason === 'error' && rowOf(id).payment_proof === null && rowOf(id).payment_proof_gone_count === 2 &&
+      rowOf(id).payment_proof_retry_at >= nowS() + 3500, JSON.stringify(rowOf(id)));
+  }
+  {
+    // 25 rows in backoff, newer than the one eligible row: it is still asked on this tick.
+    reset(); timeline = [];
+    const want = seedConfirmed();
+    for (let i = 0; i < 25; i++) setProofCols(seedConfirmed(), { payment_proof_retry_at: nowS() + 3000 });
+    const s = proofScheduler(PROOF);
+    await s.backfillPaymentProofs();
+    const asked = timeline.filter((t) => t.startsWith('proof:'));
+    ok('rows in their retry backoff are skipped, so they cannot starve an older eligible row',
+      asked.length === 1 && rowOf(want).payment_proof === JSON.stringify(PROOF), asked.join(','));
+  }
+
+  // ═══ Slatepack response window ═══
+  // The manual rail's expiry is slatepack_ttl_minutes (30 by default), wired end to end —
+  // not a hardcoded 24h or the unset `slatepack_ttl_hours`. Miners have no cancel, so this window is their only exit
   // from an abandoned request — and each pending one locks pool-wallet outputs until it ends.
   console.log('\n[slatepack] response window — default, config path, and the expiry sweep');
   {
@@ -522,7 +588,7 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
     const oldId = seedSp(31, 'sp-old');
     const freshId = seedSp(29, 'sp-fresh');
     const cancelled = [];
-    // The expiry gate reads the wallet's tx log before any refund (2026-09-27), so the stub needs
+    // The expiry gate reads the wallet's tx log before any refund, so the stub needs
     // one: grin-wallet v5.5.0 records a locked-but-unanswered slate as TxSent / Standard1.
     const s = new WithdrawalScheduler(config, {
       async cancelTx(id) { cancelled.push(id); },
@@ -538,9 +604,9 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
     ok('29-min-old slatepack is still pending', rowOf(freshId).status === 'slatepack_pending', rowOf(freshId).status);
   }
 
-  // ═══ "Not now" refusals say "try again in about an hour" (2026-09-24) ═══
+  // ═══ "Not now" refusals say "try again in about an hour" ═══
   // Neither may leak pool internals: the cap's size, or — far worse — the pool wallet's
-  // spendable balance, which grin-wallet's NotEnoughFunds carries and used to reach the miner.
+  // spendable balance, which grin-wallet's NotEnoughFunds carries and which must never reach the miner.
   console.log('\n[busy] pool-full and wallet-short refusals');
   {
     reset();
@@ -590,14 +656,14 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
       e3 && e3.code === 502 && /Bad Gateway/.test(e3.message), e3 && e3.message);
   }
 
-  // ═══ (moved 2026-09-26) retry_reason / shortfall retries ═══
+  // ═══ (moved) retry_reason / shortfall retries ═══
   // A pool-wallet shortfall is outcome C of the one attempt now: refunded at once with
   // fail_code pool_busy when the tx log proves nothing was sent — see [one-attempt] C1–C3, which
-  // also keep the rolling pool_wallet_short alert cases. The 1 h uncounted retry (F3) is gone.
+  // also keep the rolling pool_wallet_short alert cases. There is no 1 h uncounted retry.
 
-  // ═══ Kernel proof only once MINED (2026-09-25, F1) ═══
+  // ═══ Kernel proof only once MINED ═══
   // withdrawals.kernel_excess drives the public "<method> · mined" badge (P-05 Method column), has_kernel_proof and the
-  // account page's explorer link, so it must mean "seen mined". grin-wallet v5.4.1 writes a tx-log
+  // account page's explorer link, so it must mean "seen mined". grin-wallet writes a tx-log
   // entry's kernel_excess at tx_lock_outputs and again at finalize (update_stored_tx) — both BEFORE
   // post_tx — so the entry's `confirmed` flag is the only chain evidence, never the excess itself.
   console.log('\n[kernel-proof] the kernel is attached only from a CONFIRMED tx-log entry');
@@ -639,7 +705,7 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
       JSON.stringify([rowOf(a).kernel_excess, rowOf(b).kernel_excess]));
   }
 
-  // ═══ "Marked paid but not mined" watchdog + safe repost (2026-09-25, F2) ═══
+  // ═══ "Marked paid but not mined" watchdog + safe repost ═══
   // 'confirmed' means the send COMMAND succeeded, not that the tx mined — and a node restart drops
   // its mempool. The watchdog classifies every payout still without a kernel an hour after it was
   // marked paid, raises ONE rolling admin alert, and re-broadcasts the IDENTICAL stored tx for the
@@ -835,7 +901,7 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
     ok('…and no other route in index.js emits it (no public route)', hits > 0 && hits === inAdmin, `${hits} vs ${inAdmin}`);
   }
 
-  // ═══ (moved 2026-09-26) exit-0 slatepack fallback ═══
+  // ═══ (moved) exit-0 slatepack fallback ═══
   // classifySendOutput + _releaseTorFallback are unchanged; what happens AFTER the cancel is now
   // outcome B of the one attempt (refund now, fail_code from a fresh probe) — see [one-attempt] B*.
 
@@ -865,12 +931,12 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
   process.exit(fail === 0 ? 0 : 1);
 })().catch((e) => { console.error(e); cleanup(); process.exit(1); });
 
-// ═══ [sp-recover] a lost slatepack tab, and the expiry sweep's pool-wallet cancel (2026-09-25) ═══
-// Three money-path changes, each shown to fail against the code it replaced:
+// ═══ [sp-recover] a lost slatepack tab, and the expiry sweep's pool-wallet cancel ═══
+// Three money-path changes, each case fails against the naive alternative:
 //   · the manual rail stores its (encrypted) S1 so the owner can fetch it again; the Goblin rail's
 //     PLAIN S1 never is; a settled row's copy goes with the settling claim;
-//   · expiry refunds FIRST and cancels only a row it won — the old cancel-then-claim order
-//     cancelled a slate a concurrent finalize had just broadcast;
+//   · expiry refunds FIRST and cancels only a row it won — a cancel-then-claim order
+//     would cancel a slate a concurrent finalize had just broadcast;
 //   · a failed expiry cancel is remembered (slate_cancel_pending) and retried against the wallet's
 //     own tx log, never re-cancelling a cancelled tx and never cancelling a mined one.
 async function slatepackRecoverySection() {
@@ -1105,16 +1171,15 @@ async function slatepackRecoverySection() {
 }
 
 // ═══ [send-lock] the slatepack create path selects + locks coins under ONE lock ════════════
-// The step-by-step Tor send (F5) and its [stepwise] S1–S19 cases were DELETED 2026-09-26. Its S14
-// was the only case proving that a create path really runs init → lock inside WalletAPI's
-// withSendLock; it lives on here as L1, rebuilt on two slatepack creates (the Goblin create shares
+// There is no step-by-step Tor send. L1 proves that a create path really runs init → lock inside
+// WalletAPI's withSendLock, built on two slatepack creates (the Goblin create shares
 // the same _withSendLock call). The REAL WalletAPI with only its wire boundary (_encryptedCall)
 // faked, so the real lock runs. Without it two inits interleave before either lock and can select
 // the SAME coins (design §8.1.1), and one of the two transactions can never mine.
 async function sendLockSection() {
   console.log('\n[send-lock] two slatepack creates cannot interleave init → lock');
   const WalletAPI = require(path.join(APP, 'lib/wallet.js'));
-  const ADDR2 = 'tgrin1zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz';
+  const ADDR2 = 'tgrin1' + 'z'.repeat(58);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const quiet = async (fn) => {
     const o = [console.log, console.error, console.warn];
@@ -1167,8 +1232,8 @@ async function sendLockSection() {
   reset();
 }
 
-// ═══ [review] Part 8 — independent review of Parts 1–6 (2026-09-25) ═════════════════════════
-// Each case failed on the code as Parts 1–6 left it.
+// ═══ [review] independent review ═════════════════════════
+// Each case failed on the code under review.
 async function reviewSection() {
   console.log('\n[review] Part 8 — independent review of Parts 1–6');
   const quiet = async (fn) => {
@@ -1180,9 +1245,9 @@ async function reviewSection() {
   const C1 = '0000c001-0000-4000-8000-000000000000';   // a CLI send whose slate was never captured
   const ev = db.prepare(
     'INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note, created_at) VALUES (?, ?, ?, \'scheduler\', ?, ?)');
-  // Attempt 1 was STEPWISE (slate SW, cancelled, row back on the ladder); every later attempt is CLI.
-  // slate_id still holds SW — the stepwise rail wrote it before its lock. That rail was DELETED
-  // 2026-09-26, but a row it touched can still exist, so R1–R3 stay: they pin _dropStepwiseSlate.
+  // Attempt 1 was STEPWISE (slate SW, cancelled); every later attempt is CLI. slate_id still holds
+  // SW. No code writes that now, but a legacy row can still exist, so R1–R3 stay: they pin
+  // _dropStepwiseSlate.
   const stepwiseThenCli = ({ retries = 1 } = {}) => {
     reset(); sends = []; timeline = [];
     db.exec('DELETE FROM payout_control');
@@ -1203,7 +1268,7 @@ async function reviewSection() {
   };
 
   // ── R1 a stepwise row is never sent again, and its Held check does not trust the dead slate ──
-  // Since 2026-09-26 a row with any earlier attempt is held, never re-sent. _dropStepwiseSlate still
+  // A row with any earlier attempt is held, never re-sent. _dropStepwiseSlate still
   // matters: the Held check reads slate_id as THIS payout's send, so a left-over cancelled stepwise
   // slate reads "absent" and two such reads would REFUND a payout whose CLI send landed.
   for (const mined of [false, true]) {
@@ -1305,7 +1370,7 @@ async function reviewSection() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
-// ONE ATTEMPT + HELD + TOR PAUSE (plan script07_tor_one_attempt, Session 2 — 2026-09-26)
+// ONE ATTEMPT + HELD + TOR PAUSE (design §8, script07_design.md)
 // A Tor payout is tried ONCE. It ends Paid, Failed (balance back now — only on wallet proof that
 // nothing was sent) or Held (outcome unknown: amount stays locked, never re-sent). 5 counted
 // failures in 24 h pause Tor for that address. Every case below failed on the code before it.
@@ -1516,7 +1581,7 @@ async function oneAttemptSection() {
 
 async function heldSection() {
   console.log('\n[held] Held resolution — confirm on proof; refund only on TWO absent reads ≥ 10 min apart; never re-send');
-  // (Session 4) A held row's own send was locked inside its attempt — claimed at now−3600, held at
+  // A held row's own send is locked inside its attempt — claimed at now−3600, held at
   // now−heldAgoS — so a tx that IS this row's is dated inside that span (SENT), never after the hold.
   const SENT = nowS() - 1800;
   const seedHeld = ({ slate = null, heldAgoS = 60 } = {}) => {
@@ -1620,7 +1685,7 @@ async function heldSection() {
     const s = newScheduler([]);
     await quiet(async () => s.freeze('test freeze', 'test'));
     await run(s); age(id, 11 * 60); await run(s);
-    // Changed by the 2026-09-26 /review (#1): restore and Migrate IN freeze payouts precisely so
+    // Restore and Migrate IN freeze payouts precisely so
     // nothing moves before the operator reconciles, and a refund here is decided by reading a
     // wallet log that a restore may have replaced. Confirmations still run (see [review-fixes]).
     ok('H9. payouts FROZEN: the Held check still runs, but it never REFUNDS — that waits for a resume',
@@ -1661,7 +1726,7 @@ async function heldSection() {
       !!e && e.code === 503 && heldOk(id), e && e.message);
     reset();
     id = seedHeld();
-    // (2026-09-26 /review #4) Only a match the wallet records as a bare lock (tx_slate_state
+    // Only a match the wallet records as a bare lock (tx_slate_state
     // Standard1 — the CLI's slatepack fallback, never finalized) is left to the operator's
     // judgement; a round-tripped (Standard2) or unlabelled one is refused — see [review-fixes] F4.
     e = await thrown(() => quiet(() => newScheduler([{ ...tx({ slate: 'F-UNC', when: SENT }), tx_slate_state: 'Standard1' }])
@@ -2109,7 +2174,7 @@ async function routeSection() {
       mv.body.miner.tor_pause.failures_24h === 5 && !!mv.body.miner.tor_pause.paused_until, JSON.stringify(mv.body && mv.body.miner && mv.body.miner.tor_pause));
   }
   {
-    // A Held row, and a legacy retry_scheduled one, are no longer cancellable by hand: cancel
+    // A Held row, and a legacy retry_scheduled one, are not cancellable by hand: cancel
     // refunded without asking the wallet. The Held path has its own proof-gated forced refund.
     reset();
     const h = load('post', '/api/admin/withdrawals/:id/cancel', adminDeps(sched()));
@@ -2128,7 +2193,7 @@ async function routeSection() {
     // A tor_failed row was refunded when it failed, so cancel had nothing to return. It only
     // relabelled the row 'cancelled', and four readers key on 'tor_failed': auditWalletSends
     // (counts 'cancelled' as recorded, which hides a double pay), the Tor pause count, the
-    // pool-side payout_failed alert and the cooldown exclusion. Operator decision 2026-09-27.
+    // pool-side payout_failed alert and the cooldown exclusion. Operator decision.
     reset(); fund(100);
     const h = load('post', '/api/admin/withdrawals/:id/cancel', adminDeps(sched()));
     const failed = seedFailed('wallet_offline', 600);
@@ -2143,7 +2208,7 @@ async function routeSection() {
        JSON.stringify(acct()));
   }
 
-  // ── RT9 (Session 4 review, R9) a double-click on "Send as Slatepack instead" cannot make two ──
+  // ── RT9 a double-click on "Send as Slatepack instead" cannot make two ──
   // The page's in-flight flag only spares the second POST; the server must refuse it on its own.
   // Two POSTs through the REAL handler, concurrently, with the wallet's init held open until both
   // are in flight — so the second arrives while the first is inside its wallet awaits.
@@ -2201,7 +2266,7 @@ async function alertNoiseSection() {
   reset();
 }
 
-// ═══ [review-s4] Session 4 review (2026-09-26): the amount matcher, re-derived ═══════════════
+// ═══ [review-s4] the amount matcher, re-derived ═══════════════
 // grin-wallet v5.5.0 (libwallet selection.rs lock_tx_context) writes the sender's TxSent with
 // amount_debited = Σ inputs, amount_credited = Σ change, fee = the slate's FeeFields — so
 // debited − credited − fee.fee() is the recipient amount. Two things the matcher got wrong:
@@ -2297,9 +2362,9 @@ async function reviewS4Section() {
   fresh();
   db.prepare('DELETE FROM miner_accounts WHERE grin_address = ?').run(ADDR_B);
 
-  // ── _captureTorSlateId (review finding (c), 2026-09-26): the proof-link slate id is captured by
-  // the same attempt-window rule as the matcher, not by the old "created_at − 60 s" lower bound.
-  // A wrong capture no longer refunds anything, but it puts another payout's kernel link on this one.
+  // ── _captureTorSlateId (review finding (c)): the proof-link slate id is captured by
+  // the same attempt-window rule as the matcher, not by a "created_at − 60 s" lower bound.
+  // A wrong capture refunds nothing, but it puts another payout's kernel link on this one.
   console.log('\n[review-s4] _captureTorSlateId — only a tx locked inside THIS row\'s own attempt');
   const capture = async (txs, { claimAt = t0 + 100 } = {}) => {
     fresh();
@@ -2324,10 +2389,10 @@ async function reviewS4Section() {
   db.prepare('DELETE FROM miner_accounts WHERE grin_address = ?').run(ADDR_B);
 }
 
-// ═══ [health-card] the payout alerts reach the admin health page (2026-09-26) ════════════════
+// ═══ [health-card] the payout alerts reach the admin health page ════════════════
 // payout_held (critical: a Tor payout held > 24 h) and tor_send_path (warning: the miner's wallet
-// answers our probe but grin-wallet could not deliver — payout #10's symptom) used to live in the
-// alerts table only. They now fold into the Grin Wallet card beside payout_unmined, through ONE
+// answers our probe but grin-wallet could not deliver — payout #10's symptom) are in the
+// alerts table AND fold into the Grin Wallet card beside payout_unmined, through ONE
 // helper the /api/admin/health route calls.
 async function healthCardSection() {
   console.log('\n[health-card] payout alerts on the Grin Wallet card; the unrecorded-send audit ignores refunded Tor rows');
@@ -2367,8 +2432,8 @@ async function healthCardSection() {
     c4.status === 'error' && /owner API down/.test(c4.message) && /held test/.test(c4.message) && /pool wallet's Tor/.test(c4.message),
     JSON.stringify(c4));
   {
-    // Reconciliation's out-of-band send audit (review finding (b), 2026-09-26). A tor_failed row
-    // is refunded, and since the one-attempt change only on wallet proof that nothing was sent — so
+    // Reconciliation's out-of-band send audit (review finding (b)). A tor_failed row
+    // is refunded, and only on wallet proof that nothing was sent — so
     // a CONFIRMED send whose only match is such a row is a double pay, not a "recorded" payout.
     const { auditWalletSends } = require(path.join(APP, 'lib/reconciliation.js'));
     const sendOf = (slate) => ({ id: 1, tx_type: 'TxSent', confirmed: true, tx_slate_id: slate,
@@ -2400,7 +2465,7 @@ async function healthCardSection() {
   wipe();
 }
 
-// ═══ [review-fixes] the /review of 2026-09-26, findings #1–#6 ════════════════════════════════
+// ═══ [review-fixes] the /review, findings #1–#6 ════════════════════════════════
 // Every non-control case below failed on the code the review read, and was seen failing before
 // the fix went in:
 //   #1 a Held refund needs payouts UNFROZEN, two absent reads taken after the last resume, and a
@@ -2615,7 +2680,7 @@ async function reviewFixesSection() {
       const id = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
       await quiet(async () => {
         const sp = s.createSlatepackWithdrawal(ADDR2, 30).catch(() => {});
-        // "Already selecting coins" = past the pre-lock wallet read (2026-10-05), which yields once.
+        // "Already selecting coins" = past the pre-lock wallet read, which yields once.
         await new Promise((r) => setImmediate(r));
         await s.sendWithdrawal(id);
         await sp;
@@ -2831,7 +2896,7 @@ async function reviewFixesSection() {
   reset(); unfreeze();
 }
 
-// ═══ [binding] a reply finalizes only the slate its OWN row was issued (2026-09-27) ═══
+// ═══ [binding] a reply finalizes only the slate its OWN row was issued ═══
 // Both finalize paths compared the reply's slate id with the row's only `if (w.slate_id && …)`.
 // A new row sits in slatepack_pending with NO slate id while its create is inside the wallet
 // calls, and a reply that decodes to no id skipped the compare as well. Either way the reply went
@@ -2945,6 +3010,36 @@ async function bindingSection() {
       w.calls.join(',') === 'finalize:c1-issued,post:c1-issued', JSON.stringify(w.calls));
   }
 
+  // ── PP1 manual rail: the miner's wallet did not sign the payment proof the slate asks for ──
+  // finalize_tx refuses it before anything is broadcast; the miner gets a plain instruction (400),
+  // not the raw wallet error (502), and the row reopens so a properly signed reply still settles.
+  {
+    reset(); fund(0); seq++;
+    const id = seedRow({ slate: 'p1-issued' });
+    const w = bindWallet();
+    let refuse = true;
+    w.finalizeTx = async (slate) => {
+      w.calls.push(`finalize:${slate && slate.id}`);
+      if (refuse) throw new Error('Wallet error: {"PaymentProof":"Recipient did not provide requested proof signature"}');
+      return slate;
+    };
+    const s = sched(w);
+    const e = await thrown(() => quiet(() => s.finalizeSlatepackWithdrawal(ADDR, id, reply('p1-issued'))));
+    ok('PP1. an unsigned proof → 400 with the plain "your wallet did not sign" message, nothing posted',
+      !!e && e.code === 400 && /did not sign the payment proof/.test(e.message) && !w.calls.some((c) => c.startsWith('post:')),
+      JSON.stringify({ e: e && e.message, code: e && e.code, calls: w.calls }));
+    ok('PP1. …and the row is back to pending', rowOf(id).status === 'slatepack_pending', JSON.stringify(rowOf(id)));
+    refuse = false;
+    const r = await quiet(() => s.finalizeSlatepackWithdrawal(ADDR, id, reply('p1-issued')));
+    ok('PP1. …so a properly signed reply still finalizes and confirms',
+      !!r && r.status === 'confirmed' && rowOf(id).status === 'confirmed', JSON.stringify(w.calls));
+    w.finalizeTx = async () => { throw new Error('Wallet error: {"Lmdb":"something unrelated"}'); };
+    const id2 = seedRow({ slate: 'p1-other' });
+    const e2 = await thrown(() => quiet(() => sched(w).finalizeSlatepackWithdrawal(ADDR, id2, reply('p1-other'))));
+    ok('PP1. control: any other finalize error keeps the 502 + raw wallet error',
+      !!e2 && e2.code === 502 && /failed to finalize slatepack/.test(e2.message), e2 && e2.message);
+  }
+
   // ── B3 Goblin rail: a DM reply arriving while the new row has no slate id ──
   // The bridge routes a DM to the sender npub's OLDEST pending Goblin row, not by slate id, so a
   // reply sent during the create lands on the new row exactly as a pasted one does.
@@ -2998,7 +3093,7 @@ async function bindingSection() {
   reset();
 }
 
-// ═══ [expiry-gate] the slatepack expiry sweep asks the wallet before it refunds (2026-09-27) ═══
+// ═══ [expiry-gate] the slatepack expiry sweep asks the wallet before it refunds ═══
 // `grin-wallet receive` sends its reply straight back to the address inside the S1 over Tor, and
 // the pool wallet's Foreign finalize_tx then finalizes AND posts it, never telling this backend
 // (grin-wallet v5.5.0: controller/src/command.rs receive → try_slatepack_sync_workflow →
@@ -3159,7 +3254,7 @@ async function expiryGateSection() {
     ok('G9. a TxReceived with the same slate id never stands in for the pool\'s own TxSent', refunded(id), JSON.stringify(rowOf(id)));
   }
 
-  // ── G10 held rows never starve newer expiries (the batch used to be LIMIT 10) ──
+  // ── G10 held rows never starve newer expiries (the batch is not capped at 10) ──
   {
     wipe();
     const log = [];
@@ -3264,9 +3359,9 @@ async function walletVersionSection() {
     !!pin && pin[1] === T, pin ? pin[1] : 'not found');
 }
 
-// ═══ [double-pay-card] the "paid twice?" alarm on the Health card, closed only by hand (2026-09-27) ═══
+// ═══ [double-pay-card] the "paid twice?" alarm on the Health card, closed only by hand ═══
 // slate_refunded_but_mined (retryExpiredSlateCancels) is raised once per payout and resolved by
-// NOTHING automatic, so until now it sat in the alerts table where no admin page showed it. It now
+// NOTHING automatic, so it must not sit in the alerts table unseen. It
 // folds into the Grin Wallet card as CRITICAL with its id, and the operator closes it with "Mark
 // reconciled" — a step-up-gated, audited route that refuses every alert type the code resolves itself.
 async function doublePayCardSection() {
@@ -3336,12 +3431,12 @@ async function doublePayCardSection() {
     /<code>grin-wallet receive -m<\/code>/.test(acct));
 }
 
-// ═══ [in-flight] payouts in flight never read as a shortfall or a drain (2026-10-05) ═══════════
+// ═══ [in-flight] payouts in flight never read as a shortfall or a drain ═══════════
 // grin-wallet v5.5.0 retrieve_info (min_conf 1): a payout's inputs go to amount_locked, its change
 // to amount_awaiting_finalization, and `total` counts NEITHER until the tx is mined. Coverage and
-// the drain detector compared `total`, so two miners withdrawing their full balances from one big
-// output read as a 1000-GRIN shortfall and AUTO-FROZE payouts. Both now compare HELD
-// (total + locked). Every case below fails against the old `total` formula.
+// the drain detector must not compare `total`: two miners withdrawing their full balances from one big
+// output would read as a 1000-GRIN shortfall and AUTO-FREEZE payouts. Both compare HELD
+// (total + locked). Every case below fails against a `total` formula.
 async function inFlightCoverageSection() {
   console.log('\n[in-flight] concurrent payouts are not a shortfall, and not a drain');
   const { computeReconciliation } = require(path.join(APP, 'lib/reconciliation.js'));
@@ -3436,10 +3531,10 @@ async function inFlightCoverageSection() {
   wipe();
 }
 
-// ═══ [queue] "Another payment is ahead" — refused before the lock, with an honest wait (2026-10-05) ═══
+// ═══ [queue] "Another payment is ahead" — refused before the lock, with an honest wait ═══
 // A payout locks whole outputs; their change is not spendable until mined (1 conf) or 10 deep (Tor
-// CLI). A second miner right behind the first used to get NotEnoughFunds — after their balance was
-// locked, so the reversal also started the 30-min cooldown. The wallet is now read BEFORE the lock,
+// CLI). A second miner right behind the first must not get NotEnoughFunds — after their balance was
+// locked, the reversal would also start the 30-min cooldown. The wallet is read BEFORE the lock,
 // and the wait is the LATEST release among the payouts ahead, never their sum.
 async function paymentQueueSection() {
   console.log('\n[queue] payments ahead: wait = the slowest one, refused before any lock');
@@ -3558,6 +3653,8 @@ async function paymentQueueSection() {
     await thrown(() => quiet(() => sc.createSlatepackWithdrawal(ADDR, 60)));
     ok('Q14. a slatepack payout from a 1-output wallet asks init_send_tx for 3 change outputs',
       !!seen && seen.changeOutputs === 3, JSON.stringify(seen));
+    ok('Q14b. …and requests a payment proof addressed to the miner',
+      !!seen && seen.paymentProofRecipient === ADDR, JSON.stringify(seen));
   }
   {
     reset();

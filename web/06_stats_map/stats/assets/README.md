@@ -2,7 +2,7 @@
 
 Vector basemap data for the peer map at `web/06_stats_map/stats/index.html`.
 Self-hosted so no visitor's browser contacts a third-party tile CDN.
-Rationale and sizing: `docs/generated/script06_design.md` — *"Peer map — self-hosted
+Rationale and sizing: `docs/reference/script06_design.md` — *"Peer map — self-hosted
 basemap, no third-party tiles"*.
 
 These are **static committed data files**. They are copied to the VPS by the existing

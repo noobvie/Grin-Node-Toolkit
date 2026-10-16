@@ -83,7 +83,7 @@ console.log('\n[2] §J14-2 — index.html vs the withdrawals schema');
   // replaced, so a whole-file grep would match the explanation and report the bug as present.
   const badgeMap = (home.match(/const STATUS_BADGE = \{([\s\S]*?)\n\};/) || [])[1] || '';
   const declared = [...badgeMap.matchAll(/^\s*([a-z_]+):/gm)].map((x) => x[1]);
-  // tor_held (2026-09-26): a Tor payout whose one attempt has an unknown outcome. retry_scheduled
+  // tor_held: a Tor payout whose one attempt has an unknown outcome. retry_scheduled
   // stays while a legacy row can still exist (the scheduler migrates them at its first pass).
   const statuses = ['tor_checking', 'tor_sending', 'tor_held', 'retry_scheduled', 'slatepack_pending',
                     'finalizing', 'confirmed', 'tor_failed', 'slatepack_failed',
@@ -97,7 +97,7 @@ console.log('\n[2] §J14-2 — index.html vs the withdrawals schema');
   ok('control — no status the scheduler never writes is still in the map',
      stale.length === 0, stale.join(', '));
 
-  // The dashboard and the payouts page must not drift apart again (audit §H4). Read from the
+  // The dashboard and the payouts page must not drift apart again (audit §H4 (script07_security_audit_archive.md)). Read from the
   // STATUS block only — payments.html also has a CHAIN badge map (on-chain state of a paid row,
   // not a withdrawal status), which the dashboard has no reason to know.
   const payStatusBlock = (read('payments.html').match(/const STATUS = \{([\s\S]*?)\n\};/) || [])[1] || '';
@@ -189,7 +189,7 @@ console.log('\n[7] §J14-4 — the admin panel gets its own CSP');
     path.resolve(__dirname, '../../../../scripts/07_grin_mining_public_pool.sh'), 'utf8');
 
   // /admin/ is static-served, so Express's header middleware never runs for an admin page:
-  // whatever the vhost includes IS the admin CSP. It used to include $hdr_page, the public
+  // whatever the vhost includes IS the admin CSP. It must not include $hdr_page, the public
   // one, which allowlists jsdelivr + four analytics origins the panel never uses.
   ok('pool_setup_nginx writes a dedicated admin header snippet',
      /local hdr_admin="\$snippet_dir\/script07-\$\{POOL_SERVICE\}-admin-headers\.conf"/.test(vhost));
@@ -200,12 +200,12 @@ console.log('\n[7] §J14-4 — the admin panel gets its own CSP');
      /connect-src 'self';/.test(adminCsp));
   ok('the admin CSP allowlists no third-party origin at all',
      !!adminCsp && !/https:\/\//.test(adminCsp));
-  // Code-layout F7 (2026-10-12): every admin page script is an external /admin/js/<page>.js, so
+  // Every admin page script is an external /admin/js/<page>.js, so
   // script-src is exactly 'self' — inline script is blocked. data: images stay (2FA QR).
   ok("it allows no inline script (script-src 'self' only) and keeps data: images (2FA QR)",
      /script-src 'self';/.test(adminCsp) && !/script-src[^;]*'unsafe-(inline|eval)'/.test(adminCsp) &&
      /img-src 'self' data:/.test(adminCsp));
-  // design §18.11 Part 3 #1: the Donors queue loads banners from a plain same-origin src, so
+  // Design §18.11 (script07_implementation.md): the Donors queue loads banners from a plain same-origin src, so
   // img-src stays exactly 'self' data: — no blob:, which would let a preview escape the image
   // route's sandbox headers.
   ok("img-src is exactly 'self' data: — no blob:, no other widening",
@@ -276,7 +276,7 @@ console.log('\n[8] §J14-9 — ad counters are labelled unverified');
   // Control: that predicate is only meaningful if it matches the one the renderer uses.
   ok('control — publicByPlacement still uses the same serving predicate',
      /is_active = 1\s*\n\s*AND \(start_at IS NULL OR start_at <= \?\)\s*\n\s*AND \(end_at IS NULL OR end_at >= \?\)/.test(adsLib));
-  // Design §19.17 D22: the ad TYPE is part of the serving predicate now (a legacy `code` row is
+  // Design §19.17 (script07_design_games.md) D22: the ad TYPE is part of the serving predicate now (a legacy `code` row is
   // never served), so it must be in BOTH statements, through the one shared constant.
   ok("D22: SERVABLE admits banner + text only", /const SERVABLE = "ad_type IN \('banner', 'text'\)";/.test(adsLib));
   ok('D22: publicByPlacement AND recordEvents both splice in SERVABLE',
@@ -285,7 +285,7 @@ console.log('\n[8] §J14-9 — ad counters are labelled unverified');
      !/SELECT id, placement, ad_type[^`]*html_code/.test(adsLib));
 }
 
-// ── design §19.17 D22 — the code-ad type is gone from the admin page ───────────
+// ── design §19.17 (script07_design_games.md) D22 — the code-ad type is gone from the admin page ───────────
 console.log('\n[8b] D22 — ads.html offers no code ad; a legacy one is delete-only');
 {
   const ads = read('ads.html');
@@ -322,7 +322,7 @@ console.log('\n[9] §18.6 — donors.html');
      /decorateDonorBadge/.test(shell) && /typeof d\.pending_requests === 'number'/.test(shell) &&
      /if \(!\(n > 0\)\) return;/.test(shell) && !/new_names_7d/.test(shell));
 
-  // Page order (§18 Part 3): the review queue first, then the donors list, then the settings.
+  // Page order: the review queue first, then the donors list, then the settings.
   const qAt = donors.indexOf('id="queue-tbody"'), dAt = donors.indexOf('id="donors-tbody"'), sAt = donors.indexOf('id="donation-settings"');
   ok('page order: review queue → donors list → settings', qAt > 0 && qAt < dAt && dAt < sAt);
 
@@ -369,7 +369,7 @@ console.log('\n[9] §18.6 — donors.html');
   ok('no other admin page binds the moved keys', dupes.length === 0, dupes.join(','));
 
   // flash() must be able to reveal: the message element hides INLINE, never via a class that
-  // carries display:none (2026-09-19 — every admin flash was invisible for that reason).
+  // carries display:none (a class-hidden flash target never shows).
   ok('the flash targets hide inline, not by class',
      /id="queue-msg" style="display:none/.test(donors) && /id="donor-msg" style="display:none/.test(donors) &&
      /id="settings-msg" style="display:none/.test(donors));
@@ -415,7 +415,7 @@ console.log('\n[9] §18.6 — donors.html');
   ok('the block dialog says its note is admin-side only',
      /label: 'Note \(optional\) — kept for the admin side only, never shown to the donor'/.test(donors));
 
-  // Images (design §18.11 Part 3 #1): the queue points a plain same-origin src at the admin image
+  // Images (design §18.11, script07_implementation.md): the queue points a plain same-origin src at the admin image
   // route, so the route's headers (stored mime, nosniff, sandbox CSP) govern every way the image
   // is viewed. No object URL: a blob copy would drop those headers and need blob: in img-src.
   // Approved thumbnails in the list are the PUBLIC /uploads/donors/ file, shape-checked.
@@ -440,7 +440,7 @@ console.log('\n[9] §18.6 — donors.html');
      /escHtml\(r\.name\)/.test(donors) && /escHtml\(r\.reason\)/.test(donors) &&
      /escHtml\(r\.current\.name\)/.test(donors) && /escHtml\(w\.name\)/.test(donors) && /escHtml\(d\.name\.text\)/.test(donors) &&
      /escHtml\(n\.name\)/.test(donors) && /escHtml\(n\.reason\)/.test(donors) && /escHtml\(n\.norm\)/.test(donors) && /escHtml\(what\)/.test(donors));
-  // Part C4 (§19.17.6): names are auto-checked — the queue holds banners, names are a list.
+  // Part C4 (§19.17.6 (script07_design_games.md)): names are auto-checked — the queue holds banners, names are a list.
   ok('C4: the queue asks for BANNERS only and has no Flags column',
      /\/api\/admin\/donors\/requests\?kind=banner&status=/.test(donors) && !/flagBadges|r\.flags/.test(donors) && !/<th>Flags<\/th>/.test(donors));
   const namesAt = donors.indexOf('id="names-tbody"');
@@ -469,9 +469,9 @@ console.log('\n[9] §18.6 — donors.html');
      /tbody\.innerHTML = slice\.map[\s\S]{0,120}if \(typeof opts\.onRender === 'function'\) \{\s*try \{ opts\.onRender\(tbody\); \} catch/.test(shell));
 }
 
-// ── F4 — the dead auto-payout settings are gone, and the Payout form ↔ defaults stay in parity ──
-// `payout.auto_payout` + `payout.payout_frequency` had a UI and were read by nothing: payouts are
-// MINER-INITIATED by design (impl doc D10). They were removed the way D4's key was — input and
+// ── the dead auto-payout settings are gone, and the Payout form ↔ defaults stay in parity ──
+// `payout.auto_payout` + `payout.payout_frequency` have no UI and nothing reads them: payouts are
+// MINER-INITIATED by design (impl doc D10). A key goes the way D4's did — input and
 // default in ONE change, because the harvester sends every id in `.settings-form` and
 // updateSection throws on an unknown key (memory project_pool_admin_settings_form).
 console.log('\n[10] F4 — settings-payout.html vs PoolSettings.defaults.payout');
@@ -491,7 +491,6 @@ console.log('\n[10] F4 — settings-payout.html vs PoolSettings.defaults.payout'
   // The only defaults with no field, each for a stated reason — a key added to either side
   // without the other lands here instead of shipping a dead field or an unsaveable form.
   //   dormancy_policy_effective_at — written by lib/dormancy.js, never by the operator
-  // (withdrawal_retry_delays, the other one, was removed 2026-09-26 with the Tor retry ladder.)
   const noField = keys.filter((k) => !harvested.includes(k)).sort();
   ok('the only payout default without a field is the one known non-form key',
      JSON.stringify(noField) === JSON.stringify(['dormancy_policy_effective_at']), noField.join(','));
@@ -505,7 +504,7 @@ console.log('\n[10] F4 — settings-payout.html vs PoolSettings.defaults.payout'
   ok('the Payout page no longer promises automatic payouts',
      !/auto(matic)?[ -]payouts?/i.test(page.replace(/<!--[\s\S]*?-->/g, '')));
 
-  // The Tor send method switch (F5) was removed 2026-09-26 with the step-by-step sender — the same
+  // There is no Tor send method switch (Tor payouts are tried once) — the same
   // one-change removal as auto_payout above (the no-field parity check guards the other half).
   ok('tor_send_mode is no longer a payout default', !Object.prototype.hasOwnProperty.call(PoolSettings.defaults.payout, 'tor_send_mode'));
   ok('tor_send_mode has no validator', !Object.prototype.hasOwnProperty.call(PoolSettings.validators.payout, 'tor_send_mode'));
@@ -515,8 +514,8 @@ console.log('\n[10] F4 — settings-payout.html vs PoolSettings.defaults.payout'
      !/step-by-step/i.test(page.replace(/<!--[\s\S]*?-->/g, '')));
 }
 
-// ── One-attempt Tor payouts (plan Session 3, 2026-09-26) — payments.html + miners.html ──────────
-// Session 2 removed the retry route (410), made tor_held a pending status and added Re-check, a
+// ── One-attempt Tor payouts — payments.html + miners.html ──────────
+// The retry route answers 410, tor_held is a pending status, and the admin has Re-check, a
 // forced refund (step-up + typed id) and the Tor-pause clear. These pin the admin half of that.
 console.log('\n[11] one-attempt Tor payouts — Held, fail_detail, Re-check / forced refund, pause clear');
 {
@@ -549,8 +548,8 @@ console.log('\n[11] one-attempt Tor payouts — Held, fail_detail, Re-check / fo
   ok('the Retry button and its call are gone (the route answers 410)',
      !/retryWithdrawal/.test(pay) && !/\/retry'/.test(pay));
   const canCancel = (pay.match(/const canCancel = ([^;]+);/) || [])[1] || '';
-  // tor_failed left the set 2026-09-27: it was refunded when it failed, so cancel only relabelled
-  // it 'cancelled' — which auditWalletSends counts as recorded. The server now answers 409.
+  // tor_failed is not in the set: it is refunded when it fails, so cancel would only relabel
+  // it 'cancelled' — which auditWalletSends counts as recorded. The server answers 409.
   ok('Cancel is offered only where the server allows it (tor_checking alone)',
      /tor_checking/.test(canCancel) && !/tor_failed|retry_scheduled|tor_held/.test(canCancel), canCancel);
   const railMap = (pay.match(/const RAIL = \{([^}]*)\}/) || [])[1] || '';
@@ -571,7 +570,7 @@ console.log('\n[11] one-attempt Tor payouts — Held, fail_detail, Re-check / fo
   const home = read('index.html');
   ok('the dashboard labels Held too', /tor_held: +'<span class="badge badge-warn">Held<\/span>'/.test(home));
 
-  // Since 2026-09-27 the Tor state lives in the miner's expanded row (the 🧅 row button and its
+  // The Tor state lives in the miner's expanded row (the 🧅 row button and its
   // separate card are gone); the address travels the same way, via data-addr.
   const miners = read('miners.html');
   ok('miners.html expands a miner via data-addr (never a spliced literal)',
@@ -583,7 +582,7 @@ console.log('\n[11] one-attempt Tor payouts — Held, fail_detail, Re-check / fo
   ok('the miner view shows paused_until in UTC', /paused_until/.test(miners) && /toISOString\(\)/.test(miners));
 }
 
-// ── Miners page (2026-09-27): status dot, expandable rigs, chips, sort, in-page dialogs ──────
+// ── Miners page: status dot, expandable rigs, chips, sort, in-page dialogs ──────
 console.log('\n[12] miners.html — status + expandable rigs');
 {
   const miners = read('miners.html');
@@ -616,7 +615,7 @@ console.log('\n[12] miners.html — status + expandable rigs');
   ok('the old shares_count column is gone (it fell at every retention prune)',
      !/shares_count/.test(head) && !/m\.shares_count/.test(script));
   // Native dialogs: a confirm()/prompt() followed by the step-up dialog is the throttled
-  // "successive dialogs" pattern (design §13.12r) — this page uses its own in-page dialog.
+  // "successive dialogs" pattern — this page uses its own in-page dialog.
   const code = script.replace(/\/\/[^\n]*/g, '');
   ok('no window.prompt / confirm on the miners page', !/\bprompt\(/.test(code) && !/\bconfirm\(/.test(code));
   ok('the dialog writes every value with textContent (no innerHTML in askDialog)',
@@ -646,7 +645,7 @@ console.log('\n[12] miners.html — status + expandable rigs');
      /if \(typeof opts\.onSearch === 'function'\) \{\s*try \{ opts\.onSearch\(input\.value\.trim\(\)\); \} catch/.test(shell));
 }
 
-// ── Games → Events (design §19.9, §19.11 — games Part 7) ─────────────────────────────
+// ── Games → Events (design §19.9 and §19.11, script07_design_games.md) ─────────────────────────────
 console.log('\n[13] games-events.html — the admin proxy, step-up and the nav');
 {
   const exists = fs.existsSync(path.join(PANEL, 'games-events.html'));
@@ -659,7 +658,7 @@ console.log('\n[13] games-events.html — the admin proxy, step-up and the nav')
   ok('NAV has a Games group holding games-events.html', /title: 'Games', ico: '🎮', children: \[[\s\S]*?\{ file: 'games-events\.html',\s+title: 'Events' \}/.test(navBlock));
 
   // Every call goes through the proxy prefix via games(); the paths it builds, checked against the
-  // pool's OWN step-up rule (lib/games-link.js requiresStepUp — the enforcer, §19.11).
+  // pool's OWN step-up rule (lib/games-link.js requiresStepUp — the enforcer, §19.11 (script07_design_games.md)).
   const { requiresStepUp } = require('../lib/games-link');
   ok('all proxied calls go through games() → adminFetch(\'/api/admin/games/\' + rel)',
     /const res = await adminFetch\('\/api\/admin\/games\/' \+ rel, opts\);/.test(script) && !/API\.(get|post|put|del)\(/.test(code));
@@ -685,7 +684,7 @@ console.log('\n[13] games-events.html — the admin proxy, step-up and the nav')
   ok('loads stepup.js (adminFetch)', /<script src="\/js\/stepup\.js"><\/script>/.test(page));
 }
 
-// ── Games → Overview, Chat, Players (design §19.10, §19.11, D21 — games Part 9) ─────────
+// ── Games → Overview, Chat, Players (design §19.10, §19.11 and D21, script07_design_games.md) ─────────
 console.log('\n[14] games.html / games-chat.html / games-players.html — proxy, step-up, text-only chat');
 {
   const pages = ['games.html', 'games-chat.html', 'games-players.html'];
@@ -733,7 +732,7 @@ console.log('\n[14] games.html / games-chat.html / games-players.html — proxy,
     && /G\.call\('POST', 'chat\/post'/.test(chat) && /'players\/' \+ G\.playerSeg\(address\) \+ '\/mute'/.test(chat)
     && /G\.call\('POST', 'chat\/words', body\)/.test(chat) && /'moderators\/' \+ address \+ '\/remove'/.test(chat)
     && /write\('\/ban'/.test(players) && /write\('\/purge'/.test(players) && /write\('\/adjust'/.test(players));
-  // Guests (games Part C5, §19.17.3): a guest id cannot sit in a path (':' — PROXY_PATH_RE refuses
+  // Guests (games Part C5, §19.17.3 (script07_design_games.md)): a guest id cannot sit in a path (':' — PROXY_PATH_RE refuses
   // it), so every player path goes through GamesAdmin.playerSeg ('g:<16>' → 'g.<16>'), and the
   // guest-only write (delete) is step-up while muting a guest stays FAST like any mute.
   const gadmin = read('games-admin.js');
@@ -754,7 +753,7 @@ console.log('\n[14] games.html / games-chat.html / games-players.html — proxy,
     /chat_min_proof_age: s => 'A proof is always at least '/.test(read('games.html')) && /G\.call\('POST', 'settings', \{ values \}\)/.test(read('games.html')));
 }
 
-// ── Games → Nicknames (design §19.16 — games Part 12) ───────────────────────────────────
+// ── Games → Nicknames (design §19.16, script07_design_games.md) ───────────────────────────────────
 console.log('[15] games-names.html — the nickname queue: proxy, step-up, text-only names');
 {
   const exists = fs.existsSync(path.join(PANEL, 'games-names.html'));
@@ -773,14 +772,14 @@ console.log('[15] games-names.html — the nickname queue: proxy, step-up, text-
     !/\b(innerHTML|outerHTML|insertAdjacentHTML)\b|document\.write/.test(code)
     && /el\('div', 'gn-name', n\.name\)/.test(script) && /el\('span', null, '“' \+ n\.reason \+ '”'\)/.test(script));
   ok('no inline on* handler, no native prompt/confirm/alert', !/\son[a-z]+="/i.test(page) && !/\b(prompt|confirm|alert)\(/.test(code));
-  // Part C3 (§19.17.5): no queue — the five writes are remove, ban name, unban, block, unblock.
+  // Part C3 (§19.17.5 (script07_design_games.md)): no queue — the five writes are remove, ban name, unban, block, unblock.
   const writes = [...script.matchAll(/write\('([^']*)'( \+ [^,]+)?/g)].map((m) => m[1] + (m[2] ? '…' : ''));
   ok('the page builds exactly the five v2 write paths, all through write() → G.call(POST)',
     JSON.stringify(writes.sort()) === JSON.stringify(['banned-names', 'banned-names/…', 'nicknames/…', 'players/…', 'players/…'].sort())
     && /await G\.call\('POST', rel, body\)/.test(script) && !/\/approve'|\/reject'|state=pending/.test(code), writes.join(' | '));
   ok('a rule hint on a live row and a banned name are rendered as text',
     /el\('span', 'badge badge-warn', 'Now refused by '/.test(script) && /el\('td', 'gn-name', b\.name\)/.test(script));
-  // The POOL is the enforcer (§19.11): every nickname write must be step-up there. The games
+  // The POOL is the enforcer (§19.11 (script07_design_games.md)): every nickname write must be step-up there. The games
   // side's own copy is checked in play/server/scripts/test-names.js (it may not load pool code).
   const { requiresStepUp } = require('../lib/games-link');
   const addr = 'grin1' + 'q'.repeat(58);
@@ -883,7 +882,7 @@ console.log('\n[16] node-availability.html — empty state, both sources, filter
     const lane = V.naLaneHtml(pd, 'pool');
     ok('strip: lane cells carry the state class and a spoken summary',
        /na-st-out/.test(lane) && /aria-label="Pool view, last 3 days: 1 up, 1 with a counted outage, 1 with no counted time\."/.test(lane));
-    // R2: a day the pool WAS watching but saw only an auth fault (or a node-box day that was all
+    // A day the pool WAS watching but saw only an auth fault (or a node-box day that was all
     // planned stop) has no counted time — it must not be labelled "not watched".
     const faultDay = day('2026-10-04', { fault_s: 86400 });
     const faultTip = V.naTipHtml({ day: faultDay.day, state: V.naDayState(faultDay), d: faultDay }, 'pool');
@@ -931,7 +930,7 @@ console.log('\n[16] node-availability.html — empty state, both sources, filter
   }
 }
 
-// ── [17] Stratum pause — strip, Announcements controls, Health line (design §21, Part 3) ──────
+// ── [17] Stratum pause — strip, Announcements controls, Health line (design §21) ──────
 // The classification is shared by three readers, so it lives once, in admin-shell.js between
 // STRATUM-VIEW markers, and runs here headless in a vm (no jsdom). The page wiring is pinned
 // statically: the controls must never be reachable through the settings form's Save.

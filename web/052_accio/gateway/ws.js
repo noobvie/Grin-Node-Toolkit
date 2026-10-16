@@ -1,11 +1,11 @@
 'use strict';
 /**
- * ws.js — a minimal RFC 6455 WebSocket server, hand-written (packet S4b).
+ * ws.js — a minimal RFC 6455 WebSocket server, hand-written (Script 052).
  *
  * ─── Why this is not `ws` from npm ───────────────────────────────────────────
  * The same rule that produced socks5.js: this gateway has ZERO npm
- * dependencies, and that is a rule rather than an accident. S0 spent an entire
- * packet making Accio's source pinned, offline and rebuildable from our own
+ * dependencies, and that is a rule rather than an accident. The product's
+ * source is pinned, offline and rebuildable from our own
  * repo; adding a package with its own transitive tree hands that back. The
  * client we serve is upstream's `listener.js`, and it uses a deliberately small
  * corner of the protocol (see docs §"Listen protocol" §1):
@@ -17,7 +17,7 @@
  *                        must be zero and we must not echo the
  *                        Sec-WebSocket-Extensions header nginx forwards
  *   · no client ping   — the browser WebSocket API exposes no ping to page JS
- *                        at all, so liveness is entirely OUR job (§11.8)
+ *                        at all, so liveness is entirely OUR job (script052_design.md §11 item 8)
  *
  * What is still implemented in full, because a wire format you implement
  * halfway is a parser bug waiting to happen: masking, all three payload-length
@@ -184,7 +184,7 @@ class WsConnection extends EventEmitter {
 		// watching listen_open refuse to fall after a clean end().
 		socket.on('end', () => this._teardown(CLOSE.GOING_AWAY, 'peer closed the connection'));
 
-		// ─── Liveness (design §11.8) ─────────────────────────────────────────
+		// ─── Liveness (script052_design.md §11 item 8) ─────────────────────────────────────────
 		// The client never pings — the browser API gives page JS no way to. If
 		// nothing crosses the socket, every proxy in the path eventually reaps
 		// it (upstream's own /listen sets proxy_read_timeout 60s), the client

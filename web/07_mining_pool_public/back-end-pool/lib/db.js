@@ -134,8 +134,7 @@ function migrateUsers() {
 // miner_accounts table (older DBs predate them). proof_salt is the per-address scrypt salt
 // for the ownership-proof SET (design §17, table `miner_proofs` below) — minted lazily on
 // an address's first v2 hash, never returned to any client. min_payout is a legacy column
-// from the retired per-account payout threshold (2026-07-17) — kept in the schema, read by
-// nothing.
+// from the retired per-account payout threshold — kept in the schema, read by nothing.
 //
 // The ten last_*/prev_*/anchor_* proof columns below are LEGACY as of design §17: they held
 // the old 2-slot proof window, and owner-proof.migrateProofSet() copies them into
@@ -219,7 +218,7 @@ function migrateMinerAccounts() {
 }
 
 // Additive, non-destructive: add impression/click counters + the admin-only sponsor
-// memo to an existing ads table (2026-07-17; older DBs predate them). Counters are
+// memo to an existing ads table (older DBs predate them). Counters are
 // coarse aggregates bumped by the public beacon endpoint — no per-visitor rows.
 function migrateAds() {
   try {
@@ -377,14 +376,18 @@ function migrateWithdrawals() {
       // withdrawal-scheduler.backfillPaymentProofs(); older confirmed Tor rows get theirs too,
       // since the wallet keeps the proof for as long as it keeps the transaction.
       payment_proof: 'TEXT DEFAULT NULL',
+      // Proof-fetch backoff + "transaction gone" counter (see CREATE TABLE). Legacy rows start clean.
+      payment_proof_retry_at: 'INTEGER DEFAULT NULL',
+      payment_proof_gone_count: 'INTEGER NOT NULL DEFAULT 0',
+      payment_proof_gone_since: 'INTEGER DEFAULT NULL',
       // LEGACY: why a row was parked in retry_scheduled (see CREATE TABLE). Nothing writes it
-      // since 2026-09-26 (one Tor attempt, no retry ladder); kept so an old row keeps loading.
+      // (one Tor attempt, no retry ladder); kept so an old row keeps loading.
       retry_reason: 'TEXT DEFAULT NULL',
       // Why a Tor payout FAILED (public enum) and the operator-only detail behind it (see
       // CREATE TABLE). Legacy rows: NULL / NULL — they predate one-attempt Tor payouts.
       fail_code: 'TEXT DEFAULT NULL',
       fail_detail: 'TEXT DEFAULT NULL',
-      // INERT since 2026-09-26: the step-by-step Tor sender that wrote these two was deleted and
+      // INERT: the step-by-step Tor sender that wrote these two is deleted and
       // NOTHING writes them any more (see CREATE TABLE). Kept, not dropped: an old row may hold
       // a value, and the admin routes still strip tor_final_slate.
       tor_step: 'TEXT DEFAULT NULL',
@@ -568,7 +571,7 @@ function createSchema() {
     //   first_seen_at never updated on a LIVE row. It is what the destination age gate (§J3-1)
     //                 reads, so a refresh that moved it would defeat that gate exactly as window
     //                 rotation did. The one write: an evicted anchor returning restarts it (= now),
-    //                 or it would come back as an aged leg nobody earned (design §17.7).
+    //                 or it would come back as an aged leg nobody earned (script07_implementation.md §17.7).
     //                 NULL = migrated without a known timestamp = treated as OLD.
     //   last_seen_at  refreshed whenever a capture matches this row; the LRU eviction key.
     //   is_anchor     the address's first-ever value of this kind (§J3-4). NEVER deleted —
@@ -632,7 +635,7 @@ function createSchema() {
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
 
-    // Address + TIME, replacing the old single-column idx_share_address (2026-09-27). With only
+    // Address + TIME, replacing the old single-column idx_share_address. With only
     // (grin_address), `WHERE grin_address = ? AND created_at > ?` could seek the address but not
     // the window, so every per-address read — the account page's worker breakdown and hashrate,
     // the admin Miners page's rig rows and its "Shares retained" count — walked that miner's whole
@@ -696,8 +699,8 @@ function createSchema() {
     // PRUNED at the same `database.hashrate_keep_days` horizon as its source table (see
     // lib/retention.js) — deliberately, and unlike pool_metrics_hourly/balance_log_daily which
     // are keep-forever. This is per-ADDRESS mining activity, and a summary that outlived the
-    // raw rows it came from would retain more about a miner than the pool previously did
-    // (§G1 / §J11's linkage concerns). A summary must never extend a retention window.
+    // raw rows it came from would retain more about a miner than the pool otherwise does
+    // (script07_security_audit_archive.md §G1 / §J11's linkage concerns). A summary must never extend a retention window.
     `CREATE TABLE IF NOT EXISTS miner_hashrate_daily (
       day INTEGER NOT NULL,
       grin_address TEXT NOT NULL,
@@ -767,9 +770,17 @@ function createSchema() {
       kernel_excess TEXT DEFAULT NULL,
       -- grin-wallet PaymentProof JSON (amount, excess, recipient_address, recipient_sig,
       -- sender_address, sender_sig), fetched from the Owner API once the payout is confirmed.
-      -- NULL = not fetched yet; '' = the wallet holds no proof for this tx (the slatepack/
-      -- nostr rail never requests one), so the backfill stops asking.
+      -- NULL = not fetched yet; '' = the wallet holds no proof for this tx (the Goblin rail
+      -- never requests one, nor did slatepack before it did, or the wallet that sent it is gone),
+      -- so the backfill stops asking.
       payment_proof TEXT DEFAULT NULL,
+      -- Proof-fetch bookkeeping (withdrawal-scheduler.fetchAndStorePaymentProof): retry_at backs
+      -- a failing row off so it cannot hold a backfill slot every tick; gone_count / gone_since
+      -- count the wallet's "this transaction does not exist" answers, which settle the row to ''
+      -- only after several of them spread over a day (a swapped or recovered wallet).
+      payment_proof_retry_at INTEGER DEFAULT NULL,
+      payment_proof_gone_count INTEGER NOT NULL DEFAULT 0,
+      payment_proof_gone_since INTEGER DEFAULT NULL,
       -- LEGACY since 2026-09-26: why a row was parked in retry_scheduled ('pool_wallet_short' or
       -- NULL). A Tor payout is now tried ONCE, so there is no retry ladder and nothing writes it;
       -- a legacy row is resolved out of retry_scheduled at startup (migrateLegacyTorRetries).
@@ -1076,9 +1087,9 @@ function createSchema() {
     // ─── Incentives (Script 07 incentive features) ────────────────────────────
     // Per-address incentive state. Identity-ready (address-keyed) but register-free —
     // there is no account, the grin_address IS the identity.
-    // The donor_* columns (design §16.3, 2026-09-21) held v1's donor name (captured from a
-    // `<name>-donateN` login) and its censor state. UNREAD since design §18 Part 3 — donor
-    // names are pre-moderated donor_requests rows now — and kept only because dropping a
+    // The donor_* columns (design §16.3) held v1's donor name (captured from a
+    // `<name>-donateN` login) and its censor state. UNREAD (design §18: donor
+    // names are pre-moderated donor_requests rows) and kept only because dropping a
     // column is a later cleanup. donation_percent is dead too (§18.2). migrateMinerIncentives()
     // still adds them to older DBs so both schemas stay identical.
     `CREATE TABLE IF NOT EXISTS miner_incentives (
@@ -1096,7 +1107,7 @@ function createSchema() {
       donor_censor_by INTEGER DEFAULT NULL
     )`,
 
-    // ─── Donor profiles (design §18.4, 2026-09-24) — pre-moderated name + banner ────────
+    // ─── Donor profiles (design §18.4) — pre-moderated name + banner ─────────────────────
     // A request LOG, not columns: every submission is a row and every decision a status change,
     // so history and audit come free. The two PARTIAL unique indexes are the "one pending + one
     // approved per (address, kind)" rule as a database fact — lib/donor-profiles.js relies on
@@ -1130,7 +1141,7 @@ function createSchema() {
       reason TEXT
     )`,
 
-    // Banned donor NAMES (design §19.17.6, Part C4): keyed on the name rule's matching form
+    // Banned donor NAMES (script07_design_games.md §19.17.6): keyed on the name rule's matching form
     // (lib/name-rule.js matchForm — lower-case, separators out, leet folded), so one ban covers
     // every spelling. `name` is the spelling the admin typed, for the list. The pool's own table
     // rather than one banned-names table with a scope column: game nicknames are banned in the
@@ -1178,7 +1189,7 @@ function createSchema() {
     `CREATE INDEX IF NOT EXISTS idx_lottery_winners_address ON lottery_winners(grin_address, created_at DESC)`,
 
     // Frozen entry set for a committed draw — written at COMMIT time, before the seed block
-    // exists. Two jobs, both required for the draw to be verifiable (audit §I8):
+    // exists. Two jobs, both required for the draw to be verifiable (script07_security_audit_archive.md §I8):
     //   1. the ticket allocation can no longer move between commit and reveal, so nobody can
     //      influence the outcome once the seed is pending;
     //   2. it is the publishable input — a winner is recomputable from (seed_hash, draw_id,
@@ -1294,9 +1305,10 @@ function createSchema() {
     `CREATE INDEX IF NOT EXISTS idx_network_peers_cc ON network_peers(country_code, net)`,
 
     // ─── Ads (operator-managed promotions shown on public pages) ──────────────
-    // Two kinds: a self-hosted `banner` (image_url + link_url) or a raw `code` snippet
-    // (operator-trusted HTML/JS from an ad network). Each is bound to a named placement
-    // (header | sidebar | in-content | footer) with an optional active window + weight.
+    // Two kinds: a self-hosted `banner` (image_url + link_url) or a native `text` ad (headline +
+    // body_text + cta_label). A legacy `code` row (html_code) may still exist but is never served
+    // or edited — script07_design_games.md §19.17 D22. Each is bound to a named
+    // placement (header | sidebar | in-content | footer) with an optional active window + weight.
     `CREATE TABLE IF NOT EXISTS ads (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -1322,7 +1334,7 @@ function createSchema() {
 
     `CREATE INDEX IF NOT EXISTS idx_ads_placement ON ads(placement, is_active, weight DESC)`,
 
-    // ─── Content pages (dynamic CMS — replaces the fixed 5-slot config section) ────
+    // ─── Content pages (dynamic CMS) ───────────────────────────────────────────────
     // Operator-authored standalone pages (About / Terms / a custom Rules page, …),
     // served at /page.html?p=<slug>. Unlimited pages; nav_location decides where it's
     // auto-linked (footer | header | none). HTML is operator-trusted (rendered as-is).
@@ -1424,7 +1436,7 @@ function createSchema() {
 }
 
 // Additive, non-destructive: add the country grouping columns (and the optional
-// operator-declared map position, 2026-09-21) to an existing pool_locations table (older
+// operator-declared map position) to an existing pool_locations table (older
 // DBs predate them). Lets the public connect grid group regional cards under country
 // headings + show a flag, and the network map pin a gateway on its real city.
 function migrateLocations() {
@@ -1449,12 +1461,11 @@ function migrateLocations() {
   }
 }
 
-// Additive, non-destructive: add the donor-name columns (design §16.3, 2026-09-21) to an
+// Additive, non-destructive: add the donor-name columns (design §16.3) to an
 // existing miner_incentives table (older DBs predate them). All six default to NULL, which
 // is the "no name, no censor" state — so every existing donor row reads as a plain donateN
-// donor (masked address on the wall). Since design §18 nothing writes them, and since §18
-// Part 3 nothing reads them either (names are pre-moderated donor_requests rows); they stay in
-// the schema until a later cleanup drops them.
+// donor (masked address on the wall). Nothing writes or reads them (design §18: names are
+// pre-moderated donor_requests rows); they stay in the schema until a later cleanup drops them.
 function migrateMinerIncentives() {
   try {
     const cols = db.prepare("PRAGMA table_info(miner_incentives)").all();
@@ -1633,10 +1644,10 @@ function seedDefaultRegions(stratumPort, poolDomain, localRegion) {
   try {
     const dom = String(poolDomain || '').toLowerCase();
     if (!(dom === 'grinium.com' || dom.endsWith('.grinium.com'))) return;
-    // Versioned seed: v1 (2026-06) originally shipped han/nyc/lax/yyz/ams; v2 adds sgn
-    // (Saigon); v3 adds hkg/sin/cqf, 2026-09-23. The 'han' (Hanoi) row was later dropped from
-    // the seed — fresh installs no longer get it; already-seeded installs keep any han row until the operator removes it
-    // via the admin Regions page (the seed never retroactively deletes).
+    // Versioned seed: v1 nyc/lax/yyz/ams; v2 adds sgn (Saigon); v3 adds hkg/sin/cqf. A 'han'
+    // (Hanoi) row once shipped in v1 and is no longer seeded — already-seeded installs keep any
+    // han row until the operator removes it via the admin Regions page (the seed never
+    // retroactively deletes).
     // The marker value stores the applied version — the legacy marker wrote '1', which
     // reads back as "v1 applied", so an already-seeded install inserts ONLY the newer
     // additions. Rows the operator deleted from an already-applied version are never
@@ -1715,8 +1726,8 @@ function seedDefaultRegions(stratumPort, poolDomain, localRegion) {
 // 'nyc' was local; without this it would come up with no connect card and no map marker. So on a
 // change the new local row is activated ONCE and the new tag stamped in the same transaction —
 // the next restart sees an unchanged region and the rule above holds again. The OLD local row is
-// left as it is: that box may be rebuilt as a gateway for the region it used to be.
-// No stamp yet (a DB from before 2026-09-23, or a wiped pool_config) = previous region unknown:
+// left as it is: that box may be rebuilt as a gateway for the region it served.
+// No stamp yet (a DB from before the stamp existed, or a wiped pool_config) = previous region unknown:
 // stamp only, never activate, because an inactive row there is indistinguishable from one the
 // operator switched off. A move therefore needs the OLD hub to have run this code once.
 function ensureLocalRegion(region, stratumUrl, opts = {}) {

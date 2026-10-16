@@ -1,0 +1,18 @@
+# Stale-term CANDIDATES for check_comments.js scan. Format: <js regex, case-insensitive> => <reason>
+# A hit means "check this against the code", not "this is wrong" — confirm, then fix or allowlist.
+back-end-pool/index\.js[^.]{0,40}\broutes?\b|\broutes?\b[^.]{0,40}\bin\b[^.]{0,20}\bindex\.js => routes live in back-end-pool/routes/ (one file per area); index.js is boot only
+\b(stepwise|step-wise)\b[^.]{0,40}\b(tor|payout|send)|\btor\b[^.]{0,60}\b(retry|retries|re-?sent|resend)\b => Tor payouts are tried ONCE (Paid/Failed/Held, never re-sent); the stepwise sender is deleted
+\bcode ads?\b|\bad[_ ]code\b => code ads were deleted (pool ads are banner|text only)
+\bv5\.4\.1\b => shared grin-wallet pin is v5.5.0; only Fidelius still pins v5.4.1
+\bnonlogs\b => nonlogs.io price source is dead
+\bsatellite\b|share-relay|requireSatellite|js/theme\.js => the satellite role, share-relay and js/theme.js are deleted (regions are thin stratum gateways)
+(Provider Access Watch|Backup)[^.]{0,30}\bkey\s*(7|10)\b|Service & Port Dashboard|Chain Sync Status => hub 08 keys are number-matched (082->2, 089->9); those two dashboards merged into 3) Node Status & Sync
+\baccio\b[^.]{0,40}\b(reserved|055)\b|\b055\b[^.]{0,20}\b(accio|web wallet)|\bdrop\b[^.]{0,20}\b052\b|\b052\b[^.]{0,20}\bdrop\b => 052 is Accio (built, never VPS-run); Drop is 059
+\btransporter\b[^.]{0,20}\b(056|092)\b|\b(056|092)\b[^.]{0,20}\btransporter\b => Transporter is 093; 092 is held for the unbuilt mixer
+(?<![\w.])/v1/(?![\w]*\*) => there is NO v1 REST API on grin 5.x (404 on a healthy node); never a /v1/ call
+\bno stdin\b|stdin or env|\b-p\b[^.]{0,30}\bonly (option|way)\b => grin-wallet reads the passphrase from STDIN (no env var); -p is not the only option
+secrets?[^.]{0,30}\b(rotate|rotates|rotation)\b[^.]{0,30}\b(rebuild|every build|each build)\b => node secret VALUES no longer rotate on rebuild (vault since 2026-07-25)
+\bflowcharts/ => the flowcharts/ dir was merged into docs/generated/ (do not recreate)
+\bdrop\b[^.]{0,30}\b3415\b|\b3415\b[^.]{0,30}\bdrop\b => Drop's separate foreign listener on 3415 is retired (one combined owner_api listener)
+\b(libs?|sourced)\b[^.]{0,40}\b(under|inherit\w*|covered by)\b[^.]{0,20}\bset -e\b|caller'?s set -e (covers|protects) => libs called as `fn || …` run WITHOUT errexit
+\b3334\b => the stratum upstream is grin's own default 3416 (testnet 13416), not 3334

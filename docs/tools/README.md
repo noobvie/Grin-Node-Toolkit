@@ -1,15 +1,57 @@
 # docs/tools — instruments for keeping the reference library honest
 
-Not documentation. These are small repo tools that check `docs/generated/` against the code
+Not documentation. These are small repo tools that check `docs/reference/` against the code
 it describes. They are not part of the numbered VPS toolkit in `scripts/` and never run on a
 server.
 
 | File | What it does |
 |---|---|
-| [check_doc_drift.sh](check_doc_drift.sh) | Finds repo file paths named in `docs/generated/*.md` that do not exist |
+| [check_doc_drift.sh](check_doc_drift.sh) | Finds repo file paths named in `docs/reference/*.md` that do not exist |
 | [doc_drift_allowlist.txt](doc_drift_allowlist.txt) | The paths that are *expected* to be absent, each with a mandatory reason |
+| [check_comments.js](check_comments.js) | Code → doc twin: `scan` flags plan tags, diary dates, dead paths/`§` pointers, stale terms, commented-out code in comments; `diffgate` fails if a change touched anything but comments; `--map` rewrites `§` pointers from a section map |
+| [comment_stale_terms.txt](comment_stale_terms.txt) | Stale-term CANDIDATES for `scan` (`regex => reason`) — confirm in code before acting |
+| [comment_allowlist.txt](comment_allowlist.txt) | Confirmed-legitimate `scan` hits, `file-glob:regex CLASS reason` (reason mandatory) |
+| [check_prompt_back.sh](check_prompt_back.sh) | Code check: every interactive `read` prompt in Script 01 handles `0` (back / no) |
 
 ---
+
+## Comment checker — `check_comments.js`
+
+The code → doc twin of the drift checker. It enforces the *Comments* rules in `CLAUDE.md`
+Conventions (no plan tags, no diary, dates as evidence only, resolving pointers, no
+commented-out code). Zero dependencies; exit `0` clean, `1` findings, `2` tool error.
+
+```bash
+node docs/tools/check_comments.js scan [--summary] [--show-allowed] [PATH ...]
+node docs/tools/check_comments.js diffgate [REV] [PATH ...]   # fails if a "comments only" change touched code
+node docs/tools/check_comments.js --map section_map.tsv [--write] [PATH ...]   # re-point § / doc pointers after a doc re-org
+```
+
+- `scan` classes: `PLAN_TAG DIARY_DATE DEAD_PATH DEAD_SECTION STALE_TERM COMMENTED_CODE TODO PATCH_MARKER`.
+  A hit is either fixed in the comment or added to `comment_allowlist.txt`
+  (`file-glob:regex  CLASS|*  reason`, reason mandatory). `comment_stale_terms.txt` holds
+  CANDIDATES only — confirm in code before acting.
+- Run `diffgate` before committing any comment sweep. Heredoc bodies count as code (they are
+  file content written onto the VPS). A pure path rewrite also fails it — expected.
+- `--map` is a dry run without `--write`; applied maps are recorded in `<map>.applied` so a
+  chained map can't run twice. Keep the section map with the re-org plan, not in the repo.
+- Never touches `vendor/`; `patches/` only gets the marker check.
+
+## Prompt checker — `check_prompt_back.sh`
+
+The one code check here. Rule it enforces: at every prompt, `0` goes back (a menu, a free-text
+field) or means no (a `[Y/n]`). Exit `0` clean, `1` findings.
+
+```bash
+bash docs/tools/check_prompt_back.sh            # Script 01 (entry script + scripts/lib/01_lib_*.sh)
+bash docs/tools/check_prompt_back.sh FILE ...   # any other script
+```
+
+- Exempt by prompt text: "Press Enter" pauses, "Type X to …" tokens, `[y/N]` (anything but y is no).
+- Anything else must name `0` in code within 15 lines of the `read`, inside the same function.
+  A prompt that really does something else is marked `# prompt-back: <reason>` on or above the `read`.
+- It proves `0` is handled, not what it does: a zone list where `0` meant "Auto" passed it.
+  Run it after adding any prompt to Script 01, and before committing.
 
 ## Why the drift checker exists
 
@@ -26,14 +68,14 @@ Two things had already failed to catch it, which is why the check is mechanical:
 - **File dates cannot measure it.** 15 docs carried a git date of 2026-08-22 because one bulk
   commit touched them all. The dates said "fresh"; a path-existence check said otherwise in
   seconds. This is also why every doc carries a hand-written freshness header rather than
-  relying on `git log` — see `docs/generated/README.md`.
+  relying on `git log` — see `docs/reference/README.md`.
 
 ## Running it
 
 ```bash
 docs/tools/check_doc_drift.sh              # all docs
 docs/tools/check_doc_drift.sh --verbose    # also list loose (other-product-tree) resolutions
-docs/tools/check_doc_drift.sh docs/generated/script07_design.md   # one doc
+docs/tools/check_doc_drift.sh docs/reference/script07_design.md   # one doc
 ```
 
 Exit `0` = no unexplained miss, `1` = at least one genuine miss, `2` = tool error. It is

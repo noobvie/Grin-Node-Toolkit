@@ -80,8 +80,8 @@ const API = {
   // Admin-page guard. The session is an httpOnly cookie that JS cannot read, so we ask the
   // SERVER who we are (/api/admin/me, secureAdmin-gated). 200 → logged in (returns the user
   // and wires up the nav username + Logout); 401/403/anything-else → redirect to /login.html.
-  // This replaces the old client-side decodePayload() check, which always returned null and
-  // bounced every admin page straight back to login in an infinite loop.
+  // A client-side decodePayload() check cannot work (the cookie is httpOnly, so it always
+  // returns null) and would bounce every admin page straight back to login in an infinite loop.
   guardAdminPage: async () => {
     let me = null;
     try {

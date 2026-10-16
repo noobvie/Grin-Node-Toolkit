@@ -1,6 +1,7 @@
 'use strict';
 
-// grin-games — the pool's games service (design §19). A separate process, OS user and
+// grin-games — the pool's games service (design §19 in script07_design_games.md; build record in
+// script07_implementation_games.md; every bare §19.x in play/ means that design doc). A separate process, OS user and
 // database from the pool, so nothing here can slow, restart or endanger mining (§19.2).
 //
 // Boot order: Node version → config → database (open + migrate) → routes → listen on
@@ -9,7 +10,7 @@
 //
 // Exit codes: 0 clean shutdown · 1 runtime/boot failure · 78 (EX_CONFIG) bad
 // configuration — a restart cannot fix that one, so the unit should not loop on it
-// (RestartPreventExitStatus=78, Part 3).
+// (RestartPreventExitStatus=78 in the unit).
 
 const { createLogger } = require('./lib/log');
 const { loadConfig, ConfigError } = require('./lib/config');

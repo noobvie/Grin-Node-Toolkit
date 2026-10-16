@@ -1,5 +1,5 @@
 // /blog/rss.xml, /robots.txt, /sitemap.xml, /manifest.json, /blog/:slug and /page.html, with the shell/SEO helpers only they use.
-// Moved verbatim out of routes/index.js (code-layout refactor P3); registrations stay at 2-space
+// Registrations stay at 2-space
 // indent and write FULL paths. Instances/state come from ctx.
 
 const express = require('express');
@@ -81,7 +81,7 @@ module.exports = function createSeoRoutes(ctx) {
   // <link rel="canonical"> exactly (the .html form, except the dashboard, whose canonical
   // is the bare origin + '/') — a sitemap URL that
   // differs from the page's canonical makes Google crawl a non-canonical variant.
-  // pool-info + connect were merged into the dashboard (index) 2026-06; the dashboard
+  // pool-info + connect live in the dashboard (index); the dashboard
   // carries the #connect + #info anchors, so only / is listed for that content.
   const SITEMAP_PATHS = ['/', '/miners-stats.html', '/blocks.html', '/network-map.html', '/payment-history.html', '/fortune-board.html', '/donate.html', '/blog.html', '/api-docs.html'];
 

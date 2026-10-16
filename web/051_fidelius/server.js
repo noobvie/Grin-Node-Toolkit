@@ -122,10 +122,10 @@ function findNodeSecret(network, fileName /* '.api_secret' | '.foreign_api_secre
 
 // One call path for every node Owner-API request.
 //
-// The node's v1 REST API (`GET /v1/status`) was REMOVED in grin 5.x: it answers
-// 404 on a perfectly healthy node. Three probes here still used it, so the node
-// page reported "Local Node: not running" against a synced node with 46 peers
-// (verified on a live 5.5 mainnet node, 2026-08-09). Never add a /v1/ call.
+// The node has NO v1 REST API on grin 5.x (`GET /v1/status` answers
+// 404 on a perfectly healthy node), so a /v1/ probe reports "Local Node: not
+// running" against a synced node with 46 peers (verified on a live 5.5
+// mainnet node, 2026-08-09). Never add a /v1/ call.
 //
 // The node serialises Rust `Result<T,E>` as {"Ok":T} / {"Err":E} INSIDE the
 // JSON-RPC result, so the unwrap below is mandatory — see CLAUDE.md.
@@ -682,8 +682,8 @@ app.get('/api/setup/binary-status', (_req, res) => {
 //
 // That bump has since LANDED and did not break stdin: grin-wallet v5.5.0
 // (2026-08-12) pins rpassword 7.5.4 but branches on `stdin.is_terminal()` and
-// still reads the pipe. So v5.4.1 is no longer the latest, and the pin is now a
-// deliberate "verify before moving" rather than a barricade. Keep it in sync
+// still reads the pipe. So the shared pin is v5.5.0 and only Fidelius pins v5.4.1:
+// a deliberate "verify before moving" rather than a barricade. Keep it in sync
 // with _WW_PIN_TAG in scripts/051_grin_fidelius.sh. To move it: smoke-test an
 // unlock on the new binary, bump both, then commit.
 const GRIN_WALLET_PIN = 'v5.4.1';
@@ -1174,7 +1174,7 @@ function resolveWalletNode(wallet) {
 
 // ?wallet=<name> is how the client names the wallet it has open. Falling back to
 // the first registered wallet keeps an un-named caller working, but it is now a
-// fallback rather than the silent default it used to be for every caller.
+// fallback, not the silent default for every caller.
 //
 // A NAMED wallet that cannot be found must never fall back to the first one —
 // that is the original bug wearing a different hat. It returns an error the
@@ -1228,7 +1228,7 @@ app.get('/api/node/peers', async (req, res) => {
     if (!wallet) return res.json({ peers: [], count: null, available: false, reason: error });
     const n = resolveWalletNode(wallet);
     // get_connected_peers is Owner-only. Asking a public node for it earns a 403
-    // that used to surface as "Error: HTTP 403" in the peer list — a healthy node
+    // that would surface as "Error: HTTP 403" in the peer list — a healthy node
     // reported as broken. It is not an error, it is not visible from outside.
     if (!n.isLocal) {
         return res.json({ peers: [], count: null, available: false, node_type: 'external', node_url: n.url,
@@ -1389,7 +1389,7 @@ app.get('/api/portfolio', async (_req, res) => {
 
 // ── Node ping proxy ───────────────────────────────────────────────────────────
 
-// Audit F1 — this used to accept ANY http(s) URL and POST to it, giving an
+// Audit F1 — accepting ANY http(s) URL and POSTing to it would give an
 // authenticated caller an outbound-request primitive (internal services, cloud
 // metadata at 169.254.169.254, port scanning by latency). It's a GET, so the
 // Origin/CSRF guard above never covered it. The target is now restricted to
@@ -1468,7 +1468,7 @@ app.post('/api/wallet/node', (req, res) => {
             let c = fs.readFileSync(tomlPath, 'utf8');
             c = patchTomlKey(c, 'check_node_api_http_addr', '"' + nodeUrl + '"');
             // node_api_secret_path MUST move with the address. Changing only the
-            // address left a wallet that used to be local still carrying the local
+            // address leaves a wallet that was local still carrying the local
             // node's .foreign_api_secret — and grin-wallet sends that as Basic Auth
             // to whatever host it now dials, i.e. straight to a third party. The
             // 5-min secret-sync timer will not undo it either: grin_sync_wallets
@@ -1720,7 +1720,7 @@ app.post('/api/wallet/:name/finalize', async (req, res) => {
 
         const finalSlate = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'finalize_tx', { token, slate });
 
-        // A failed broadcast used to be logged and then reported as a plain
+        // A failed broadcast must not be logged and then reported as a plain
         // success, so the UI said "FINALIZED AND BROADCAST" for a transaction
         // that never reached the network and would never confirm. The signing
         // did succeed, so this is recoverable — hand back the armored final

@@ -1,13 +1,13 @@
 // Every HTTP route the pool serves, registered on `app` in the order Express will match them.
 // This file is the ORDERED list: the order anchors (/api/account, /uploads), the games-link
-// wiring, one mount per area file under routes/ (admin areas via routes/admin/index.js), the 404.
+// wiring, one mount per area file under routes/ (admin areas via routes/admin/index.js), the 404. Layout: script07_implementation.md §12.1.
 //
 // Where identifiers come from: stateless modules are require()d here exactly as index.js does
 // (a lib re-required is the same cached module instance). Everything that is an INSTANCE or
 // STATE — the managers, config, db, the failure Maps, and index.js's module-level helpers — is
 // built once by index.js and handed over in `ctx`. None of them is reassigned after
-// registerRoutes() runs (checked in P1), so destructuring them here is behaviour-identical to
-// the old closure capture.
+// registerRoutes() runs, so destructuring them here is behaviour-identical to
+// closure capture.
 
 const express = require('express');
 const { verifyOwnerProof, auditOwnerProof } = require('../lib/owner-proof');
@@ -72,12 +72,12 @@ module.exports = function registerRoutes(app, ctx) {
     }));
   }
 
-  // One guards instance for the whole app (I7) — handed to every route file that needs a chain.
+  // One guards instance for the whole app — handed to every route file that needs a chain.
   const guards = createGuards(ctx);
   const { secureAdmin, stepUpRefused } = guards;
 
   // ─── Multi-region (Model C) ─────────────────────────────────────────────────
-  // There is NO satellite share/block ingestion API any more. Regional GATEWAYS are
+  // There is NO satellite share/block ingestion API. Regional GATEWAYS are
   // thin stratum forwarders (HAProxy + WireGuard, scripts/lib/07_lib_gateway.sh): they
   // forward raw stratum to a per-region internal port on THIS box (PROXY-protocol v2
   // carries the real miner IP). The central stratum-server records those shares directly
@@ -92,10 +92,10 @@ module.exports = function registerRoutes(app, ctx) {
   if (stratumPause) stratumPause.onChange = invalidateBranding;
   app.use(noAutoOptions(createPublicRoutes(ctx)));
 
-  // ─── Games platform link (design §19.3) — all logic in lib/games-link.js ──────
+  // ─── Games platform link (script07_design_games.md §19.3) — all logic in lib/games-link.js ──────
   // The three internal routes are already mounted (top of file); this gives them the DB, starts
   // the 60 s health probe and mounts the admin proxy (/api/admin/games/*) behind secureAdmin,
-  // with step-up enforced in the lib for the §19.11 paths.
+  // with step-up enforced in the lib for the script07_design_games.md §19.11 paths.
   gamesLink.attach({ db, config, poolSettings, verifyOwnerProof, auditOwnerProof, onHealthChange: invalidateBranding });
   gamesLink.mountAdmin(app, { secureAdmin, stepUpRefused });
 
@@ -104,22 +104,22 @@ module.exports = function registerRoutes(app, ctx) {
 
   app.use(noAutoOptions(createPoolRoutes(ctx, app)));
 
-  // Test endpoints removed for production security
-  // REMOVED: /api/test/add-miner, /api/test/miners, /api/test/blocks, /api/test/tables
+  // Deliberately absent (test endpoints, security):
+  // /api/test/add-miner, /api/test/miners, /api/test/blocks, /api/test/tables
   // These endpoints are unprotected and allow arbitrary data manipulation.
   // For testing in development, use curl with direct database queries.
 
   app.use(noAutoOptions(createAccountRoutes(ctx)));
 
-  // Test endpoint removed - manual block crediting disabled for security
+  // Deliberately absent: a test endpoint for manual block crediting (security)
 
   registerAdminRoutes(app, ctx, guards);
 
-  // REMOVED (2026-07-28): GET /api/miners/top — a public, unauthenticated rich-list. It paired a
+  // Deliberately absent: GET /api/miners/top — a public, unauthenticated rich-list. It paired a
   // full grin address with balance + balance_locked + share count + online flag + account age,
   // ordered by balance descending and offset-paginated, so a scraper could walk the pool's entire
   // custodial position miner by miner. Nothing in public_html/ or the admin panel called it, and
-  // it duplicated /api/pool/miners (now address-masked). The legitimate public leaderboards are
+  // it duplicated /api/pool/miners (address-masked). The legitimate public leaderboards are
   // /api/stratum/top-miners and /api/pool/top-block-finders, which rank on hashrate and blocks
   // found — contribution, not how much money is sitting in someone's pool balance.
 

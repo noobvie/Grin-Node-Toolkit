@@ -8,7 +8,7 @@
 //   activity(from, to)                     GET  /internal/games/activity
 //   config()                               GET  /internal/games/config
 //
-// Rules the pool side depends on (§19.15 Part 2):
+// Rules the pool side depends on (script07_implementation_games.md, Pool link):
 //   - Direct to the pool's loopback listener (config.poolInternalUrl), never via nginx.
 //   - NO X-Forwarded-For and NO X-Real-IP header. The pool answers 404 to either, before
 //     it looks at the secret: a forwarding header means "this came through a proxy".
@@ -190,8 +190,8 @@ function createPoolLink({ config: cfg, clock = () => Date.now(), timeoutMs = TIM
   }
 
   // → { mode, chat_enabled, blocked_words?, pool_name? }. A pool answering for the OTHER
-  // network is not our pool. The two name fields (§19.17.5, C3) are optional: a pool built
-  // before C3 sends neither, and a malformed one is DROPPED (the caller keeps its last copy)
+  // network is not our pool. The two name fields (§19.17.5) are optional: a pool built
+  // before them sends neither, and a malformed one is DROPPED (the caller keeps its last copy)
   // rather than failing the fetch — the mode must never go stale over a word list.
   async function config() {
     const obj = expectOk(await call('GET', '/internal/games/config'));

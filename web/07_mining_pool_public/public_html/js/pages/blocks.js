@@ -1,8 +1,7 @@
-// blocks.js — the blocks page's own script. Until 2026-10 (pool code-layout refactor,
-// part F2) this was blocks.html's inline <script> block; it moved out byte-for-byte so
-// a strict script-src can drop 'unsafe-inline'. The block's indent is kept.
+// blocks.js — the blocks page's own script, external (not inline) so a strict script-src needs no 'unsafe-inline'.
+// The original indent is kept.
 //
-// The page loads it as a CLASSIC script at the block's old position. Never add defer / async /
+// The page loads it as a CLASSIC script at its original position. Never add defer / async /
 // type="module": the order and the shared global scope are what this code was written against.
         // Public blocks deck. All data comes from public endpoints:
         //   /api/pool/stats                        summary KPIs (total/confirmed/immature/24h/7d)
@@ -67,11 +66,19 @@
                    v.toFixed(0) + '%</td>';
         }
 
+        // no-store + a 20 s abort, for the reason given at Auth.read: a fetch on the connection a
+        // phone held before sleeping hangs, and the panel keeps its old value meanwhile.
         async function getJson(url) {
-            const r = await fetch(url, { credentials: 'same-origin' });
-            const j = await r.json().catch(() => null);
-            if (!r.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
-            return j;
+            const ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+            const timer = ctl ? setTimeout(() => ctl.abort(), 20000) : null;
+            try {
+                const r = await fetch(url, { credentials: 'same-origin', cache: 'no-store', signal: ctl ? ctl.signal : undefined });
+                const j = await r.json().catch(() => null);
+                if (!r.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+                return j;
+            } finally {
+                if (timer) clearTimeout(timer);
+            }
         }
 
         async function loadSummary() {
@@ -360,5 +367,5 @@
                 })
                 .catch(function () {})
                 .finally(function () { loadSummary(); loadBlocks(); loadBlockCharts(); });
-            setInterval(function () { loadSummary(); loadBlockCharts(); if (_page === 0) loadBlocks(); }, 60000);
+            Auth.poll(function () { loadSummary(); loadBlockCharts(); if (_page === 0) loadBlocks(); }, 60000);
         });

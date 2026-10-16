@@ -124,7 +124,7 @@ show_local_grin_instances() {
 # Results are written to MASTER_LOG_FILE.
 # =============================================================================
 # Staleness threshold, per site_key. Must stay in step with _max_age_for_site_key
-# in 01_build_new_grin_node.sh — that is the function that decides whether a mirror
+# in lib/01_lib_chain_data.sh — that is the function that decides whether a mirror
 # is fresh enough to DOWNLOAD from, and a monitor that disagrees with it is worse
 # than no monitor: it either cries stale about hosts Script 01 happily uses, or
 # stays quiet about hosts Script 01 has already started skipping.
@@ -1196,6 +1196,9 @@ mass_deploy_run() {
 #     plain root `tmux ls`; never run the node as root;
 #   · session checks/kills cover BOTH tmux servers (root default + grin
 #     socket) — a session missed on either hides a duplicate node;
+#   · the stop kills NODE sessions only — a canonical node name, or a grin_*
+#     pane started with `grin server run` (gnc_is_node_session, inlined): wallet
+#     listeners share the grin_ prefix and must survive a node stop;
 #   · leftover `grin server run` processes are cleared before any start and
 #     swept after a stop, so no stale process ever holds the LMDB lock
 #     ("lock file is held by another grin process").
@@ -1238,10 +1241,17 @@ for SOPT in "" "-S /tmp/tmux-$GUID/default"; do
     [[ "$SOPT" == "-S /tmp/tmux-/default" ]] && continue
     while IFS= read -r sess; do
         [[ -z "$sess" ]] && continue
-        tmux $SOPT kill-session -t "$sess" 2>/dev/null && echo "  closed tmux: $sess" || true
+        case "$sess" in
+            grin_full_mainnet|grin_pruned_mainnet|grin_pruned_testnet) ;;
+            *)  pc=$(tmux $SOPT list-panes -s -t "=$sess" -F "#{pane_start_command}" 2>/dev/null || true)
+                [[ "$pc" == *"grin server run"* ]] || continue ;;
+        esac
+        tmux $SOPT kill-session -t "=$sess" 2>/dev/null && echo "  closed tmux: $sess" || true
     done < <(tmux $SOPT ls -F "#{session_name}" 2>/dev/null | grep "^grin_" || true)
 done
-pkill -KILL -f "grin server run" 2>/dev/null || true
+for p in $(pgrep -x grin 2>/dev/null || true); do
+    if tr "\0" " " < "/proc/$p/cmdline" 2>/dev/null | grep -q "server run"; then kill -KILL "$p" 2>/dev/null || true; fi
+done
 '
 
 _MD_NODE_START_SNIPPET='

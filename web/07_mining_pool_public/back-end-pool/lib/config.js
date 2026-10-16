@@ -2,7 +2,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const path = require('path');
 
-// The flat withdrawal fee can never go below this (operator decision 2026-10-05). It is a FIXED
+// The flat withdrawal fee can never go below this (operator decision). It is a FIXED
 // price the miner sees, set by hand in admin → Payout and never tracked to the chain: the pool
 // wallet pays the real weight-based network fee (~0.023 GRIN for a plain payout, more with change
 // splitting or many inputs), and this floor keeps every payout covering it. "0 = the pool absorbs
@@ -12,7 +12,7 @@ const MIN_WITHDRAWAL_FEE = 0.04;
 
 // How long after the operator revenue address is set or changed before a revenue withdrawal may
 // go to it — and, for the same window, the address-change alert can be neither closed nor
-// snoozed (review 2026-10-05), so a change the operator did not make cannot be silenced by the
+// snoozed, so a change the operator did not make cannot be silenced by the
 // session that made it. One constant for the admin routes and AlertMonitor.
 const REVENUE_ADDRESS_HOLD_S = 86400;
 
@@ -90,8 +90,7 @@ function mergeEnvVars(config) {
     // Cross-rail wait after a reversed payout before the miner can request another (0 disables).
     withdrawal_cooldown_minutes: config.withdrawal_cooldown_minutes !== undefined ? config.withdrawal_cooldown_minutes : 30,
     // Minutes a manual Slatepack payout waits for the miner's response before it expires: the
-    // pool cancels its wallet tx and returns the locked balance. Was a hardcoded 24h until
-    // 2026-09-24 (scheduler read a `slatepack_ttl_hours` nothing ever set). 30 min: a miner who
+    // pool cancels its wallet tx and returns the locked balance. 30 min: a miner who
     // is at their wallet needs a few; a long window only keeps pool-wallet coins locked for a
     // request nobody is finishing — and miners have no cancel, so expiry is the only way out.
     slatepack_ttl_minutes: config.slatepack_ttl_minutes !== undefined ? config.slatepack_ttl_minutes : 30,
@@ -189,21 +188,20 @@ function mergeEnvVars(config) {
     // SOCKS isolation tag) — dodges a single transient circuit failure wrongly blocking a
     // healthy listener. Worst case ≈ retries × 2 × tor_check_timeout_ms (32 s at the defaults).
     tor_check_retries: config.tor_check_retries || 2,
-    // tor_send_mode + tor_send_{connect,receive}_timeout_ms were REMOVED 2026-09-26 with the
-    // step-by-step Tor sender (F5). A Tor payout is one `grin-wallet send -d`; a stale key in a
-    // config file is ignored.
+    // No tor_send_mode / tor_send_*_timeout_ms: there is no step-by-step Tor sender. A Tor
+    // payout is one `grin-wallet send -d`; a stale key in a config file is ignored.
 
     alert_large_withdrawal: config.alert_large_withdrawal || 100,
     alert_tor_fails_per_week: config.alert_tor_fails_per_week || 3,
     alert_rapid_creates: config.alert_rapid_creates || 2,
 
-    // withdrawal_retry_delays (the Tor retry ladder) was REMOVED 2026-09-26: one Tor attempt.
+    // No withdrawal_retry_delays (retry ladder): a Tor payout is attempted once.
 
     // ─── Multi-region (Model C: thin stratum gateways) ──────────────────────
     // role: singlebox (default) | hub. Regional GATEWAYS are NOT a pool app role — they
     // run no Node process; they are HAProxy+WireGuard forwarders (scripts/lib/07_lib_gateway.sh)
     // that tunnel miner stratum to a per-region internal port on this central box. So this
-    // app only ever runs as singlebox or hub. (The legacy 'satellite' role + relay are gone.)
+    // app only ever runs as singlebox or hub.
     role: config.role || process.env.POOL_ROLE || 'singlebox',
     region: config.region || process.env.POOL_REGION || 'default',
 
@@ -222,7 +220,7 @@ function mergeEnvVars(config) {
     // never exposes them publicly. The Script 07 installer sets this to the wg server IP.
     region_listen_host: config.region_listen_host || process.env.REGION_LISTEN_HOST || '127.0.0.1',
 
-    // ─── Games platform link (design §19.3) ─────────────────────────────────
+    // ─── Games platform link (script07_design_games.md §19.3) ─────────────────────────────────
     // Where the games service listens (the admin proxy + health probe target) and the path of
     // the shared link secret (never the secret itself). Installer-owned pool.json keys, NOT
     // admin-panel settings: the proxy sends the secret to this port, so an admin-editable port
@@ -232,7 +230,7 @@ function mergeEnvVars(config) {
     games_link_secret_file: config.games_link_secret_file ||
       `/opt/grin/conf/grin_pubgames_link_${isMain ? 'mainnet' : 'testnet'}`,
 
-    // Public web/stratum hostname (e.g. grinium.com). Used to derive the local
+    // Public hostname for web and stratum (e.g. grinium.com). Used to derive the local
     // region's connect address (subdomain:stratum_port) in db.ensureLocalRegion.
     subdomain: config.subdomain || process.env.POOL_SUBDOMAIN || ''
   };

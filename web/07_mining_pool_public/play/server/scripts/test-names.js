@@ -1,6 +1,6 @@
 'use strict';
 
-// Nicknames v2 (design §19.17.5, Part C3; Part 12's §19.16 for the display rule).
+// Nicknames v2 (design §19.17.5; §19.16 for the display rule).
 //
 //   [a] the rule: every case of the SHARED fixture (scripts/fixtures/name-rule.json — the pool's
 //       copy runs the same file, §19.13 #24), the innocent and adversarial lists (#25), entry
@@ -92,7 +92,7 @@ async function main() {
       && innocentFails.length === 0, innocentFails.join(', '));
   const advFails = F.adversarial.filter((n) => R.check(n, ctxOf(F.contexts.default)).ok);
   ok(`a. every adversarial name (${F.adversarial.length}) is refused`, F.adversarial.length >= 30 && advFails.length === 0, advFails.join(', '));
-  // The pool's donor shape (Part C4): never used by the games, but this copy is the same code.
+  // The pool's donor shape: never used by the games, but this copy is the same code.
   const donorCtx = ctxOf(F.contexts.donor, 'donor');
   const dInnocent = F.donor_innocent.filter((n) => !R.check(n, donorCtx).ok);
   ok(`a. every donor-shape innocent name (${F.donor_innocent.length}) passes`, F.donor_innocent.length >= 20 && dInnocent.length === 0, dInnocent.join(', '));
@@ -507,7 +507,7 @@ async function main() {
     ];
     ok('g. every names read is an index SEARCH, never a table SCAN', plans.every((p) => /SEARCH/.test(p) && !/SCAN (nicknames|players|banned_names)\b/.test(p)), plans.join(' || '));
 
-    // A guest in the scan (Part C5, §19.13 #29): planted directly (sign-up's PoW is test-guests'
+    // A guest in the scan (§19.13 #29): planted directly (sign-up's PoW is test-guests'
     // business), aged past the chat gate, named, posting — its id must reach no public response,
     // its nickname only as `Nick · guest`.
     const GW = 'g:wandawandawandaw';

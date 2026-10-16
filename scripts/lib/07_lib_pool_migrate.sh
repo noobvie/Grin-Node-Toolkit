@@ -19,7 +19,7 @@
 #     stopped — pool service, the wallet listener's @reboot line and its */5
 #     watchdog — so a reboot of this box cannot bring a second pool back. The
 #     weekly VACUUM cron goes too, and step 4 refuses while a vacuum runs: its
-#     script restarts the pool from an EXIT trap (audit Part 9 P1).
+#     script restarts the pool from an EXIT trap (security audit, hub-move review P1).
 #   · The final archive is taken AFTER everything stops, so pool.db and the
 #     wallet it describes leave the box as one consistent pair.
 #   · The hub's WireGuard goes DOWN and is disabled at boot. While it still
@@ -384,6 +384,9 @@ _pmg_print_state() {
     echo -e "  ${BOLD}State of this box now:${RESET}"
     echo -e "    payouts          : $pay"
     echo -e "    pool service     : ${svc_a:-unknown} · ${svc_e:-unknown}  ${DIM}($POOL_SERVICE)${RESET}"
+    if declare -F pgs_installed >/dev/null 2>&1 && pgs_installed; then
+        echo -e "    games service    : $(systemctl is-active "$PGS_SERVICE" 2>/dev/null || true) · $(systemctl is-enabled "$PGS_SERVICE" 2>/dev/null || true)  ${DIM}($PGS_SERVICE)${RESET}"
+    fi
     echo -e "    wallet listener  : $lst  ${DIM}· watchdog $wd · @reboot $ar${RESET}"
     echo -e "    hub WireGuard    : $wg_up · boot ${wg_en:-n/a}  ${DIM}(${WG_IFACE:-none})${RESET}"
     echo -e "    daily backup     : $cron   ${DIM}· weekly vacuum: ${RESET}$vac${DIM} · grin node: left running${RESET}"
@@ -398,8 +401,11 @@ _pmg_print_rollback() {
     fi
     echo -e "    env SHELL=/bin/bash $(pw_boot_script 2>/dev/null || echo '<wallet dir>/pool-wallet-boot.sh')   ${DIM}# listener + unlock${RESET}"
     echo -e "    systemctl enable --now $POOL_SERVICE"
+    if declare -F pgs_installed >/dev/null 2>&1 && pgs_installed; then
+        echo -e "    systemctl enable --now $PGS_SERVICE   ${DIM}# games (/play/)${RESET}"
+    fi
     echo -e "    ${DIM}then: pool menu 5) → 6) e (boot autostart) + 7) i (watchdog); B → 3) daily backup;${RESET}"
-    echo -e "    ${DIM}c) Cron schedules → 2) weekly VACUUM, if it was on;${RESET}"
+    echo -e "    ${DIM}c) Cron schedules → 2) weekly VACUUM (and → 3) the games one), if it was on;${RESET}"
     echo -e "    ${DIM}reconcile, THEN resume payouts in admin → Payouts (never before).${RESET}"
 }
 
@@ -520,6 +526,15 @@ _pmg_verify_archive() {
         rel="${p#/}"
         if ! grep -qxF "$rel" <<< "$list"; then error "  missing from archive: $p"; miss=1; fi
     done
+    # The games DB is best effort in a daily archive, but not in a move: the games are stopped
+    # by now (step 4), so a missing snapshot means a real fault — and a move without it hands
+    # the new box an empty /play/ (every player's points, ratings and games gone).
+    if declare -F pgs_installed >/dev/null 2>&1 && pgs_installed && [[ -n "${PGS_DB:-}" && -f "$PGS_DB" ]]; then
+        if ! grep -qxF "${PGS_DB#/}" <<< "$list"; then
+            error "  missing from archive: $PGS_DB (games DB — its snapshot failed; usually python3 is missing: command -v python3)"
+            miss=1
+        fi
+    fi
     if [[ "$PBK_INCLUDE_CERTS" == "1" ]]; then
         while IFS= read -r p; do
             [[ "$p" == */live/* && -d "$p" ]] || continue
@@ -610,9 +625,9 @@ _pmg_out_intro() {
     echo -e "    2. Payouts FROZEN — before anything stops."
     echo -e "    3. Wallet listener stopped (watchdog + boot autostart removed first), then a"
     echo -e "       one-shot wallet info records the balance as evidence."
-    echo -e "    4. Weekly VACUUM cron off (refused while a vacuum runs); pool service stopped +"
-    echo -e "       disabled; hub WireGuard down + disabled; daily backup cron off. The grin node"
-    echo -e "       keeps running."
+    echo -e "    4. Weekly VACUUM crons off (refused while a vacuum runs); pool service stopped +"
+    echo -e "       disabled; games service (/play/) stopped + disabled when installed; hub"
+    echo -e "       WireGuard down + disabled; daily backup cron off. The grin node keeps running."
     echo -e "    5. Manifest written (the figures Migrate IN checks against)."
     echo -e "    6. Final encrypted archive — with the TLS cert, this archive only — verified."
     echo -e "    7. Copy to the new box (scp), or the command to do it yourself."
@@ -727,7 +742,7 @@ _pmg_out_stop() {
     # The weekly VACUUM's script stops the pool, compacts pool.db, and STARTS it again from an
     # EXIT trap whenever the pool was running when the vacuum began. One in flight now would
     # start this pool again after the checks below said it was stopped — a live old hub, the
-    # one thing this order exists to prevent (audit Part 9 P1). So: its cron goes FIRST (no new
+    # one thing this order exists to prevent (security audit, hub-move review P1). So: its cron goes FIRST (no new
     # vacuum can begin after the check), then refuse while one runs. A vacuum started by hand
     # after the stop finds the pool inactive and never restarts it.
     if [[ -f "$PMG_VACUUM_CRON" ]]; then
@@ -742,6 +757,18 @@ _pmg_out_stop() {
     else
         warn "pgrep not found — cannot check for a VACUUM in progress. Make sure $PMG_VACUUM_BIN is not running."
     fi
+    # The games VACUUM (pool C) Cron → 3) has the same trap: it starts the games again from an
+    # EXIT trap when they were running as it began, which would undo the games stop below.
+    if declare -F pgs_installed >/dev/null 2>&1 && pgs_installed; then
+        if [[ -f "$PGS_CRON_VACUUM" ]]; then
+            rm -f "$PGS_CRON_VACUUM" || { _pmg_fail 4 "could not remove the games VACUUM cron ($PGS_CRON_VACUUM)"; return 1; }
+            success "Weekly games VACUUM cron off (its script restarts the games it stopped)."
+        fi
+        if command -v pgrep >/dev/null 2>&1 && pgrep -f -- "$PGS_VACUUM_BIN" >/dev/null 2>&1; then
+            _pmg_fail 4 "a games VACUUM ($PGS_VACUUM_BIN) is running, and it restarts the games when it ends — wait until $PGS_LOG says 'VACUUM ok' (or FAILED), then B → 6 again"
+            return 1
+        fi
+    fi
 
     systemctl stop "$POOL_SERVICE" 2>/dev/null || true
     systemctl disable "$POOL_SERVICE" >/dev/null 2>&1 || true
@@ -752,6 +779,23 @@ _pmg_out_stop() {
         _pmg_fail 4 "$POOL_SERVICE is still enabled at boot"; return 1
     fi
     success "$POOL_SERVICE stopped + disabled."
+
+    # The /play/ games service (07_lib_pool_games.sh) has its own unit and keeps writing its
+    # own DB while it runs — and nginx stays up here on purpose, so /play/ would keep serving
+    # players on THIS box. A snapshot taken under it is consistent but not FINAL: every game
+    # finished after step 6 would stay behind. Stop + disable it like the pool, so the archive
+    # carries the last word. Its VACUUM cron is already gone (above).
+    if declare -F pgs_installed >/dev/null 2>&1 && pgs_installed; then
+        systemctl stop "$PGS_SERVICE" 2>/dev/null || true
+        systemctl disable "$PGS_SERVICE" >/dev/null 2>&1 || true
+        if systemctl is-active --quiet "$PGS_SERVICE" 2>/dev/null; then
+            _pmg_fail 4 "$PGS_SERVICE (games) is still running after systemctl stop"; return 1
+        fi
+        if [[ "$(systemctl is-enabled "$PGS_SERVICE" 2>/dev/null)" == "enabled" ]]; then
+            _pmg_fail 4 "$PGS_SERVICE (games) is still enabled at boot"; return 1
+        fi
+        success "$PGS_SERVICE (games) stopped + disabled — its DB is final for the archive."
+    fi
 
     # This net's hub tunnel only: a testnet pool on the same box has its own iface and
     # is not part of this move. Stop the UNIT when it owns the tunnel — a bare wg-quick
@@ -834,7 +878,7 @@ _pmg_out_archive() {
     # The archive is named (and keyed) by the LOCAL date at step 6, the manifest's
     # archive_name by the date at step 5. A run straddling local midnight made them differ,
     # and Migrate IN rightly refuses a manifest naming another archive — so the move's own
-    # archive was unusable (audit Part 9 C1). Everything is stopped, so the ledger cannot
+    # archive was unusable (security audit, hub-move review C1). Everything is stopped, so the ledger cannot
     # have moved: rewrite the manifest under the new date and rebuild once. The rebuild
     # gets the SAME file name and replaces the mismatched archive; no orphan is left.
     if [[ "$(basename "$PMG_ARCHIVE")" != "$PMG_MANIFEST_ARCHIVE" ]]; then
@@ -939,7 +983,7 @@ pmg_migrate_out() {
 #      IS DARK (F4): two live pools on one wallet seed must never happen.
 #   3  restore through _pbk_restore_extract — the same core and the same freeze
 #      as 2) Restore. Payouts come up FROZEN.
-#   4  location (singlebox): a new region tag, so Part 1's move rule in
+#   4  location (singlebox): a new region tag, so the move rule in
 #      ensureLocalRegion publishes the new row on the first start.
 #   5  bring-up: node secrets, wallet binary, ownership, web files, WG, nginx.
 #   6  continuity: every ledger figure AND per-row digest EQUAL to the manifest;
@@ -996,7 +1040,7 @@ _pmg_manifest_load() {  # <manifest.json> → PMG_MF_*; rc 1 when unreadable
 _pmg_in_reset() {
     PMG_IN_CHECK_ONLY=0; PMG_IN_STAGE="none"; PMG_IN_ARCHIVE=""; PMG_IN_CLEAR=""; PMG_IN_MDIR=""
     PMG_IN_MANIFEST=""; PMG_IN_SAMEBOX=0; PMG_IN_PUBLIC_IP=""; PMG_IN_OLD_IP=""; PMG_IN_NODE_HEIGHT=""
-    PMG_IN_DARK=""; PMG_IN_DARK_WHY=""; PMG_IN_DARK_CONFIRMED=0; PMG_IN_CERT_OK=0
+    PMG_IN_DARK=""; PMG_IN_DARK_WHY=""; PMG_IN_DARK_CONFIRMED=0; PMG_IN_CERT_OK=0; PMG_IN_GAMES="absent"
     _pmg_manifest_load /nonexistent || true
 }
 
@@ -1010,8 +1054,8 @@ _pmg_in_cleanup() {
 # ─── Probes of the OLD hub (F4) ──────────────────────────────────────────────
 # A "no" only counts when the OLD BOX ITSELF said it. A firewall answers for a box too — a
 # DROP times out, and a REJECT answers with ICMP (firewalld's default: icmp-host-prohibited,
-# "No route to host") or a RST — so a box filtered FROM HERE used to read as dark while its
-# pool still served (audit Part 9 C6). Hence: only a RST counts as a stratum "no", and only
+# "No route to host") or a RST — so a box filtered FROM HERE reads as dark while its
+# pool still serves (security audit, hub-move review C6). Hence: only a RST counts as a stratum "no", and only
 # an HTTP answer that is not the pool counts as an API "no"; everything else proves nothing.
 # rc 0 = connected · 1 = REFUSED (a TCP RST) · 2 = timed out, or any other error: proves nothing
 _pmg_tcp_probe() {  # <host> <port>
@@ -1616,7 +1660,7 @@ _pmg_in_restore() {
 
     # 1) Install ENABLED the pool unit. From the restore until step 7 this box holds the old
     # hub's seed and ledger, and a reboot must not start that pool unattended — so the unit is
-    # disabled first, and only step 7 enables it again (audit Part 9 C2).
+    # disabled first, and only step 7 enables it again (security audit, hub-move review C2).
     systemctl disable "$POOL_SERVICE" >/dev/null 2>&1 || true
     if [[ "$(systemctl is-enabled "$POOL_SERVICE" 2>/dev/null)" == "enabled" ]]; then
         error "Could not disable $POOL_SERVICE at boot — nothing restored. systemctl disable $POOL_SERVICE, then B → 7 again."
@@ -1648,18 +1692,31 @@ _pmg_in_restore() {
            return 1 ;;
     esac
     _pbk_restore_perms
-    # Games DB (design §19 D18): never part of the extraction above; asked separately, and
-    # a problem with it never fails the move.
+    # Games DB (design §19 (script07_design_games.md) D18): never part of the extraction above; asked separately, and
+    # a problem with it never fails the move. Its outcome is SAID here, in the log and on the
+    # final screen — one line among many would leave an operator no way to
+    # tell afterwards whether /play/ came up on the old data or on an empty DB.
+    PMG_IN_GAMES="absent"
     if declare -F pgs_restore_db_from_archive >/dev/null 2>&1; then
-        pgs_restore_db_from_archive "$PMG_IN_CLEAR" || warn "Games database not restored — the move continues."
+        PGS_RESTORE_RESULT="failed"
+        pgs_restore_db_from_archive "$PMG_IN_CLEAR" "$(basename "$PMG_IN_ARCHIVE")" \
+            || warn "Games database not restored — the move continues (P → 9 restores it later)."
+        PMG_IN_GAMES="${PGS_RESTORE_RESULT:-failed}"
     fi
-    success "Restored: pool.db, pool.json, wallet, WG identity${PMG_MF_CERTS:+, TLS cert ($PMG_MF_CERTS)}."
-    _pmg_log "restored $(basename "$PMG_IN_ARCHIVE") — payouts frozen"
+    local gtxt=""
+    case "$PMG_IN_GAMES" in
+        restored) gtxt=", games DB" ;;
+        absent)   info "The archive holds no games database (the old hub had no /play/, or its snapshot failed)." ;;
+        declined) info "Games database NOT restored (you answered n) — P → 9 restores it from this archive later." ;;
+        *)        warn "Games database NOT restored — P → 9 restores it from this archive later." ;;
+    esac
+    success "Restored: pool.db, pool.json, wallet, WG identity${gtxt}${PMG_MF_CERTS:+, TLS cert ($PMG_MF_CERTS)}."
+    _pmg_log "restored $(basename "$PMG_IN_ARCHIVE") — payouts frozen; games DB: $PMG_IN_GAMES"
 }
 
 # ─── Step 4: location ────────────────────────────────────────────────────────
 # The seeded row for a new tag (e.g. cqf) already exists INACTIVE on the old hub's DB.
-# Part 1's rule in ensureLocalRegion activates it on the first start because the tag
+# The move rule in ensureLocalRegion activates it on the first start because the tag
 # differs from the `_state/local_region` stamp. A manifest WITHOUT a stamp (the old hub
 # never ran that code) would make the move look like a first boot → stamp only, no
 # activation; so the old tag is written as the stamp here first (F3).
@@ -2185,9 +2242,24 @@ _pmg_in_final() {
     echo -e "    5. B → 3 turns the daily backup back on (B → 4 → 1 first if this box has no key yet)."
     echo -e "       ${DIM}Its first run REPLACES today's migration archive (same name) — keep a copy elsewhere.${RESET}"
     echo -e "    6. Wipe the OLD box after ~7 days — it still holds the wallet seed and the hub WG key."
+    case "${PMG_IN_GAMES:-absent}" in
+        restored)
+            if declare -F pgs_installed >/dev/null 2>&1 && pgs_installed; then
+                echo -e "    7. Games: the old hub's games DB is in place (P → 4 starts $PGS_SERVICE if it is not running)."
+            else
+                echo -e "    7. Games: the old hub's games DB is in place. ${BOLD}P → 1 Install${RESET} keeps it, then ${BOLD}P → 3 Nginx${RESET}."
+            fi
+            echo -e "       ${DIM}P → 5 shows its player / match counts and where it came from.${RESET}" ;;
+        absent)
+            echo -e "    7. Games: the archive carried no games DB (expected if the old hub had no /play/) —"
+            echo -e "       a P → 1 here starts an EMPTY one." ;;
+        *)
+            echo -e "    7. Games: the games DB was ${BOLD}NOT${RESET} restored. Before players come back: ${BOLD}P → 9${RESET} with this archive,"
+            echo -e "       then P → 1 + P → 3. ${DIM}(Players who play first on an empty DB lose that when you restore.)${RESET}" ;;
+    esac
     echo ""
     _pmg_in_print_rollback
-    _pmg_log "complete — $(basename "$PMG_IN_ARCHIVE"); payouts frozen"
+    _pmg_log "complete — $(basename "$PMG_IN_ARCHIVE"); payouts frozen; games DB: ${PMG_IN_GAMES:-absent}"
 }
 
 # ─── Intro + orchestration ───────────────────────────────────────────────────

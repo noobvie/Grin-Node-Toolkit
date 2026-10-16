@@ -88,7 +88,7 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
   const minerSpendable = db.prepare(
     `SELECT COALESCE(SUM(balance),0) AS s FROM miner_accounts WHERE grin_address NOT IN ('pool_fee','prize_pool')`
   ).get().s;
-  // tor_held (2026-09-26) counts like tor_sending: its amount is still locked, and its one send
+  // tor_held counts like tor_sending: its amount is still locked, and its one send
   // may have left the wallet — so it explains a wallet drop exactly as an in-flight send does.
   const pending = db.prepare(
     `SELECT COALESCE(SUM(amount),0) AS amt, COUNT(*) AS cnt FROM withdrawals
@@ -137,8 +137,8 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
   // SUM(), not a bare column: the operator pseudo-accounts are created lazily (first fee cut /
   // first prize credit), so on a fresh pool the row does NOT exist yet and `.get()` returns
   // undefined — COALESCE only covers a NULL column, never a missing ROW. Dereferencing that
-  // threw inside computeReconciliation, and AlertMonitor swallowed it as "Money reconciliation
-  // failed", so the invariant guarding the money silently never ran on a new install. An
+  // throws inside computeReconciliation, AlertMonitor swallows it as "Money reconciliation
+  // failed", and the invariant guarding the money silently never runs on a new install. An
   // aggregate with no GROUP BY always yields exactly one row, matching `minerSpendable` above.
   const feeBalance = db.prepare(`SELECT COALESCE(SUM(balance),0) AS b FROM miner_accounts WHERE grin_address='pool_fee'`).get().b;
   const prizeBalance = db.prepare(`SELECT COALESCE(SUM(balance),0) AS b FROM miner_accounts WHERE grin_address='prize_pool'`).get().b;
@@ -169,9 +169,9 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
       // inputs in `amount_locked` and its change in `amount_awaiting_finalization`, and `total`
       // counts NEITHER — so from the moment a payout locks its inputs until it is mined, `total`
       // falls by the WHOLE input value (amount + fee + change), not by what was sent. The ledger
-      // still owes that amount (balance_locked), so comparing `total` read every in-flight
-      // payout as a shortfall and auto-froze the pool (two miners withdrawing their full balance
-      // at once was enough). Change is NOT added: it is part of the locked inputs.
+      // still owes that amount (balance_locked), so comparing `total` reads every in-flight
+      // payout as a shortfall and auto-freezes the pool (two miners withdrawing their full balance
+      // at once is enough). Change is NOT added: it is part of the locked inputs.
       // Residual, on the SAFE side: a Tor payout the ledger already debited (confirmed at send)
       // but the chain has not mined still counts in `locked`, so HELD over-reads by amount + fee
       // until it mines — a brief over-coverage, never a false freeze.
@@ -213,7 +213,7 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
   const totalOwed = ledgerTotal;
   const coverage_liquid_gap = r9(walletBalance.spendable - spendableOwed + network_fees_unbooked);
   // HELD, not `total` — see walletBalance.held above: `total` drops by a payout's whole inputs
-  // while it is in flight, which read every concurrent payout as an under-funded pool.
+  // while it is in flight, which reads every concurrent payout as an under-funded pool.
   const coverage_full_gap = r9(walletBalance.held - totalOwed + network_fees_unbooked);
   const locked_drift = r9(ledger.sum_locked - pending.amt);
 
@@ -237,9 +237,9 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
           network_fees_unbooked: r9(network_fees_unbooked),
           // What the operator could withdraw now (the bucket net of the unbooked fees).
           available: r9(Math.max(0, feeBalance - network_fees_unbooked)),
-          // Revenue actually sent to the operator's wallet ('operator_withdrawal' debits). Was
-          // derived as collected − diverted − balance, which also counted any other debit (and,
-          // from 2026-10-05, booked network fees) as "realized" — it is read directly now.
+          // Revenue actually sent to the operator's wallet ('operator_withdrawal' debits). Read
+          // directly, never derived as collected − diverted − balance: that counts any other
+          // debit (booked network fees among them) as "realized".
           operator_realized: r9(feeAgg.withdrawn),
         },
         prize_pool: {
@@ -284,14 +284,14 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
  * Each pool withdrawal is consumed by at most one wallet tx, so N identical payouts need N rows.
  * Self-spends/consolidations net ~0 and are skipped.
  *
- * NET, not gross (review 2026-09-26, #5): the pool sends amount − fee_charged — the flat
- * withdrawal fee stays behind — and the wallet's entry records exactly that (debited − credited −
- * fee). This compared the GROSS row amount at ±0.05 GRIN, which only worked while the fee was under
- * 0.05: withdrawal_fee accepts up to 1 GRIN, and at 0.1 every Tor payout without a captured slate
- * read as an out-of-band send — a critical alert and a pool-wide auto-freeze. A pool-built payout
- * is exact to the nanogrin, so 1 µGRIN absorbs float rounding and a near-amount row can no longer
- * absorb a real unrecorded send. A MANUAL row (lib/dormancy.js manualPayout) is the amount the
- * operator TYPED, so it keeps the old human tolerance.
+ * NET, not gross: the pool sends amount − fee_charged — the flat withdrawal fee stays behind —
+ * and the wallet's entry records exactly that (debited − credited − fee). Comparing the GROSS row
+ * amount at ±0.05 GRIN works only while the fee is under 0.05: withdrawal_fee accepts up to 1
+ * GRIN, and at 0.1 every Tor payout without a captured slate reads as an out-of-band send — a
+ * critical alert and a pool-wide auto-freeze. A pool-built payout is exact to the nanogrin, so
+ * 1 µGRIN absorbs float rounding and a near-amount row cannot absorb a real unrecorded send. A
+ * MANUAL row (lib/dormancy.js manualPayout) is the amount the operator TYPED, so it keeps a
+ * human tolerance.
  */
 async function auditWalletSends(db, wallet, opts = {}) {
   const window_days = opts.window_days || 30;
@@ -336,8 +336,8 @@ async function auditWalletSends(db, wallet, opts = {}) {
 
   // Candidate pool withdrawals: any row whose send was actually attempted, within the window.
   // tor_held is exactly such a row — its one send has an unknown outcome and may have landed.
-  // tor_failed is NOT (2026-09-26): since the one-attempt change a Tor row is failed only on wallet
-  // proof that nothing was sent, and its balance is returned. A confirmed send whose only match is
+  // tor_failed is NOT: a Tor row is failed only on wallet proof that nothing was sent, and its
+  // balance is returned. A confirmed send whose only match is
   // such a row — say a forced refund whose unconfirmed tx later mined — paid a miner twice, and
   // counting it as "recorded" hid exactly that.
   const rows = db.prepare(`

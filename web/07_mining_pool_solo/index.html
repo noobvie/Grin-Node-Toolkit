@@ -673,7 +673,7 @@
   });
 
   // ── Operator slogan (data/config.json: {"slogan":"…"}) — set at deploy time,
-  // editable any time. The external-poller endpoint now lives on the setup page. ──
+  // editable any time. The external-poller endpoint lives on the setup page. ──
   fetch('data/config.json', { cache: 'no-store' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (c) {
@@ -944,10 +944,10 @@
         var note = document.getElementById(net + '-note'); note.textContent = ''; note.style.display = 'none';
         var tip = ok.tip || {}, height = tip.height, diff = tip.total_difficulty, peers = ok.connections, sync = syncLabel(ok.sync_status);
         STATE.tip[net] = (height !== undefined) ? Number(height) : null;
-        // Peer count now rides on the sync-status line (its own tile was replaced
-        // by Pool Hashrate): e.g. "synced · 8 nodes". The dot keeps the sync colour.
+        // Peer count rides on the sync-status line (there is no separate tile;
+        // Pool Hashrate has the slot): e.g. "synced · 8 nodes". The dot keeps the sync colour.
         var peerN = (peers !== undefined && peers !== null) ? Number(peers) : null;
-        // Tip height now rides on the sync-status line beside the badge (its own
+        // Tip height rides on the sync-status line beside the badge (its own
         // "Block Height" tile was retired for the Est. Earnings tile), e.g.
         // "synced 1,234,567 · 8 nodes". The dot keeps the sync colour.
         var heightStr = (height !== undefined && height !== null) ? Number(height).toLocaleString() : '';

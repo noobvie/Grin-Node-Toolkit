@@ -29,7 +29,7 @@ function parseStratumMessage(jsonStr) {
 // The worker part (everything after the first '.') is case-folded to lowercase BEFORE the grammar
 // runs, so `MyBrand-donate10` logs in as worker `mybrand-donate10` donating 10 %. The ADDRESS is
 // never folded — grin never emits uppercase bech32 and mixed case is invalid bech32, so `GRIN1…`
-// stays refused (design §16.2). Until 2026-09-21 an uppercase worker was refused at login.
+// stays refused (design §16.2). An uppercase WORKER is folded, not refused.
 // Bech32 charset excludes b, i, o, 1 → [ac-hj-np-z02-9]
 // A Grin Slatepack address is the bech32 encoding of a 32-byte ed25519 key:
 // 52 data symbols + 6 checksum symbols = 58 bech32 chars after the prefix.
@@ -45,9 +45,9 @@ function parseStratumMessage(jsonStr) {
 //   grin1abc….donate10      → worker "donate10",       this rig donates 10%
 //   grin1abc….rig01-donate10 → worker "rig01-donate10", this rig donates 10%
 //   grin1abc….rig01          → worker "rig01",          no donation
-// The token is READ, never stripped: the worker label is whatever the miner typed. Until
-// 2026-09-21 it was cut out (`.donate10` became worker "default"), and the first miner to try it
-// read that as a bug — nothing on screen said why their name had changed. The literal name is
+// The token is READ, never stripped: the worker label is whatever the miner typed. Cutting it
+// out (`.donate10` → worker "default") reads as a bug — nothing on screen says why the name
+// changed. The literal name is
 // also the one place a miner can SEE that a donation is set on this rig, which is what audit
 // §J3-5 wanted: a tag that reduces earnings must not be invisible.
 // Edge handling: only N in 1-100 donates (donate0 is a tag of 0 %, the same as no tag). Anything else is
@@ -75,8 +75,8 @@ function parseStratumMessage(jsonStr) {
 // which predates the variant split. So the last 6 symbols of every address are a checksum over
 // the other 52, and verifying it is the difference between "looks like an address" and "is one".
 //
-// Why this is here at all (audit §J6-6): validateUsername used to check the bech32 CHARSET and
-// the length and stop. Any 58 charset-valid characters were therefore a working stratum login,
+// Why this is here at all (audit §J6-6): checking only the bech32 CHARSET and
+// the length is not enough. Any 58 charset-valid characters would be a working stratum login,
 // which (a) gave an anonymous client an unbounded supply of distinct addresses, each of which
 // took a miner_accounts row plus three synchronous statements on the shared DB at login, and
 // (b) silently accepted a miner who fat-fingered one character of their own address and then
@@ -120,8 +120,8 @@ function bech32ChecksumValid(hrp, data) {
   return bech32Polymod(bech32HrpExpand(hrp).concat(values)) === 1;
 }
 
-const MAX_WORKER_NAME_LEN = 32;   // visible label; 25 until 2026-09-21 (a 27-char brand was clipped)
-const MAX_WORKER_RAW_LEN = 48;    // raw accept ceiling, label + token; was 40
+const MAX_WORKER_NAME_LEN = 32;   // visible label; must fit a 27-char brand
+const MAX_WORKER_RAW_LEN = 48;    // raw accept ceiling, label + token
 
 // The donate token: the whole worker name, or a `-`/`_`-separated suffix. dm[1] is the label
 // (undefined when the token is the whole name), dm[2] the digits. ONE definition — validateUsername
@@ -215,8 +215,8 @@ function validateUsername(username, network = null) {
   }
 
   // `donation_percent` is informational (the login log line, the grammar tests): nothing stores
-  // it. The label in front of the token is only a rig name again — v1 captured it as a donor
-  // name, which design §18.1 #3 removed along with the field that carried it.
+  // it. The label in front of the token is only a rig name — never captured as a donor
+  // name (design §18.1 #3 removed that field).
   return {
     grin_address: m[1] + m[2],
     worker_name,
@@ -238,8 +238,8 @@ function validateUsername(username, network = null) {
 // formula divides by this very constant — `GPS = Σ × 42 / window / 16384` collapses to
 // `shares × job_diff × 42 / window`, i.e. one C32 graph yields a 42-cycle about once in 42.
 //
-// Until 2026-09-20 every share was recorded at difficulty 1 — the session's never-tuned
-// vardiff placeholder — and every derived figure (pool/miner/worker hashrate, the charts,
+// Recording every share at difficulty 1 (the session's never-tuned
+// vardiff placeholder) makes every derived figure (pool/miner/worker hashrate, the charts,
 // round effort, luck) read 16384× too small: a rig turning in 30 shares an hour showed
 // 0.00 G/s. db.js migrateShareCreditUnit rescales rows written before the fix.
 //

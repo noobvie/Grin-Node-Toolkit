@@ -1,4 +1,4 @@
-/* play-guest.js — guest accounts on /play/ (design §19.17.3/§19.17.4, Part C6).
+/* play-guest.js — guest accounts on /play/ (design §19.17.3/§19.17.4).
  *
  * Owns the sign-in card's two tabs (Miner · Guest), the guest sign-in form, the sign-up form
  * (inside the Guest tab; /play/#signup opens it), the guest lines of the "How tickets are earned"
@@ -137,7 +137,7 @@
     msg(EL['signup-msg'], '');
   });
 
-  // /play/#signup (the C7 chat bubble links here): open the sign-up form when signed out.
+  // /play/#signup (the floating chat bubble links here): open the sign-up form when signed out.
   function fromHash() {
     if (location.hash === '#signup' && !S.me) { selectTab('guest'); showSignup(true); }
   }

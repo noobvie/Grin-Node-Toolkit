@@ -24,7 +24,7 @@
 //     Earlier DAYS are never recomputed, but `due` is taken from the day's running total, so
 //     a change re-rates the CURRENT UTC day: lowering minutes_per_play or raising the daily
 //     cap mid-day credits the difference at the next window; the opposite change credits
-//     nothing more that day. plays_awarded only ever grows within a day (§19.15 Part 11).
+//     nothing more that day. plays_awarded only ever grows within a day (see script07_implementation_games.md).
 //
 // Runs in every games mode, 'off' included: it costs the pool one indexed query per 5 min,
 // and plays then exist when the operator switches the games on. With no link secret it is a

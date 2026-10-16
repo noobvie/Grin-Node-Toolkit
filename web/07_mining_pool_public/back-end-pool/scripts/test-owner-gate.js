@@ -4,7 +4,7 @@
 // One-shot: no server, no listener, in-memory DB only — run via `npm run test:unit`.
 //
 // Each block names the finding it guards. If one of these fails, re-read
-// docs/generated/script07_security_audit.md §J3 before "fixing" the test: several of these
+// docs/reference/script07_security_audit.md §J3 before "fixing" the test: several of these
 // assert that something is DENIED, and loosening them re-opens a money path.
 
 const assert = require('assert');
@@ -197,7 +197,6 @@ const backdate = (db, a, secs) => db.prepare(
     // flagged, carrying the older stamp. Without the merge the anchor row lands evicted, the
     // `last` insert is IGNOREd by the UNIQUE index, and the owner's current proof migrates as
     // an evicted anchor — refused by the destination gate on every account that upgraded.
-    // (Part 4 review: this path had no test; the check above claimed to be it and was not.)
     const dbE = freshDb();
     const E = ADDR('e');
     dbE.prepare(`INSERT INTO miner_accounts
@@ -314,10 +313,10 @@ const backdate = (db, a, secs) => db.prepare(
     assert.strictEqual(reborn.slot, 'set', 'a re-activated anchor is live again, so it is an ordinary member again');
     ok('§17.2 #5 a re-activated anchor rejoins the set without breaking the cap');
 
-    // …which is exactly why its age must RESTART (Part 4 review). Once live it is labelled
+    // …which is exactly why its age must RESTART. Once live it is labelled
     // 'set', so an old stamp would turn four shares from whoever now holds the value — the
     // owner's former CGNAT or re-leased IP — into an AGED destination leg: the evicted-anchor
-    // refusal above, laundered. Before the fix this row kept the month-old stamp and passed.
+    // refusal above, laundered. A row that keeps the month-old stamp must fail.
     assert.ok(reborn.age_seconds < MIN_PROOF_AGE_SEC, 'a returning anchor starts a fresh age');
     assert.strictEqual(destinationLegOk(reborn), false,
       'a re-activated anchor must not be an aged leg for the destination gate');
@@ -413,7 +412,7 @@ const backdate = (db, a, secs) => db.prepare(
     ok('§17.2 #3 concurrent first captures share one salt and produce one anchor');
   }
 
-  // ── Part 4 — two captures of the SAME new value must cost a full set ONE row ────────────
+  // ── two captures of the SAME new value must cost a full set ONE row ────────────
   // Ten rigs behind one NAT reach PROOF_MIN_SHARES together after a pool restart. While a
   // capture awaits the v1 checks of a migrated account, the other one inserts the value; the
   // first then re-read the table without recognising it, took the insert path, evicted an
@@ -588,7 +587,6 @@ const backdate = (db, a, secs) => db.prepare(
   // §J3 backfill and then migrateProofSet both sat AFTER stratumServer.start() with an
   // `await nostrBridge.start()` between them, so on a pool with Nostr payouts on, shares were
   // being accepted — and captures anchoring whoever mined them — while the relays answered.
-  // Every other check in this file passed throughout (Part 4 review).
   {
     const fs = require('fs');
     const src = readAppSource();
@@ -605,9 +603,9 @@ const backdate = (db, a, secs) => db.prepare(
     ok('§17.2 #9 the proof-set migration runs before the stratum listener, with no await between');
   }
 
-  // ── §17.4 / audit §F2 — what a FAILED verify costs in KDF calls ─────────────────────────
+  // ── audit §F2 (script07_security_audit_archive.md) — what a FAILED verify costs in KDF calls ─────────────────────────
   // The per-IP throttle (FAIL_MAX_IP = 20 per 10 min) is sized against this number, so it is
-  // asserted rather than reasoned about: the old 2-slot code cost up to 6 scrypts per failed
+  // asserted rather than reasoned about: a 2-slot design costs up to 6 scrypts per failed
   // guess, and a set of ten would have cost 20 if the salt were per-row. Counted by wrapping
   // crypto.scrypt/scryptSync, which is the only way to see a cost that has no other symptom.
   {
@@ -636,7 +634,7 @@ const backdate = (db, a, secs) => db.prepare(
       assert.strictEqual(calls, 1, 'and a SUCCESSFUL verify costs one too');
       ok('§17.4 one KDF call per successful verify, regardless of which row matches');
 
-      // The exception the old comment denied (Part 4 review): an IP whose canonical form
+      // Exception: an IP whose canonical form
       // differs from what was typed AND which is password-shaped needs two digests — the IP
       // set is keyed on the canonical form, the password set on the raw one.
       calls = 0;
@@ -657,7 +655,7 @@ const backdate = (db, a, secs) => db.prepare(
         'an account whose rows are ALL legacy has no salt yet, so verify skips the v2 hash');
       // Once it captures anything under the new scheme it has a salt, and then a failed verify
       // pays for the v2 digest PLUS each surviving legacy row. Three was the old window's
-      // maximum, so this is the ceiling §F2's per-IP throttle is sized against.
+      // maximum, so this is the ceiling §F2 (script07_security_audit_archive.md)'s per-IP throttle is sized against.
       await op.recordOwnerEvidence(db, L, '192.0.2.88', null);
       calls = 0;
       assert.strictEqual((await op.verifyOwnerProof(db, L, '203.0.113.201', '203.0.113.201')).ok, false);
@@ -670,7 +668,7 @@ const backdate = (db, a, secs) => db.prepare(
       assert.strictEqual(calls, 1, 'back to one KDF call once the set is fully v2');
       ok('§17.4 a legacy row adds exactly one KDF call, and only until it is rewritten');
 
-      // The transitional CEILING, which is what §F2 has to be sized against: a migrated
+      // The transitional CEILING, which is what §F2 (script07_security_audit_archive.md) has to be sized against: a migrated
       // account holding anchor/last/prev of BOTH kinds (six v1 rows) and a salt, probed with
       // an input that is both a non-canonical IP and password-shaped. 2 + 6 = 8 — above the
       // old window's 6. §17.4 said "1 + n_v1, n_v1 ≤ 3"; both halves were under-counted.

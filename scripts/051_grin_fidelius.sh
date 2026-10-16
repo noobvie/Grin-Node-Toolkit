@@ -7,7 +7,7 @@
 #  Protected by Basic Auth — intended for the server owner only, not public.
 #
 #  Ports the GrinSuite Node.js wallet (noobvie/GrinSuite:web/03_web_wallet)
-#  onto the toolkit. See docs/generated/script051_design.md
+#  onto the toolkit. See docs/reference/script051_design.md
 #  for the full architecture and decisions.
 #
 #  ─── Architecture ────────────────────────────────────────────────────────────
@@ -32,9 +32,8 @@
 #   V) Private access              (WireGuard tunnel + DNS-01 cert — optional)
 #   0) Back to main menu
 #
-#   Grin XP (051x) has its own row on hub 05 since 2026-08-04, so its row was
-#   removed here (2026-08-08) rather than shown twice. `xp` stays a SILENT alias
-#   — a retired key nothing else took, per CLAUDE.md.
+#   Grin XP (051x) has its own row on hub 05, so it is not listed here again.
+#   `xp` stays a SILENT alias — a retired key nothing else took, per CLAUDE.md.
 #
 #  ─── Optional: private access (menu V) ───────────────────────────────────────
 #   Moves the wallet off the public internet WITHOUT giving up a real Let's
@@ -101,16 +100,15 @@ RESET='\033[0m'
 # init, listen and owner_api at once, with no local change to blame. Following
 # `latest` would have let an upstream tag do that unattended.
 #
-# That bump has since LANDED and did not break stdin: grin-wallet v5.5.0
-# (2026-08-12) pins rpassword 7.5.4 but branches on `stdin.is_terminal()`, taking
-# a non-TTY path that still reads the pipe. So v5.4.1 is no longer the latest and
-# the pin is now a deliberate "verify before moving", not a barricade. Keep it in
+# That bump did not break stdin: grin-wallet v5.5.0 pins rpassword 7.5.4 but
+# branches on `stdin.is_terminal()`, taking a non-TTY path that still reads the
+# pipe. So this pin is a deliberate "verify before moving", not a barricade (the
+# shared store pins v5.5.0; only Fidelius stays on v5.4.1). Keep it in
 # sync with GRIN_WALLET_PIN in web/051_fidelius/server.js. To move it: smoke-test
 # an unlock on the new binary (the shared store does this), bump both, commit.
 #
-# The release URLs that used to sit beside this pin are gone: fetching, checksum
-# verification and the upstream-moved check all live in lib/grin_wallet_install.sh
-# now, which this script hands the pin to via GWI_PIN_TAG.
+# Fetching, checksum verification and the upstream-moved check live in
+# lib/grin_wallet_install.sh, which this script hands the pin to via GWI_PIN_TAG.
 _WW_PIN_TAG="v5.4.1"
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -151,8 +149,8 @@ if [[ -f "$_SECRETS_LIB" ]]; then
 fi
 
 # ─── grin-wallet binary: install / update / rollback (shared) ─────────────────
-# Fidelius used to carry its own downloader. It now shares the toolkit-wide
-# version store, which is what makes the pin below survivable: if a pin move
+# Fidelius shares the toolkit-wide version store, which is what makes the pin
+# below survivable: if a pin move
 # turns out to break unlocking, the previous binary is already on disk and
 # verified, so the undo is one keypress instead of a hand-fetched tarball on a
 # live box. GWI_PIN_TAG is how this product tells the shared lib which version
@@ -190,11 +188,10 @@ WW_NGINX_CONF="/etc/nginx/sites-available/grin-fidelius"
 WW_NGINX_LINK="/etc/nginx/sites-enabled/grin-fidelius"
 WW_HTPASSWD="/etc/nginx/grin-fidelius.htpasswd"
 # CLAUDE.md convention: script-specific rate-limit conf files carry a script##-
-# prefix. Safe to rename now only because Fidelius has never been VPS-deployed —
-# renaming a live one would leave the OLD file defining the same zones, and two
-# limit_req_zone lines with one name in the http context is a fatal nginx error.
-# _WW_RATELIMIT_CONF_OLD is deleted before the new one is written for exactly
-# that reason; drop it once no install predates this change.
+# prefix. Renaming a live one would leave the OLD file defining the same zones,
+# and two limit_req_zone lines with one name in the http context is a fatal nginx
+# error. _WW_RATELIMIT_CONF_OLD is deleted before the new one is written for
+# exactly that reason; drop it once no install predates the rename.
 WW_RATELIMIT_BASENAME="script051-fidelius-ratelimit"
 WW_RATELIMIT_CONF="/etc/nginx/conf.d/${WW_RATELIMIT_BASENAME}.conf"
 _WW_RATELIMIT_CONF_OLD="/etc/nginx/conf.d/grin-fidelius-ratelimit.conf"
@@ -422,9 +419,8 @@ ww_menu_status() {
 #
 # This is the shared screen from lib/grin_wallet_install.sh — the same one Drop,
 # solo and the pool open — with Fidelius's pin (_WW_PIN_TAG, mirrored as
-# GWI_PIN_TAG at source time) as its default. The pin warning that used to be
-# printed here now lives in the shared screen, on the path that actually leaves
-# the pin.
+# GWI_PIN_TAG at source time) as its default. The pin warning is printed by the
+# shared screen, on the path that actually leaves the pin.
 #
 # Restart hooks: the wallets are grin-wallet processes SPAWNED BY the Fidelius
 # node app, so a binary swap is only picked up when that service restarts.
@@ -2142,8 +2138,8 @@ wallet_menu() {
             8)     ww_show_info         || true ;;
             9)     ww_edit_settings     || true ;;
             v|V)   ww_private_access    || true ;;
-            # Silent alias — the row was removed (Grin XP has its own hub-05 row);
-            # the key still works for anyone with the muscle memory.
+            # Silent alias — Grin XP has its own hub-05 row; the key still
+            # works for anyone with the muscle memory.
             xp|XP) _launch_xp_wallet    || true ;;
             0)     break ;;
             "")    continue ;;

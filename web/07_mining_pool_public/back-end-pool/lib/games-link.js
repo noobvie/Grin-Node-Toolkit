@@ -1,6 +1,7 @@
 'use strict';
 
-// Pool side of the games platform link (design §19.3). EVERYTHING the pool does because of
+// Pool side of the games platform link (script07_design_games.md §19.3 — every § and D-id in this
+// file is in that doc). EVERYTHING the pool does because of
 // the games lives in this file; index.js only creates it, mounts it and reads publicFlag().
 //
 // The games service (`grin-games`, user grinplay, play/server/) is a separate process with
@@ -25,7 +26,7 @@
 //     before any DB read and before any scrypt (§19.13 #12).
 //
 // /internal/* has three independent guards, because any one alone is a typo from open:
-//   1. nginx never proxies it (the vhost proxies /api/… and a few exact files) and Part 3's
+//   1. nginx never proxies it (the vhost proxies /api/… and a few exact files) and the
 //      vhost adds `location ^~ /internal/ { return 404; }`;
 //   2. this file answers 404 to anything that carries a forwarding header or arrives on a
 //      non-loopback socket — a request that came through nginx always has X-Forwarded-For;
@@ -68,8 +69,7 @@ const PROBE_INTERVAL_MS = 60 * 1000;
 const PROBE_TIMEOUT_MS = 1000;
 const PROBE_BODY_MAX = 4096;
 const ADMIN_USER_MAX = 64;
-// Global caps on the two routes that cost this process real work (§19.13 #12, Part 11
-// review). The games service's own limiters are what an HONEST caller meets first; these are
+// Global caps on the two routes that cost this process real work (§19.13 #12). The games service's own limiters are what an HONEST caller meets first; these are
 // for a games process that is not honest — a compromised grinplay holds the secret and can
 // forge client_ip, so the per-IP proof throttles would see a fresh IP on every call. So they
 // key on nothing a caller controls, and sit far above honest use:
@@ -268,7 +268,7 @@ function createGamesLink(opts = {}) {
   // file, mv it over — both sides pick it up on their next call, nothing restarts). Missing,
   // unreadable, oversized or short → null = "not configured". Surrounding whitespace (the
   // trailing newline an editor or `echo` adds) is not part of the secret; the games side
-  // (Part 4, pool-link.js) must trim the same way.
+  // (play/server/lib/pool-link.js) must trim the same way.
   function linkSecret() {
     if (!linkCfg) return null;
     const t = now();

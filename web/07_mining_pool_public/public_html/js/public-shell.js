@@ -8,12 +8,11 @@
    at body-end, so the chrome is byte-identical on every page and there is no
    flash of a drifting hardcoded nav before the async config load.
 
-   Why this replaced the old approach: every page used to hand-ship a full
-   <header>/<footer>, and branding.js's buildNav() rewrote the nav links from a
-   NAV_LINKS list only AFTER /api/config resolved — so until that fetch returned
-   you saw each page's (inconsistent) hardcoded fallback nav, and maintaining the
-   markup meant editing 7 files. Now the nav lives HERE, once, and renders before
-   any fetch. branding.js still ENHANCES this injected DOM (logo/slogan via
+   Why not per-page markup: a full <header>/<footer> hand-shipped on every page, with
+   branding.js's buildNav() rewriting the nav links from a NAV_LINKS list only AFTER
+   /api/config resolved, shows each page's (inconsistent) hardcoded fallback nav until that
+   fetch returns, and every markup change means editing every page. So the nav lives HERE,
+   once, and renders before any fetch. branding.js still ENHANCES this injected DOM (logo/slogan via
    .brand, [data-brand] hooks, and showing/hiding the gated Community links); it no
    longer owns the base nav.
 
@@ -27,11 +26,11 @@
   'use strict';
 
   // ── Canonical public navigation (single source of truth) ────────────────
-  // Grouped by what the visitor is after (2026-09-23): the POOL's numbers under Stats,
+  // Grouped by what the visitor is after: the POOL's numbers under Stats,
   // the "extras" under Community — the prize pool's two halves (money out = Fortune Board,
-  // money in = the donate page) and the /play/ games (design §19.17.8, D31, Part C2) —
+  // money in = the donate page) and the /play/ games (script07_design_games.md §19.17.8, D31) —
   // and the visitor's OWN page — Account — split out to the right of the header (ACCOUNT
-  // below), so the pool-wide "Payouts" and your own withdrawals no longer sit side by
+  // below), so the pool-wide "Payouts" and your own withdrawals do not sit side by
   // side as peers.
   // Each item carries an icon: on narrow screens the header collapses to icons-only
   // (the .nav-label is hidden via CSS) so the mobile header stays tidy; desktop shows
@@ -39,7 +38,7 @@
   // An item is either a leaf link ({href,label,icon}) or a GROUP
   // ({label,icon,children:[…leaf links…]}). A group has NO href of its own — it
   // only opens a dropdown of its children. Gates live on the CHILDREN, never on the group
-  // (§19.17.8): a child marked `incentives: true` renders with data-incentives (shown by
+  // (script07_design_games.md §19.17.8): a child marked `incentives: true` renders with data-incentives (shown by
   // default, hidden by branding.js applyIncentivesNav when the operator has incentives
   // off); one marked `games: true` renders HIDDEN with data-games (shown by applyGamesNav
   // only on an effective games mode of 'on'). A group with any gated child carries
@@ -57,14 +56,14 @@
       { href: 'payment-history.html', label: 'Payouts',      icon: '💸' },
       { href: 'network-map.html',    label: 'Network Map',   icon: '🛰️' }
     ] },
-    // "Community" (operator's choice, design §19.17 C0 answer 1) — it was "Prize Pool"
-    // with a 🎁 until Play joined it; the gift box was the prize pool's, so the group now
-    // carries 👥 and the gift stays on the footer's Fortune Board link.
+    // "Community" (operator's choice, script07_design_games.md §19.17 C0 answer 1), not "Prize Pool":
+    // the gift box is the prize pool's, so the group carries 👥 and the gift stays on the
+    // footer's Fortune Board link.
     // Every prize-pool GRIN is paid back out to miners, never to the operator — so the
     // donate page is "Contribute" here, not "Donate" (reads as tipping the operator) and
     // not "Sponsors" (reads as companies funding the operator). Its <h1> stays
     // "Support the Prize Pool".
-    // Play is the /play/ games platform (design §19): `games: true` renders it HIDDEN —
+    // Play is the /play/ games platform (script07_design_games.md §19): `games: true` renders it HIDDEN —
     // the opposite default of `incentives`. Absolute href: /play/ is served from its own
     // docroot, not this one. On /play/ itself the group lights as active through it.
     { label: 'Community', icon: '👥', children: [
@@ -83,9 +82,9 @@
 
   // Every link this script renders is SITE-ABSOLUTE ('/blog.html', never 'blog.html'). The
   // header is mounted on pages that do not live at the docroot: blog permalinks are served
-  // at /blog/<slug> and the games shell at /play/ (design §19). A relative href resolved
-  // under those paths — /blog/index.html, /play/donate.html — so until 2026-09-27 every
-  // header and footer link on a blog permalink was a 404.
+  // at /blog/<slug> and the games shell at /play/ (script07_design_games.md §19). A relative href resolved
+  // under those paths — /blog/index.html, /play/donate.html — so a relative
+  // header or footer link on a blog permalink would be a 404.
   function abs(href) { return /^\//.test(href) ? href : '/' + href; }
   function currentPath() {
     var p = location.pathname || '/';
@@ -148,7 +147,7 @@
     '</div>';
   }).join('');
 
-  // ── Header: byte-identical to the old per-page markup so existing CSS and
+  // ── Header: keeps the markup existing CSS and
   //    branding.js hooks (.brand / [data-brand="pool_name"] / .header-nav /
   //    .theme-switcher) keep working unchanged. ──────────────────────────────
   var header = document.createElement('header');
@@ -180,8 +179,7 @@
   });
   poolLeaves.push(ACCOUNT);   // lives in .nav-right, not NAV, but is still a pool page
   // Excluded from the Pool column: Blog (Resources col), Fortune Board + the donate page
-  // (both surfaced as CTAs in the brand col) and Home. Home briefly appeared here after
-  // the Resources column's "Get Started" was dropped, but a footer row reading just
+  // (both surfaced as CTAs in the brand col) and Home. A footer row reading just
   // "Home" is a weak link — every page already carries the 🏠 Home item in the header
   // nav, which is where people look for it.
   var POOL_COL_SKIP = { '/blog.html': 1, '/index.html': 1, '/fortune-board.html': 1, '/donate.html': 1 };
@@ -208,8 +206,8 @@
           '<a data-brand="social-nostr" href="#" target="_blank" rel="noopener" style="display:none">Nostr</a>' +
         '</div>' +
         // Donate lives in the brand column, highlighted with a heart, as the primary
-        // community call-to-action (moved out of the Legal column). Fortune Board sits
-        // right below it (moved out of the Pool column to keep the columns balanced).
+        // community call-to-action. Fortune Board sits right below it (keeps the
+        // columns balanced).
         // Both carry data-incentives: hidden with the header's Fortune Board + Contribute
         // links when the operator has incentives off (branding.js applyIncentivesNav).
         '<a class="footer-donate" href="/donate.html" data-incentives="1">' +
@@ -224,8 +222,8 @@
         '<h4>Pool</h4>' + poolCol +
       '</div>' +
       // Resources — Blog + API docs, plus the CMS's informational pages (Start Mining /
-      // About / FAQ …), which branding.js appends here rather than under Legal. Dropped
-      // 2026-07-28: "Get Started" (the CMS "Start Mining" page below is the real guide, and
+      // About / FAQ …), which branding.js appends here rather than under Legal. Deliberately absent:
+      // "Get Started" (the CMS "Start Mining" page below is the real guide, and
       // index.html#connect is one click from the Home link in the Pool column) and the
       // "Grin Node Toolkit ↗" repo link (a link off-site to the software, not a pool
       // resource — operators who want credit have the "Powered by" attribution setting).
@@ -240,7 +238,7 @@
         '<h4>Legal</h4>' +
         // Legal-only page-links (Terms / Privacy / Impressum …) are appended by branding.js;
         // the CSS makes this container a flex column so each lands on its own line. The
-        // informational CMS pages go to Resources above; Forum/Donate moved out earlier.
+        // informational CMS pages go to Resources above.
         '<div data-brand="page-links"></div>' +
         '<a class="footer-contact" data-brand="contact-link" href="#" style="display:none">Contact</a>' +
       '</div>' +
@@ -294,9 +292,8 @@
     return d;
   }
 
-  // The footer used to carry a live mini-stats bar (network / fee / min payout / price /
-  // stratum) — removed as redundant: every one of those numbers already has a home on the
-  // pages themselves. The pool-info fetch stays, purely to raise the TESTNET banner.
+  // The footer carries no live mini-stats bar (network / fee / min payout / price /
+  // stratum): every one of those numbers already has a home on the pages themselves. The pool-info fetch stays, purely to raise the TESTNET banner.
   function enhanceFooter() {
     // /api/config/pool-info is unauthenticated + cheap.
     fetch('/api/config/pool-info', { credentials: 'same-origin' })
@@ -309,8 +306,8 @@
 
   // Sticky TESTNET banner so visitors never mistake test tGRIN for real coins. Idempotent;
   // styled by .testnet-banner in css/dashboard.css (NOT pool.css — that is the admin
-  // stylesheet and no public page loads it, which is why this banner rendered as bare
-  // unstyled text until 2026-07-26). Pushes the sticky header down by the banner height
+  // stylesheet and no public page loads it, so a rule there would leave this banner as bare
+  // unstyled text). Pushes the sticky header down by the banner height
   // via the body.has-testnet-banner rule.
   function showTestnetBanner() {
     if (document.querySelector('.testnet-banner')) return;
@@ -392,7 +389,7 @@
     document.body.insertBefore(skipLink(), header);
     // No ads where a credential is typed, under the same opt-out attribute branding.js uses
     // (audit §J1-1). This was first written against the `code` ad type, operator HTML/JS that
-    // ads.js re-created as executing <script> nodes; that type is gone (design §19.17 D22),
+    // ads.js re-created as executing <script> nodes; that type is gone (script07_design_games.md §19.17 D22),
     // and ads are now an image or a text card only. The rule stays because it still costs
     // nothing: a banner image from an operator-chosen origin is a visit beacon to that
     // origin, and a sign-in page has no use for one. The games shell (/play/, a rig password

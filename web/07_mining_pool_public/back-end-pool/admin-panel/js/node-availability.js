@@ -1,5 +1,5 @@
-// node-availability.html page script — moved BYTE-verbatim out of the page's inline script block (code-layout F5).
-// Classic script (no defer/module) loaded at the same position as the old block, after the <script src> tags before it, whose globals it uses (H14).
+// node-availability.html page script.
+// Classic script (no defer/module) loaded after the <script src> tags before it, whose globals it uses.
 // Auth gate (httpOnly-cookie aware): redirects to /login.html if not an admin, else wires
 // up the topbar username + Logout. Pool name + testnet banner are handled by admin-shell.js.
 API.guardAdminPage();
@@ -47,7 +47,7 @@ function naEsc(s) {
 }
 function naIsInt(v) { return typeof v === 'number' && isFinite(v) && Math.floor(v) === v; }
 
-// '2026-10-03 14:05:22' — UTC, suffix-free (the page states "All times UTC" once).
+// e.g. '2026-10-03 14:05:22' — UTC, suffix-free (the page states "All times UTC" once).
 function naUtc(t) {
   if (!naIsInt(t)) return '—';
   return new Date(t * 1000).toISOString().slice(0, 19).replace('T', ' ');

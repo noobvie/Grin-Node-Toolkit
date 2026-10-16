@@ -1,13 +1,13 @@
 # =============================================================================
 # 07_lib_gateway.sh — GATEWAY deployment (sourced by 07_grin_mining_public_pool.sh)
 # =============================================================================
-# Multi-region mining pool — Model C GATEWAY role (replaces the old SATELLITE).
+# Multi-region mining pool — Model C GATEWAY role (there is no SATELLITE role).
 # Deploys a THIN stratum forwarder ONLY: no grin node, no wallet, no keys, no DB,
 # no Node app, no npm. Miners connect to the public stratum port here; HAProxy
 # forwards the raw stratum TCP — prefixed with a PROXY-protocol v2 header carrying
 # the real miner IP — over a WireGuard tunnel to this region's internal port on the
 # central pool box. The central stratum-server stamps the region from that port.
-# See docs/generated/script07_implementation.md §8 (Multi-region — as built).
+# See docs/reference/script07_implementation.md §8 (Multi-region — as built).
 #
 # Sourced, not executed — inherits colors/log helpers from the parent script
 # (info/warn/success/error/log, $TOOLKIT_ROOT, _pool_pause, pool_mode_conflict_check).
@@ -217,8 +217,8 @@ EOF
 # Idempotent; safe to call from both Install and Configure (the port can change).
 # No-op when no managed firewall is active, which is the common fresh-VPS case.
 # ⚠ Test ufw with the ANCHORED '^Status: active'. A disabled ufw answers `ufw status`
-# with "Status: inactive", and a bare `grep -q active` matches that word too. This ran
-# with the bare form until 2026-09-20 (first live gateway): on a box whose ufw was never
+# with "Status: inactive", and a bare `grep -q active` matches that word too. The bare
+# form fails (seen on the first live gateway): on a box whose ufw was never
 # enabled it printed "ufw: opened 3333/tcp", Status then said "ufw is ACTIVE but :3333 is
 # not allowed" no matter what was run (an inactive ufw lists no rules for the regex to
 # find), and the operator re-ran Install and Configure chasing a ufw rule while the real
@@ -281,10 +281,10 @@ _gw_unmanaged_filter_hint() {
 # peer" (and re-prints on "List gateways"):
 #   GRINGW1|region|hub_wg_pubkey|hub_public_endpoint|hub_tunnel_ip|gw_tunnel_ip/32|region_port[|public_stratum_port]
 # Returns 1 (writing nothing) unless the tag matches and the first 6 fields are present.
-# The 8th field (hubs emit it since 2026-09-20) is the POOL's public miner port. The pool
+# The 8th field (emitted by current hubs; absent from older ones) is the POOL's public miner port. The pool
 # advertises this region as <host>:<that port> and dials it for the Port check, so the
-# gateway must listen there and nothing on this box can know the number — yet Configure
-# used to ASK for it, echoing whatever was typed last time as the "default". First live
+# gateway must listen there and nothing on this box can know the number — yet asking for it
+# in Configure would echo whatever was typed last time as the "default". First live
 # pairing: haproxy on :13333, card on :3333, "✗ unreachable" beside a green tunnel. When
 # the field is present it overwrites public_stratum_port; absent (older hub) → the saved
 # value stands and the prompt below says where to copy it from.
@@ -477,7 +477,7 @@ gw_render_forwarder() {
     # mode tcp: HAProxy forwards the raw stratum byte stream. send-proxy-v2 prepends the
     # binary PROXY-protocol v2 header so the central box recovers the real miner IP.
     # stick-table conn-rate limit (Q5): blunt junk-login floods at the edge before the tunnel.
-    # Hub health check + edge reject (design §21.12, stratum pause Part 4): see the backend.
+    # Hub health check + edge reject (design §21.12): see the backend.
     local hap_user hap_group
     read -r hap_user hap_group <<< "$(_gw_haproxy_account)"
 
@@ -1341,7 +1341,7 @@ gw_status() {
     echo -e "${DIM}────────────────────────────────────────────────${RESET}"
 
     # "Installed" is the unit file, not is-enabled: a unit that exists but was disabled
-    # used to read "not installed" here. Boot behaviour has its own line below.
+    # must not read "not installed". Boot behaviour has its own line below.
     if systemctl is-active --quiet "$GW_SERVICE" 2>/dev/null; then
         echo -e "  ${BOLD}Forwarder${RESET} : ${GREEN}● active${RESET}"
     elif [[ -f "/etc/systemd/system/$GW_SERVICE.service" ]]; then
@@ -1374,7 +1374,7 @@ gw_status() {
                 echo -e "              ${DIM}fix: re-run 2) Configure   (or firewall-cmd --permanent --add-port=${sp}/tcp; firewall-cmd --reload)${RESET}"
             fi
         else
-            # Say it outright: a blank here used to read as "nothing to worry about", while
+            # Say it outright: a blank here would read as "nothing to worry about", while
             # the box could still be filtered by raw iptables or the provider's firewall.
             echo -e "              ${DIM}host firewall: none active (ufw/firewalld) — not what blocks :$sp${RESET}"
             _gw_unmanaged_filter_hint "$sp" "              "

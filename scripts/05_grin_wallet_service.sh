@@ -20,7 +20,7 @@
 #   05C  (built into this hub)            CMD wallet quick setup — CLI / testing
 #   (Grin Transporter moved to the Grin Connectivity Hub → scripts/093_grin_transporter.sh)
 #
-#  ─── Menu ordering rule — FIXED SLOTS (changed 2026-08-04) ────────────────
+#  ─── Menu ordering rule — FIXED SLOTS ────────────────
 #  The keys 1-9 are FIXED SLOTS, not positions. Every row in a category owns a
 #  key permanently — including rows that are planned or still empty — and a key
 #  is never re-pointed at a different product. A category's slots are contiguous
@@ -31,15 +31,14 @@
 #     Accept Payments   5  6  7  8(spare)
 #     Giveaways         9
 #
-#  This REPLACES the previous positional rule, where the key was assigned
-#  top-to-bottom at render and planned rows were keyless. Positional keys stayed
-#  ascending for free, but every insertion silently re-pointed every key below
-#  it, which is how '2' came to mean Drop and then WooCommerce.
+#  A positional rule (key assigned top-to-bottom at render, planned rows keyless)
+#  stays ascending for free, but every insertion silently re-points every key
+#  below it — which is how '2' came to mean Drop and then WooCommerce.
 #
-#  What the change costs: the spare in each category is finite. When Wallets
+#  What fixed slots cost: the spare in each category is finite. When Wallets
 #  outgrows slot 4, the next wallet CANNOT take 5 (that is WooCommerce) — the
-#  categories below have to shift, one deliberate migration, done the way the
-#  052 → 059 Drop move was done. That is the trade: rare, explicit renumbering
+#  categories below have to shift, one deliberate migration, done the way
+#  Drop's move from 052 to 059 was done. That is the trade: rare, explicit renumbering
 #  instead of constant, invisible key drift.
 #
 #  ─── Retired key vs reassigned key ────────────────────────────────────────
@@ -64,16 +63,15 @@
 #    05_  Wallet Services Hub (this file)
 #    05C  CMD Wallet Quick Setup          hub-built, no script file
 #    051  Fidelius — personal web wallet
-#    052  Accio — public web wallet (build started 2026-08-09; key 2 dispatches
-#         to the real script since 2026-08-10, packet S7)
+#    052  Accio — public web wallet (key 2 dispatches to the real script)
 #    053  WooCommerce Gateway
 #    054–058  FREE. Payment Pro then GoblinPay are expected to take 054/055 as
 #             they are built, but neither is ASSIGNED — an unbuilt product has no
 #             number (see "Planned — no number assigned yet" below). This table
 #             now holds NO reservations: 052 was the only one, and it ended when
-#             Accio's build started on 2026-08-09.
+#             Accio's build started.
 #             A 2nd giveaway product takes 058; that band grows downward.
-#    059  Grin Drop — giveaway + donation portal   (moved from 052, 2026-08-04)
+#    059  Grin Drop — giveaway + donation portal   (moved from 052)
 #
 #  WHY Drop sits at 059 rather than 054, which is the part that stops this being
 #  reopened: Giveaways is a one-member category, so parking it at the END of the
@@ -87,7 +85,7 @@
 #  the band would grow downward with no menu consequence at all.
 #  Keeping 052 was the alternative, and it would have left Wallets
 #  permanently split around a faucet with every future wallet landing further
-#  from 051. Full reasoning → docs/generated/script05_implementation.md
+#  from 051. Full reasoning → docs/reference/script05_implementation.md
 #
 #  ─── Numbers are internal — the menu shows NAMES only ─────────────────────
 #  051 / 053 / 059 / 05C are file and doc identity. They are NOT printed on the
@@ -129,9 +127,9 @@
 #  052 was the single exception — held for Accio while it was still unbuilt,
 #  because the whole point of moving Drop off 052 was to free a WALLET slot next
 #  to 051, and letting anything else take it would have thrown away the only
-#  thing that migration bought. That exception ENDED on 2026-08-09: Accio's
-#  build started (packet S0) and scripts/052_grin_accio.sh now exists, so 052 is
-#  assigned in the ordinary way and nothing here is reserved any more.
+#  thing that migration bought. That exception ENDED when Accio's build started:
+#  scripts/052_grin_accio.sh exists, so 052 is assigned in the ordinary way and
+#  nothing here is reserved any more.
 #
 #   Payment Pro        Grin payment processor for platforms other than WooCommerce
 #                      (Shopify, custom/headless APIs, subscription billing).
@@ -142,18 +140,17 @@
 #   Accio (052)        Public web wallet — self-custodial, keys live in the
 #                      visitor's browser tab, this box holds no seed. NOT
 #                      PLANNED ANY MORE — BUILT. Key 2 dispatched _slot_notice
-#                      from 2026-08-09 to 2026-08-10 precisely because wiring a
-#                      menu of stubs would advertise a product that could not do
-#                      anything; packet S7 retired the last stub and the key now
-#                      runs scripts/052_grin_accio.sh.
+#                      while the product was stubs, because wiring a menu of
+#                      stubs would advertise something that could not do
+#                      anything; the key now runs scripts/052_grin_accio.sh.
 #                      ⚠ Built is not tested: no part of Accio has run on a VPS.
 #                      Its own banner says so, and its acceptance runs (testnet
 #                      build → deploy → send → receive) are still owed.
-#                      Design → docs/generated/script052_design.md
-#                      Log    → docs/generated/script052_implementation.md
+#                      Design → docs/reference/script052_design.md
+#                      Log    → docs/reference/script052_implementation.md
 #   GoblinPay          Receive-only merchant till (Nostr + slatepack), deploying
 #                      github.com/2ro/GoblinPay the toolkit way.
-#                      Design → docs/generated/script09_design.md (PART C)
+#                      Design → docs/reference/script09_design.md (PART C)
 #
 # =============================================================================
 
@@ -475,7 +472,7 @@ run_sub() {
 # elsewhere in this repo.
 #
 # ─── TWO listener modes — the operator picks one per network ─────────────────
-# Stored in `<dir>/.listen_mode`; default `listen`, unchanged from pre-2026-08-06.
+# Stored in `<dir>/.listen_mode`; default `listen`.
 #
 #   listen      grin-wallet listen      Foreign API only, 3415/13415.
 #               RECEIVE-ONLY, and grin-wallet starts Tor for it automatically
@@ -544,8 +541,8 @@ _cmd_mode_label() {
 
 # ─── grin-wallet.toml key setters ───────────────────────────────────────────
 # Replace the key in place (commented or not); when absent, insert right after
-# the [wallet] header. An EOF append — what this script used to do — lands the
-# key under [logging]/[tor], where grin-wallet silently ignores it.
+# the [wallet] header. An EOF append would land the key under [logging]/[tor],
+# where grin-wallet silently ignores it.
 _cmd_set_toml_key() {
     local file="$1" key="$2" val="$3"
     [[ -f "$file" ]] || return 1
@@ -580,9 +577,9 @@ _cmd_replace_toml_key() {
 }
 
 # ─── Register the wallet dir for Script 089 backups ─────────────────────────
-# 089 collects wallet dirs by grepping `_WALLET_DIR="…"` out of this conf. Until
-# now nothing registered the CMD wallet, so the one product that writes a
-# plaintext mainnet seed to disk was the one the backup skipped.
+# 089 collects wallet dirs by grepping `_WALLET_DIR="…"` out of this conf. The CMD
+# wallet must be registered here: it is the one product that writes a plaintext
+# mainnet seed to disk, so skipping it would leave that seed out of the backup.
 _cmd_register_wallet_dir() {
     local net="$1" dir conf key
     dir=$(_cmd_dir "$net"); conf="/opt/grin/conf/grin_wallets_location.conf"
@@ -725,14 +722,13 @@ _cmd_trap_cleanup() {
 }
 
 # ─── Retire a wallet: stop · archive-or-delete · unregister ──────────────────
-# Shared by Re-initialize (setup Step 2) and the N) Nuke screen. Re-initialize
-# used to delete only the saved pass/seed files and then run `init -h` over the
-# old wallet_data/ — which grin-wallet REFUSES whenever the toml and wallet_data/
-# both exist ("… already exists in the target directory. Please remove it
-# first", impls/src/lifecycle/default.rs create_config). The Step 2 check only
-# looked for the toml, which the old wallet still had, so it printed "Wallet
-# initialized." over a wallet that was never replaced — whose saved passphrase
-# it had just deleted.
+# Shared by Re-initialize (setup Step 2) and the N) Nuke screen. Deleting only the
+# saved pass/seed files and running `init -h` over the old wallet_data/ is not
+# enough: grin-wallet REFUSES whenever the toml and wallet_data/ both exist
+# ("… already exists in the target directory. Please remove it first",
+# impls/src/lifecycle/default.rs create_config). A check that looks only for the
+# toml sees the old wallet and would print "Wallet initialized." over a wallet
+# that was never replaced — whose saved passphrase had just been deleted.
 
 # The wallet's seed file. Its presence — not the toml's — is what "initialized"
 # means: grin-wallet writes the toml (create_config) BEFORE the seed
@@ -944,11 +940,11 @@ _cmd_wallet_setup_for_net() {
     echo ""
 
     # ── Step 2: Init or recover ──────────────────────────────────────────────
-    # Re-initializing now RETIRES the old wallet (_cmd_retire_wallet) — toml,
-    # wallet_data/, tor/, the saved pass/seed — AFTER every question below has
-    # been answered. The old order deleted the pass/seed files first, so
-    # cancelling at the next prompt left the old wallet in place with no saved
-    # passphrase, and its listener could no longer restart.
+    # Re-initializing RETIRES the old wallet (_cmd_retire_wallet) — toml,
+    # wallet_data/, tor/, the saved pass/seed — only AFTER every question below
+    # has been answered. Deleting the pass/seed files first would leave a wallet
+    # with no saved passphrase if the operator cancels at the next prompt, and
+    # its listener could no longer restart.
     local do_init=1 tmp_init="" _reinit=0 _half=0
     if [[ -f "$toml_file" ]] && ! _cmd_has_seed "$net"; then
         # toml without a seed = an earlier init that failed after create_config.
@@ -972,9 +968,8 @@ _cmd_wallet_setup_for_net() {
         else
             do_init=0
             info "Existing wallet kept — config, checks and listener still run below."
-            # Re-running on an existing wallet now re-applies the toml patches
-            # too; it used to jump straight to the listener, so a wallet set up
-            # before a node rebuild never got its config refreshed.
+            # Re-running on an existing wallet re-applies the toml patches too,
+            # so a wallet set up before a node rebuild gets its config refreshed.
             if [[ -f "$pass_file" ]]; then
                 wallet_pass=$(<"$pass_file"); know_pass=1
             else
@@ -1885,7 +1880,7 @@ main() {
             7) _slot_notice "GOBLINPAY — NOT BUILT YET" \
                    "Receive-only merchant till (Nostr + slatepack), deploying
   github.com/2ro/GoblinPay the toolkit way." \
-                   "docs/generated/script09_design.md (PART C)" || true ;;
+                   "docs/reference/script09_design.md (PART C)" || true ;;
             8) _slot_notice "SLOT 8 — UNASSIGNED" \
                    "Reserved for the next PAYMENT rail. It gets a script number
   (054-058) on the day its build starts, not before." || true ;;

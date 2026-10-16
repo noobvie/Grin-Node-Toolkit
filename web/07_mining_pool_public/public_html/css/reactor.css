@@ -156,7 +156,7 @@ body {
    viewport and desync sibling widths. minmax(0,…) lets tracks shrink below content. */
 .deck-row.half { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 /* align-items:start so P-01 (tall: gauges + counters + LED bar) and P-02 (short lamp grid)
-   size to their own content — the annunciator no longer stretches to P-01's height and leaves
+   size to their own content — the annunciator does not stretch to P-01's height and leave
    a dead strip at its foot. (half rows stay stretched so their side-by-side panels stay matched.) */
 .deck-row.main { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); align-items: start; }
 /* P-04/P-05 connect row: neither panel can be designated the tall one. P-05 carries the
@@ -203,7 +203,7 @@ body {
 /* ── right column: P-02 annunciator + P-02b gateway array stacked ─────────
    The two short lamp panels stack in one grid cell; the cell stretches to
    P-01's height (overriding the row's align-items:start) and the gateway panel
-   flex-grows to absorb the slack — so the right column no longer leaves a dead
+   flex-grows to absorb the slack — so the right column leaves no dead
    band below the annunciator. */
 .deck-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .deck-row.main .deck-col { align-self: stretch; }
@@ -440,12 +440,12 @@ body {
 
 /* ── region patch bay ───────────────────────────────────────────────────── */
 /* Stack the switch bank (full-width row of region toggles) above the endpoint
-   readout — the old `auto 1fr` grid reserved a tall empty column beside the short
-   switch row and crushed the endpoint/notes into a narrow strip. */
+   readout — an `auto 1fr` grid would reserve a tall empty column beside the short
+   switch row and crush the endpoint/notes into a narrow strip. */
 .patchbay { display: flex; flex-direction: column; gap: 22px; }
 .switchbank { display: flex; gap: 10px; flex-wrap: wrap; }
 /* Region SELECTOR chips. This is a single-select — "which region's endpoint do I
-   want to copy" — NOT an on/off switch (the old toggle metaphor implied you were
+   want to copy" — NOT an on/off switch (a toggle metaphor would imply you were
    powering a region up/down). Selection is shown by the accent outline; a separate
    LED shows live status, so "I'm viewing this" never gets confused with "this is up". */
 .rgn {
@@ -538,13 +538,13 @@ body {
   font-family: var(--mono); color: var(--info); background: var(--rx-inset);
   border: 1px solid var(--rx-line); border-radius: 4px; padding: 1px 6px; font-size: 12px;
 }
-/* Pointer from the patch bay down to the P-05b setup panel (the guide used to live here). */
+/* Pointer from the patch bay down to the P-05b setup panel (the guide lives there, not here). */
 .patch-hint { margin-top: 12px; font-size: 12.5px; color: var(--text-mute); }
 .patch-hint b { color: var(--text-dim); font-weight: 600; }
 
 /* Miner-setup guide — a theme-native mock of an ASIC web panel's "Pool Setting" form
-   beside the steps that explain it. Always visible in the full-width P-05b panel; the
-   old .miner-guide <details> chrome was dropped with the disclosure (2026-07-19). */
+   beside the steps that explain it. Always visible in the full-width P-05b panel; there
+   is no <details> disclosure. */
 .mform {
   margin-top: 12px; max-width: 560px; border: 1px solid var(--rx-line); border-radius: 6px;
   background: var(--rx-inset); overflow: hidden; box-shadow: inset 0 2px 10px var(--rx-shade-soft);
@@ -585,8 +585,7 @@ body {
    line out): the 4-row mock is far shorter than five steps, so keeping the bookends —
    reach the panel / save and check — in the right column left a dead band of ~200px
    under the mock and a needlessly tall, narrow wall of text next to it. Running them
-   full width above and below fills that space and shortens the panel (operator request
-   2026-07-25). They are .mguide-note, not list items, so the numbers stay a 1:1 index
+   full width above and below fills that space and shortens the panel. They are .mguide-note, not list items, so the numbers stay a 1:1 index
    of the mock's input rows.
    Single column below 1000px (and inside any narrower host) — the mock's 120px label
    column plus a wrapping value needs ~360px before it starts looking squeezed. DOM order
@@ -620,30 +619,39 @@ body {
   --rod-c: color-mix(in oklab, var(--accent) var(--mat), var(--warn));
   display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; text-align: center;
 }
+/* LED stack: 24 .seg children (JS), one per ~60 confirmations, lit bottom-up in --rod-c with
+   the top lit one (.seg-lead) blinking. Same LED vocabulary as .ledbar above. Never a bare
+   `.lead` — dashboard.css styles that globally (margin-bottom: 18px), which tore a gap into
+   the stack. Every immature rod lights at least one segment: a height-proportional fill made
+   a busy hour's rods ~3% tall and read as nothing happening. Mature = every segment --ok,
+   orphan = every segment red. Mature takes --ok, not --accent: a brand accent_color
+   (branding.js) recolours --accent only, and the MATURE label beneath is --ok. */
 .rod .tube {
-  width: min(26px, 100%); height: 120px; border-radius: 6px; position: relative; overflow: hidden;
+  width: min(26px, 100%); height: 120px; border-radius: 6px; overflow: hidden;
+  display: flex; flex-direction: column-reverse; gap: 2px; padding: 3px;
   background: var(--rx-inset); border: 1px solid var(--rx-line);
   box-shadow: inset 0 2px 10px var(--rx-shade);
 }
-/* Every rod is FULL. An immature rod is yellow with green rising from the bottom, blending
-   over the 12% just below --mat (so 0% = pure yellow, 50% = green to 38%, blend to 50%);
-   a mature rod is solid green, an orphan solid red. A height-proportional fill made a busy
-   hour's rods all ~3% tall and read as nothing happening. */
-.rod .fill {
-  position: absolute; inset: 2px; border-radius: 4px;
-  background: linear-gradient(0deg,
-    var(--accent) calc(var(--mat) - 12%),
-    var(--warn) var(--mat));
-  box-shadow: 0 0 10px color-mix(in srgb, var(--rod-c) 35%, transparent);
+.rod .seg { flex: 1; min-height: 0; border-radius: 1.5px; background: color-mix(in srgb, var(--text) 6%, var(--rx-inset)); }
+.rod .seg.on {
+  background: color-mix(in srgb, var(--rod-c) 70%, var(--bg));
+  box-shadow: 0 0 5px color-mix(in srgb, var(--rod-c) 35%, transparent);
 }
-.rod.done .fill {
-  background: var(--accent);
-  box-shadow: 0 0 10px var(--glow);
+.rod .seg.seg-lead {
+  background: var(--rod-c);
+  box-shadow: 0 0 8px var(--rod-c);
+  animation: rod-lead 1.6s ease-in-out infinite;
 }
-.rod.orphan .fill {
-  background: var(--danger);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--danger) 35%, transparent);
+.rod.done .seg {
+  background: color-mix(in srgb, var(--ok) 72%, var(--bg));
+  box-shadow: 0 0 5px color-mix(in srgb, var(--ok) 35%, transparent);
 }
+.rod.orphan .seg {
+  background: color-mix(in srgb, var(--danger) 70%, var(--bg));
+  box-shadow: 0 0 5px color-mix(in srgb, var(--danger) 30%, transparent);
+}
+@keyframes rod-lead { 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .rod .seg.seg-lead { animation: none; } }
 .rod .h { font-family: var(--mono); font-size: 10.5px; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; max-width: 100%; }
 .rod .m { font-family: var(--mono); font-size: 9.5px; color: var(--text-mute); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .rod .m.pct { color: var(--rod-c); }

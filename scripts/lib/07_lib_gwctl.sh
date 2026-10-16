@@ -10,7 +10,7 @@
 #     may run this ONE binary as root and nothing else)
 # so the wg peer list and pool.json region_ports can never drift apart, and the
 # admin panel can pair a gateway without an SSH session.
-# Design: docs/generated/script07_design.md §13.
+# Design: docs/reference/script07_design.md §13.
 #
 # Subcommands (stdout is ALWAYS one JSON object; non-zero exit + {ok:false,error}
 # on any failure so execFile callers get one parse path):
@@ -23,7 +23,7 @@
 #               *after* the region card was already written (§13.12).
 #   add-peer    --net N --region R --pubkey K   → assign /32 + region port, append
 #               [Peer], wg syncconf, persist region_ports. Dup pubkey → no write,
-#               existing:true (preserves the 2026-07-05 cryptokey-routing lesson).
+#               existing:true (preserves the cryptokey-routing lesson).
 #               Same region + NEW pubkey → key swapped IN PLACE (region keeps its
 #               tunnel IP + port — the gateway-box-replacement flow, §13.10d).
 #   remove-peer --net N --region R              → drop [Peer] + region_ports[R]

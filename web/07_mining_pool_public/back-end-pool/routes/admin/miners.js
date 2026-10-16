@@ -1,5 +1,4 @@
-// /api/admin/miners*. Moved verbatim out of routes/index.js (code-layout refactor P8);
-// registrations stay at 2-space indent and write FULL paths.
+// /api/admin/miners*. Registrations stay at 2-space indent and write FULL paths.
 
 const express = require('express');
 const minerStatus = require('../../lib/miner-status');
@@ -18,11 +17,11 @@ module.exports = function createAdminMinersRoutes(ctx, guards) {
   //
   // Live columns (status, workers, hashrate, last_share_at) come from lib/miner-status.js: the
   // in-memory sessions plus ONE windowed pass over the last hour of shares. The per-row
-  // `shares_count` / `last_share_at` subqueries this replaced walked every retained share twice
-  // per refresh (see RECENT_SQL there). So last_share_at is now null when the address has not
+  // `shares_count` / `last_share_at` subqueries would walk every retained share twice
+  // per refresh (see RECENT_SQL there). So last_share_at is null when the address has not
   // shared inside the hour. The page then falls back to last_seen_at, which the session code
   // stamps on connect and disconnect and which, unlike shares, is never pruned.
-  // `shares_count` is gone: it counted whatever retention had left, so it fell at every prune.
+  // No `shares_count` here: it would count whatever retention has left, so it falls at every prune.
   //
   // WHICH accounts (the list is capped at `limit`, max 1000):
   //   ?search=  substring of the address, by balance, with `offset` — the page's server-side
@@ -92,13 +91,13 @@ module.exports = function createAdminMinersRoutes(ctx, guards) {
   });
 
   // Explicit column list, NOT `SELECT *` (audit §J8-2). `miner_accounts` carries the
-  // ownership-gate's `proof_salt` plus ten legacy proof columns, and the proof HASHES now
+  // ownership-gate's `proof_salt` plus ten legacy proof columns, and the proof HASHES
   // live in `miner_proofs`. None of that may reach a browser: the hashes exist so the DB
   // holds no readable mining IP and no readable rig password (§G, memory
   // `project_pool_ip_privacy`), and §C3's unrevocable admin access token puts anything an
   // admin page receives one stolen session away from an offline attack on the payout gate's
   // second factor. `...acct` below spreads whatever this SELECT names, so the SELECT is the
-  // control — the same fix, and the same reason, as the 2026-07-28 pass on
+  // control — the same fix, and the same reason, as on
   // /api/pool/payments and /api/pool/miners.
   // `pass_proof_state` IS included: it is a verdict string ('ok' / a reject code), already
   // public on /api/account/:addr, and it is what answers "why won't my password work?".
@@ -143,7 +142,7 @@ module.exports = function createAdminMinersRoutes(ctx, guards) {
         `SELECT COALESCE(SUM(amount),0) AS t FROM withdrawals WHERE grin_address = ? AND status='confirmed'`
       ).get(addr).t;
       // Same strip as GET /api/admin/withdrawals: never serve an old row's stepwise final slate
-      // (the column is inert since 2026-09-26), nor the manual rail's stored S1.
+      // (the column is inert), nor the manual rail's stored S1.
       const pending = db.prepare(
         `SELECT * FROM withdrawals WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','tor_held','retry_scheduled','slatepack_pending','finalizing') ORDER BY created_at DESC`
       ).all(addr).map(({ tor_final_slate, slatepack_s1, ...rest }) => rest);

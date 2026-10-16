@@ -43,7 +43,6 @@ gtag.js         | not-a-path | Google's GA4 loader, served from Google's CDN
 stringify.js    | not-a-path | a file inside the npm qs package, named while tracing a CVE
 qs/lib/stringify.js  | not-a-path | node_modules path written without the node_modules/ prefix
 express/lib/utils.js | not-a-path | node_modules path written without the node_modules/ prefix
-.min.js         | not-a-path | a filename SUFFIX, not a path — "the tree ships zero .min.js files"
 .test.js        | not-a-path | a filename SUFFIX naming the test-file convention
 
 # ---------------------------------------------------------------------------
@@ -51,8 +50,6 @@ express/lib/utils.js | not-a-path | node_modules path written without the node_m
 # ---------------------------------------------------------------------------
 evil.html       | not-a-path | attacker-supplied filename in the script07 upload finding
 backdoor.js     | not-a-path | hypothetical dropped-in file in the script052 vendor-integrity argument
-accio-wallet-test.html | not-a-path | example filename used to probe nginx quoted-string parsing
-scripts/x.js    | not-a-path | example src= value quoted from an upstream HTML page
 notes.svg       | not-a-path | example uploaded filename in a stored-upload audit excerpt
 1788363314180-174ac525-notes.svg | not-a-path | the stored form of that same example upload
 scratchpad/j4harness.js | not-a-path | one-shot harness in the scratchpad, deleted with it (the doc says so)
@@ -73,14 +70,12 @@ LICENSE.md      | not-a-path | named inside a NEGATIVE statement — "No LICENSE
 # external — real files, but not in this repo
 # ---------------------------------------------------------------------------
 MEMORY.md                   | external | the local-memory index, which lives outside the repo by design (CLAUDE.md)
-project_drop_backup_052.md  | external | a local-memory file, outside the repo; named while recording its rename to _059
 install.sh                  | external | 2ro's floonet-rs upstream repo — we deploy it, we do not fork it
 deploy/install.sh           | external | same floonet-rs upstream repo
 apply-spec.sh               | external | same floonet-rs upstream repo
 docs/reverse-proxy.md       | external | floonet-rs upstream documentation, not ours
 deploy_grinwallet.sh        | external | lives in the Office Tools repo; script059 mirrors its wallet setup
 wporg-svn/trunk/bridge-config.php | external | a WordPress.org SVN working copy on the operator's machine
-mwcwallet.com-master/public_html/index.html | external | the upstream wallet release zip as downloaded, before vendoring
 
 # ---------------------------------------------------------------------------
 # deleted — the file is genuinely gone, and the doc naming it is RECORDING that
@@ -96,7 +91,7 @@ public_html/admin-dashboard.html | deleted | never existed under this name — s
 settings-alerts.html | deleted | admin alerts settings page, deleted by audit §J8-3; §J8-2's dated finding still links it and may not be rewritten
 web/07_mining_pool_public/back-end-pool/admin-panel/settings-alerts.html | deleted | same file, full path form in the §J8-2 link
 script07_reference_audit_session_plan.md | deleted | pre-mainnet run plan, session scaffolding folded into the audit's Status roll-up and deleted 2026-09-06; the roll-up names it to say where it went
-docs/generated/script07_reference_audit_session_plan.md | deleted | same file, repo-relative form
+docs/reference/script07_reference_audit_session_plan.md | deleted | same file, repo-relative form
 scripts/lib/07_lib_satellite.sh | deleted | the retired satellite role's lib, deleted 2026-06-22 in f2ebade; the audit's Status roll-up and CLAUDE.md name it to say it is GONE
 back-end-pool/satellite.js | deleted | satellite app entry point, deleted with the role in f2ebade
 lib/share-relay.js | deleted | satellite share-forwarding module, deleted with the role in f2ebade

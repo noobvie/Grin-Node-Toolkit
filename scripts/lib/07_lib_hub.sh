@@ -6,7 +6,7 @@
 # Grin wallet (Tor payouts), nginx + SSL, backups. Regional GATEWAYS (thin HAProxy +
 # WireGuard forwarders, scripts/lib/07_lib_gateway.sh) tunnel miner stratum to this box's
 # per-region internal ports — there is NO satellite share/block ingestion API anymore.
-# See docs/generated/script07_design.md §3–6.
+# See docs/reference/script07_design.md §3–6.
 #
 # The hub brain REUSES the shared pool_* setup functions from the parent script
 # (install/configure/deploy web/nginx/admin/status/backup) AND the parent's WireGuard
@@ -43,7 +43,7 @@ hub_menu() {
     echo -e "  ${GREEN}6${RESET}) $(_pool_step_mark 6) Service control     ${DIM}(start before creating admin)${RESET}"
     echo -e "  ${GREEN}7${RESET}) $(_pool_step_mark 7) Create admin account ${DIM}(needs service running)${RESET}"
     echo -e "  ${GREEN}8${RESET}) Status"
-    echo -e "  ${GREEN}9${RESET}) Deploy new code     ${DIM}(refresh js/html/media from checkout + restart)${RESET}"
+    echo -e "  ${GREEN}9${RESET}) Deploy new code     ${DIM}(refresh from checkout · restarts only what changed)${RESET}"
     echo ""
     echo -e "${DIM}  ─── Multi-region ─────────────────────────────────${RESET}"
     echo -e "  ${GREEN}W${RESET}) Multi-region          ${DIM}(WireGuard server + add regional gateways)${RESET}"

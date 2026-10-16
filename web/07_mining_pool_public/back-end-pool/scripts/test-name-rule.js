@@ -1,8 +1,8 @@
 // test-name-rule.js — the pool's copy of the name rule v2 and the names.blocked_words setting
-// (design §19.17.5, D28; games Part C3).
+// (design §19.17.5 (script07_design_games.md), D28; games Part C3).
 //
 //   [1] the SHARED fixture (play/server/scripts/fixtures/name-rule.json) through THIS copy —
-//       the games' test-names.js runs the same file through theirs (§19.13 #24)
+//       the games' test-names.js runs the same file through theirs (§19.13 (script07_design_games.md) #24)
 //   [2] the two copies are the same code, line for line below their headers, and the seed holds
 //       every word of the donor STARTER_BLOCKLIST it was built from
 //   [3] the names.blocked_words validator: folded, prefixes kept, duplicates gone, bounded,
@@ -50,7 +50,7 @@ console.log('\n[1] the shared fixture through the pool copy');
   ok(`every innocent name (${F.innocent.length}) passes`, F.innocent.length >= 30 && innocent.length === 0, innocent.join(', '));
   const adv = F.adversarial.filter((n) => R.check(n, ctxOf(F.contexts.default)).ok);
   ok(`every adversarial name (${F.adversarial.length}) is refused`, F.adversarial.length >= 30 && adv.length === 0, adv.join(', '));
-  // Part C4 — the donor shape (§19.17.6): the same rule with §18.5's character set + §16.4's reserved words.
+  // The donor shape (names v2, script07_design_games.md §19.17.6): the same rule with the donor character set + reserved words (script07_design.md §18.5, §16.4).
   const donorCtx = ctxOf(F.contexts.donor, 'donor');
   ok('the fixture carries donor-shape cases', F.cases.filter((k) => k.shape === 'donor').length >= 25);
   const dInn = (F.donor_innocent || []).filter((n) => !R.check(n, donorCtx).ok);

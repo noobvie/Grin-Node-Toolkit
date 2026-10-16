@@ -417,9 +417,9 @@ CONF
 # Minimal JSON value setter. node is guaranteed present by this point.
 #
 # Returns non-zero when the write did not happen, and it is the CALLER's job to
-# act on that. It used to warn and return success, which meant a failure to set
+# act on that. Warning and returning success would turn a failure to set
 # state_dir — the one key that decides whether every wallet keeps its receiving
-# address across a restart — was a single yellow line in a scrolling install.
+# address across a restart — into a single yellow line in a scrolling install.
 _acg_json_set() {
     local file="$1" key="$2" raw="$3"
     node -e '
@@ -1053,7 +1053,7 @@ _acg_reload_nginx() {
 }
 
 # =============================================================================
-# 3) SELF-TEST — this IS packet S3's guard verification
+# 3) SELF-TEST — this IS the SSRF guard's verification
 # =============================================================================
 # Sixteen results: fifteen HTTP probes plus one property check (the durability
 # of the address table, which no probe can express). All against 127.0.0.1,
@@ -1364,7 +1364,7 @@ acg_uninstall_gateway() {
     #   above. This is the same grep-driven sweep acc_uninstall does in
     #   052_grin_accio.sh, and the two must not drift apart.
     #
-    # ⚠ `%` AS THE SED DELIMITER, not the `\|…|d` this used to carry. That form
+    # ⚠ `%` AS THE SED DELIMITER, never `\|…|d`. That form
     #   worked only for as long as the pattern held no alternation: `|` is both
     #   the delimiter and the ERE alternation operator, so the first person to
     #   add one closes the address early and gets "sed: unmatched (" during a

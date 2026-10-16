@@ -1,6 +1,6 @@
 'use strict';
 
-// Games service skeleton (design §19, Part 1): config validation, grinium-games.db
+// Games service skeleton (design §19): config validation, grinium-games.db
 // migrations + pragmas + the §19.4 schema contract, transactions, the HTTP layer (body
 // cap, content type, exact routing, client IP, cookies, uniform errors), /play/api/health,
 // the maintenance scheduler, graceful shutdown, and the zero-dependency rule.
@@ -168,7 +168,7 @@ async function main() {
   // The contract: the design doc's §19.4 SQL, executed on its own, must produce exactly
   // the schema the migration produces. Only runs from a repo checkout (the doc is not
   // deployed to the box).
-  const DOC = path.resolve(SERVER, '../../../../docs/generated/script07_design.md');
+  const DOC = path.resolve(SERVER, '../../../../docs/reference/script07_design.md');
   if (fs.existsSync(DOC)) {
     const doc = fs.readFileSync(DOC, 'utf8');
     const sec = doc.indexOf('### 19.4');
@@ -211,7 +211,7 @@ async function main() {
   { const r = new DatabaseSync(f2); r.exec("UPDATE meta SET value = 'one' WHERE key = 'schema_version'"); r.close(); }
   ok('b. a non-integer schema_version is refused', throwsLike(() => openDb(f2, { net: 'mainnet' }), /not an integer/));
 
-  // A DB made by the v1 build (Parts 1–7) upgrades in place: v2 and v3 add tables only.
+  // A DB made by the v1 schema upgrades in place: v2 and v3 add tables only.
   const fv1 = tmpDb('v1.db');
   { const r = new DatabaseSync(fv1);
     const { MIGRATIONS } = require(path.join(SERVER, 'lib/db.js'));
@@ -229,7 +229,7 @@ async function main() {
   ok('b. …and the upgraded schema equals a fresh one', JSON.stringify(schemaObjects(dv1.raw)) === JSON.stringify(memSchema));
   dv1.close();
 
-  // A DB made by the v2 build (Parts 8–11) upgrades in place: v3 adds the nicknames table only.
+  // A DB made by the v2 schema upgrades in place: v3 adds the nicknames table only.
   const fv2 = tmpDb('v2.db');
   { const r = new DatabaseSync(fv2);
     const { MIGRATIONS } = require(path.join(SERVER, 'lib/db.js'));
@@ -248,7 +248,7 @@ async function main() {
   ok('b. …and equals a fresh schema', JSON.stringify(schemaObjects(dv2.raw)) === JSON.stringify(memSchema));
   dv2.close();
 
-  // A DB made by the v3 build (Part 12) upgrades in place, and its nickname rows are re-checked
+  // A DB made by the v3 schema upgrades in place, and its nickname rows are re-checked
   // under the v2 rule (§19.17.5): live names failing it are removed, pending ones go live when
   // they pass and nobody else's live name reads the same, else they are rejected.
   const fv3 = tmpDb('v3.db');
@@ -290,7 +290,7 @@ async function main() {
   ok('b. CHECK: nick_blocked is 0 or 1', throwsLike(() => dv3.raw.prepare("UPDATE players SET nick_blocked = 2 WHERE address = 'grin1a'").run(), /CHECK/i));
   dv3.close();
 
-  // A DB made by the v4 build (C3/C4) upgrades in place. v5 REBUILDS sessions (SQLite cannot
+  // A DB made by the v4 schema upgrades in place. v5 REBUILDS sessions (SQLite cannot
   // ALTER a CHECK): every row must survive, every column intact, and the stored CREATE text must
   // be the canonical one (no quoted name from a RENAME).
   const fv4 = tmpDb('v4.db');

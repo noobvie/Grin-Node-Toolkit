@@ -1,12 +1,12 @@
 'use strict';
 
-// Donor settings (design §16, reduced by §18 Part 3 and §19.17.6 Part C4) against an in-memory
+// Donor settings (script07_design.md §16 and §18, reduced by script07_design_games.md §19.17.6) against an in-memory
 // copy of the real schema: the bounded settings readers + validators, the retired
 // `donor_name_blocklist` and its one-time carry into `names.blocked_words`, and the migration
 // running twice. The name matchers that lived here (normalise, reserved words, the flag list,
-// the review-queue flags) moved to lib/name-rule.js in C4 and are tested with it. v1's
-// capture, rescan, displayState, censor/un-censor and new-names count were DELETED in §18
-// Part 3 (names are pre-moderated), and their arms with them — the "removed" block below pins
+// the review-queue flags) live in lib/name-rule.js and are tested with it. v1's
+// capture, rescan, displayState, censor/un-censor and new-names count do not exist (names are
+// pre-moderated, design §18) — the "removed" block below pins
 // that they stay gone. Kept from the v1 admin part: the donate-token parser the admin list
 // marks rigs with, the per-address ledger aggregate + window boundary + active months, and the
 // §16.6 score/order helpers.
@@ -52,7 +52,7 @@ function seedAddr(a) {
   check('… and adds nothing the second time', cols().size === before);
 }
 
-// ── retired by Part C4 (design §19.17.6) ─────────────────────────────────────────────────
+// ── retired by Part C4 (design §19.17.6 (script07_design_games.md)) ─────────────────────────────────────────────────
 // The matching form, the reserved words, the flag-word list and the review-queue flags moved
 // to lib/name-rule.js (the shared rule, donor shape) — the behaviour is tested there
 // (scripts/test-name-rule.js, the shared fixture) and in test-donor-profiles.js [names v2].
@@ -62,7 +62,7 @@ function seedAddr(a) {
   check('C4: the starter list is kept as a record (~40+ entries, no blank lines)', DN.STARTER_BLOCKLIST.length >= 40 && DN.STARTER_BLOCKLIST.every((w) => w.trim() === w && w !== ''));
 }
 
-// ── removed with v1 moderation (design §18 Part 3) ───────────────────────────────────────
+// ── removed with v1 moderation (design §18) ───────────────────────────────────────
 {
   const gone = ['captureDonorName', 'rescanAll', 'adminCensor', 'countNewNames', 'NEW_NAME_DAYS', 'CENSORED_MARKER',
                 'CENSORED_DISPLAY_VALUES', 'displayState', 'matchBlocklist'];
@@ -165,7 +165,7 @@ function seedAddr(a) {
   })());
 }
 
-// ── Part 3: parseDonateToken (the admin list's "tagged rig" flag) ───────────────────────
+// ── parseDonateToken (the admin list's "tagged rig" flag) ───────────────────────
 {
   check('token: plain donate10 → label "", 10', JSON.stringify(parseDonateToken('donate10')) === '{"label":"","percent":10}');
   check('token: acme-donate5 → label acme', JSON.stringify(parseDonateToken('acme-donate5')) === '{"label":"acme","percent":5}');
@@ -177,7 +177,7 @@ function seedAddr(a) {
   check("token: label is the RAW label (the cut is the login's job, not the flag's)", parseDonateToken('northern-hashworks-donate10').label === 'northern-hashworks');
 }
 
-// ── Part 3: donorLedger (per-address aggregate over the composite) ──────────────────────
+// ── donorLedger (per-address aggregate over the composite) ──────────────────────
 {
   const day = (t) => Math.floor(t / 86400) * 86400;
   const a = seedAddr(mkAddr(51)), b = seedAddr(mkAddr(52)), c = seedAddr(mkAddr(53));
@@ -225,7 +225,7 @@ function seedAddr(a) {
   check('ledger: lastDonatedAt agrees with the aggregate', lastDonatedAt(db, a, H) === ra.last_donated_at);
 }
 
-// ── Part 3: §16.6 score + order helpers (inputs are the bounded donorSettings) ──────────
+// ── §16.6 score + order helpers (inputs are the bounded donorSettings) ──────────
 {
   const ds = DN.donorSettings({ donor_loyalty_percent_per_month: 10, donor_loyalty_cap: 3 }, 'x');
   check('score: ×1.4 after 4 months at 10 %', loyaltyMultiplier(4, ds) === 1.4);

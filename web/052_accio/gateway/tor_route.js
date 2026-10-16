@@ -297,11 +297,11 @@ function sendError(res, status, message) {
  * front, but the onion front has no nginx at all, so an unbounded drain would let
  * anyone stream gigabytes into a route that already said no.
  *
- * ⚠ R6. ONE implementation, with the cap passed in. There were two — server.js
- * drained to `max_body_bytes` (10 MB) and wallet_route.js to `inbound_body_bytes`
- * (1 MB then; R7 dropped the default to 128 KB) — so a refused /wallet/ request
- * could stream ten times the cap that route enforces on an accepted one. Each
- * rail still chooses its own budget; it just no longer chooses it by which copy
+ * ⚠ ONE implementation, with the cap passed in. Two copies would drift — one
+ * draining to `max_body_bytes` (10 MB), the other to `inbound_body_bytes`
+ * (default 128 KB) — so a refused /wallet/ request could stream far more than
+ * the cap that route enforces on an accepted one. Each
+ * rail chooses its own budget, never by which copy
  * of this function it happened to call.
  */
 function drain(req, maxBytes) {

@@ -9,7 +9,7 @@
 //   · theme (custom CSS variables, accent colour, custom CSS, web font)
 //   · analytics (GA4 / Plausible / Umami / Matomo) + raw custom <head> HTML
 //   · [data-brand] content hooks (hero heading/subheading, CTA, footer, social links)
-//   · the /play/ floating chat bubble's loader (loadChatBubble, design §19.17.7)
+//   · the /play/ floating chat bubble's loader (loadChatBubble, script07_design_games.md §19.17.7)
 //
 // All operations are defensive: a failed fetch or a missing field leaves the page's
 // hardcoded defaults untouched. Nothing here throws to the page.
@@ -34,10 +34,9 @@
   // third-party analytics loaders are skipped — see the guards in applyTheme() and apply()
   // (audit §J1-1).
   //
-  // History: this guard was written for custom_head_html / custom_body_html, which
-  // applyAnalytics() re-created as executing <script> nodes. Those two sinks were DELETED in
-  // design §19.17 D22 (Option B, Part C1): with a sign-in form on every page, no page is left
-  // to exempt, so the sinks went instead. What the guard still withholds here is CSS that can
+  // The guard is not for custom_head_html / custom_body_html (executing <script> sinks):
+  // those are deliberately absent (script07_design_games.md §19.17 D22, Option B) — with a
+  // sign-in form on every page, no page is left to exempt, so the sinks do not exist. What the guard still withholds here is CSS that can
   // hide or overlay the 2FA prompt, a stylesheet from an operator-chosen origin, and the
   // provider's script — none of which has any value on a page only the operator visits.
   //
@@ -326,8 +325,8 @@
   // ── §J15-3 — no SEO tag may name a host this deployment does not claim ──────
   // The ten static public pages ship absolute canonical / og:url / og:image / twitter:image /
   // hreflang tags pointing at pool.grin.money — the toolkit author's own pool. applySeo()
-  // rewrites canonical and og:url; it never touched the other three, and before the
-  // location.origin fallback above it rewrote nothing at all on a pool that left site_url
+  // rewrites canonical and og:url; it does not touch the other three, and without the
+  // location.origin fallback above it rewrites nothing at all on a pool that left site_url
   // blank. This pass fixes every one of them by ORIGIN rather than by listing tags to set,
   // so a page that adds another absolute tag is covered without a second edit here.
   //
@@ -418,8 +417,8 @@
     }
 
     // NB custom_theme is applied further down, INSIDE the isCredentialPage() guard — see the
-    // note there (audit §J15-5). It used to run here, above the guard, which is how the one
-    // operator-authored CSS sink §J1-1 missed kept reaching login.html (audit §J9-3).
+    // note there (audit §J15-5). It must not run here, above the guard: that is how the one
+    // operator-authored CSS sink §J1-1 missed reached login.html (audit §J9-3).
 
     // Accent colour drives the most common variables. Deliberately NOT --neon-cyan (the
     // bridge's accent input): the bridge also derives --ok from it, so branding the site
@@ -434,9 +433,8 @@
     // Named default theme. Runtimes, in the order tried:
     //   · public pages  → GriniumTheme (public-theme.js) owns the body class + switcher
     //   · neither loaded → fall back to adding the body class directly
-    // The ThemeSwitcher branch that sat between these two went with js/theme.js when that
-    // file was deleted in 2026-08: no page had loaded it since the 2026-06 admin rebuild,
-    // and this script only ever runs on public pages, so the branch could not be reached.
+    // There is no ThemeSwitcher branch between these two: this script only runs on public
+    // pages, which never load an admin theme switcher.
     if (brand.default_theme) {
       if (window.GriniumTheme && typeof window.GriniumTheme.applyDefault === 'function') {
         window.GriniumTheme.applyDefault(
@@ -579,9 +577,8 @@
       applyLogoVariant();
     }
 
-    // A "homepage announcement banner" block sat here until 2026-07-27, writing
-    // pool.homepage_banner into [data-brand="banner"]. No page has ever carried that
-    // attribute, so the selector always matched nothing and the setting was unreachable.
+    // Deliberately no "homepage announcement banner" block writing pool.homepage_banner
+    // into [data-brand="banner"]: no page carries that attribute, so it would match nothing.
     // Site banners are rendered by renderBanners() below, from cfg.announcements.
 
     // "Powered by" attribution toggle.
@@ -808,7 +805,7 @@
   // Hide the prize-pool chrome (the header's Fortune Board + Contribute links inside the
   // Community group, and the footer Donate / Fortune Board — all marked data-incentives by
   // public-shell.js) when the operator has incentives off. Links only, never the group:
-  // applyNavGroups decides the group from what is left in it (§19.17.8).
+  // applyNavGroups decides the group from what is left in it (script07_design_games.md §19.17.8).
   // Shown by default and hidden only on an explicit `enabled: false`: incentives ship ON,
   // and a failed/partial config fetch should not strip working links off the page.
   // style.display, not the `hidden` attribute — .nav-group / .footer-donate set their own
@@ -822,9 +819,9 @@
 
   // Show the games link (header "Play" inside the Community group + its footer copy, marked
   // data-games by public-shell.js) ONLY on an explicit games.mode === 'on' — the OPPOSITE
-  // default of applyIncentivesNav, on purpose (design §19 D12): 'preview' must keep /play/
+  // default of applyIncentivesNav, on purpose (script07_design_games.md §19 D12): 'preview' must keep /play/
   // unannounced while the operator tests it. The server sends the EFFECTIVE mode — the lower
-  // of the pool's switch and the games' launch state (§19.17.2) — and 'off' while the games
+  // of the pool's switch and the games' launch state (script07_design_games.md §19.17.2) — and 'off' while the games
   // service is down. So a missing field, a failed fetch, 'preview' or 'off' all leave the link
   // hidden.
   function applyGamesNav(cfg) {
@@ -836,7 +833,7 @@
 
   // A header group whose children carry gates (public-shell.js marks it data-nav-gated) is
   // shown while at least one of its links is shown, and HIDDEN — never an empty dropdown —
-  // when none is (design §19.17.8, D31). Runs after the two gates above, from the links'
+  // when none is (script07_design_games.md §19.17.8, D31). Runs after the two gates above, from the links'
   // own inline display, so neither flag can hide the other's links by hiding the group.
   function applyNavGroups() {
     document.querySelectorAll('.nav-group[data-nav-gated]').forEach(function (g) {
@@ -849,10 +846,10 @@
     });
   }
 
-  // ── 4. Analytics — provider-ID loaders only (design §19.17 D22) ────────────
+  // ── 4. Analytics — provider-ID loaders only (script07_design_games.md §19.17 D22) ────────────
   // There is no operator-authored HTML or script any more. custom_head_html /
   // custom_body_html (and the cloneScript() that re-created their <script> nodes so they
-  // ran) were deleted in Part C1: one origin is one trust zone, a sign-in form is on every
+  // ran) are deliberately absent (script07_design_games.md §19.17 D22): one origin is one trust zone, a sign-in form is on every
   // page, and `<img onerror>` means no filter could make raw HTML safe. A pool that still
   // has a value stored for either key never receives it — pool-settings.js drops it.
   //
@@ -930,9 +927,9 @@
   }
 
   function loadGa4(id) {
-    // The pattern gates the id before it reaches the loader URL or GA's config. (It used to be
-    // spliced into an inline init script's TEXT, where the old `id.replace(/'/g, '')` left a
-    // trailing backslash free to escape the closing quote — keep the check strict anyway.)
+    // The pattern gates the id before it reaches the loader URL or GA's config. (Splicing it into an inline
+    // init script's TEXT with `id.replace(/'/g, '')` would leave a trailing backslash free to
+    // escape the closing quote — keep the check strict anyway.)
     if (typeof id !== 'string' || !GA_ID_RE.test(id)) return;
     var s = document.createElement('script');
     s.async = true;
@@ -1067,8 +1064,8 @@
     try { renderBanners(cfg.announcements || []); } catch (e) {}
     try { loadChatBubble(cfg); } catch (e) {}
 
-    // Analytics is the third-party provider script (the operator-authored custom HTML that
-    // used to ride along was deleted in design §19.17 D22). Still never on a page where a
+    // Analytics is the third-party provider script (operator-authored custom HTML does not
+    // ride along: script07_design_games.md §19.17 D22). Still never on a page where a
     // credential is typed (§J1-1): a third-party script on the admin login form can read it.
     // Analytics on that page has no product value anyway: miners never log in there, so the
     // only visitor whose page-view would be shipped to Google/Plausible/Matomo is the
@@ -1078,7 +1075,7 @@
     }
   }
 
-  // ── The floating chat bubble (design §19.17.7, D23; Part C7) ─────────────────
+  // ── The floating chat bubble (script07_design_games.md §19.17.7, D23) ─────────────────
   // The bubble itself is GAMES code (/play/js/chat-bubble.js, deployed and stamped with the
   // /play/ shell); the pool carries only this loader. It inserts the script when:
   //   - the payload's games block says chat is on — cfg.games is the EFFECTIVE mode and is

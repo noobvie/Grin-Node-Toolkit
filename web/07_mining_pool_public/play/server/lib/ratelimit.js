@@ -57,7 +57,7 @@ function createTokenBuckets({ capacity, refillPerSec, maxKeys = 50000, clock = (
 
   // Gives one token back (capped). For a caller that TAKES a token before an await, as a
   // reservation, and returns it when the attempt turned out not to count — so parallel attempts
-  // see each other's reservations, which a peek-then-take-after-the-await cannot (R2-1).
+  // see each other's reservations, which a peek-then-take-after-the-await cannot.
   function refund(key) {
     const b = state(key);
     b.tokens = Math.min(capacity, b.tokens + 1);

@@ -24,7 +24,7 @@
  * single-use server nonce with the ed25519 key behind their slatepack address
  * (same address-as-identity model as the Script 07 pool). No accounts.
  *
- * ─── Abuse bounds (hardened 2026-08-05) ──────────────────────────────────────
+ * ─── Abuse bounds ──────────────────────────────────────
  * An open PUT plus a per-recipient depth cap is, on its own, a denial-of-service
  * weapon AGAINST the recipient: a slatepack address is public (it is the wallet's
  * Tor address), so anyone could fill a victim's queue with junk that merely looks

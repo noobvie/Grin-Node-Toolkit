@@ -7,7 +7,7 @@
        (index.js "/page.html" route, proxied by nginx), and the server REPLACES the title
        element below — a crawler never sees this default. It only shows for the instant
        before the client script resolves, so it must still be a real name and not
-       "Loading…", which is what a browser tab and a bookmark used to get. Favicon here
+       "Loading…", which is what a browser tab and a bookmark would get. Favicon here
        rather than in the injected head: it never varies per page.
        Keep tag syntax OUT of this comment: the server locates the title element by
        pattern, and a literal one written here once made it delete this comment's opening,

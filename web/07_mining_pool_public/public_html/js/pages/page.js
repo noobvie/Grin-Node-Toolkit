@@ -1,8 +1,7 @@
-// page.js — the page page's own script. Until 2026-10 (pool code-layout refactor,
-// part F2) this was page.html's inline <script> block; it moved out byte-for-byte so
-// a strict script-src can drop 'unsafe-inline'. The block's indent is kept.
+// page.js — the page page's own script, external (not inline) so a strict script-src needs no 'unsafe-inline'.
+// The original indent is kept.
 //
-// The page loads it as a CLASSIC script at the block's old position. Never add defer / async /
+// The page loads it as a CLASSIC script at its original position. Never add defer / async /
 // type="module": the order and the shared global scope are what this code was written against.
     (function () {
       var params = new URLSearchParams(location.search);

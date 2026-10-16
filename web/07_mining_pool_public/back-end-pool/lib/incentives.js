@@ -50,10 +50,9 @@ class IncentivesManager {
     return row ? row.balance : 0;
   }
 
-  // Low-level balance move + audit row. Writes REAL before/after snapshots — this used to
-  // write 0 placeholders "mirroring rewards.js", but rewards.js and orphan-detector.js now
-  // both record the true values, so this was the last source of unauditable ledger rows
-  // (audit §I5). Every prize-pool, donation, streak and lottery movement flows through here.
+  // Low-level balance move + audit row. Writes REAL before/after snapshots, as rewards.js and
+  // orphan-detector.js do — never 0 placeholders, which make the ledger unauditable (audit
+  // archive §I5). Every prize-pool, donation, streak and lottery movement flows through here.
   // refId must be an integer (block height, draw id, or 0).
   _move(address, delta, eventType, refType, refId = 0) {
     this.ensureAccount(address);
@@ -162,10 +161,9 @@ class IncentivesManager {
     return flag(s.incentives_enabled) && flag(s.allow_miner_donations);
   }
 
-  // There is no stored donation % any more (design §18.2, 2026-09-24). The v1 per-address
-  // percentage — written from a login tag, lower-only once set (§J6-7) — was replaced by the
-  // per-share read in rewards.js, so donationPercent()/setDonation() are gone and the
-  // miner_incentives.donation_percent column is kept in the schema but read by nothing.
+  // There is no stored donation %: rewards.js reads it per SHARE (design §18.2). The
+  // miner_incentives.donation_percent column (the v1 per-address percentage, audit §J6-7) is
+  // kept in the schema but read by nothing.
 
   // Streak multiplier as a fraction (e.g. 0.03 for +3%). Returns 0 if the streak is stale
   // (the address didn't mine today or yesterday) or streaks are disabled.
@@ -203,7 +201,7 @@ class IncentivesManager {
     // 2. Voluntary miner donations → prize pool. Iterates minerMap, not donateMap, so only an
     // address this block actually credited can be debited. The clamp is float-drift insurance:
     // a donate100-only address sums to exactly its gross, and nothing may take more than that.
-    // Ledger shape unchanged from v1 — one debit per address per block, one prize-pool credit.
+    // Ledger shape (same as v1 rows): one debit per address per block, one prize-pool credit.
     if (flag(s.allow_miner_donations) && donateMap && typeof donateMap.get === 'function') {
       for (const [address, gross] of minerMap) {
         if (RESERVED_ADDRESSES.includes(address)) continue;
@@ -330,7 +328,7 @@ class IncentivesManager {
   updateStreaks() {
     const today = Math.floor(Date.now() / 1000 / SECONDS_PER_DAY);
     const dayStart = today * SECONDS_PER_DAY;
-    // Bounded to the day on BOTH sides: a one-sided range let SQLite walk the whole
+    // Bounded to the day on BOTH sides: a one-sided range lets SQLite walk the whole
     // address-leading index to get DISTINCT for free (scripts/test-shares-plans.js).
     const active = this.db.prepare('SELECT DISTINCT grin_address FROM shares WHERE created_at >= ? AND created_at < ?')
       .all(dayStart, dayStart + SECONDS_PER_DAY);

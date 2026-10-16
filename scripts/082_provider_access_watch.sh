@@ -12,7 +12,7 @@
 #   • new SSH logins accepted                      (someone got in)
 #   • large heartbeat gap with no reboot           (VM pause / clock jump)
 #
-# Design rules (see docs/generated/script082_design.md):
+# Design rules (see docs/reference/script082_design.md):
 #   1. Alerts MUST leave the box — a log on the same server an attacker touched
 #      is worthless. Delivery goes out-of-band via ntfy / Telegram / email /
 #      Nostr (any subset the operator configures).
@@ -78,7 +78,7 @@ fi
 # Refreshed on every launch so the deployed worker always matches the toolkit.
 #
 # Alert delivery lives in lib/grin_alert_send.sh (shared with the node event
-# recorder, 086 design §8.10). It is INLINED between the two quoted heredocs
+# recorder, script086_design.md §8.10). It is INLINED between the two quoted heredocs
 # below, never sourced at run time, so the worker stays one self-contained file
 # that works even if the toolkit checkout is gone. Built in a temp file and
 # moved into place: a failed refresh keeps the installed worker untouched.

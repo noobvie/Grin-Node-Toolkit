@@ -1,7 +1,7 @@
-// payments.html page script — moved out of the page's inline <script> (code-layout F3): byte-verbatim, then a second commit
-// turned the on*= attributes inside its markup STRINGS into data-action (the delegated wiring is at the end).
-// Classic script (no defer/module) loaded at the same position as the old block, after auth.js,
-// api.js, admin-shell.js, stepup.js and payouts-common.js, whose globals it uses (H14).
+// payments.html page script.
+// Event wiring is delegated (data-action) and sits at the end of the file.
+// Classic script (no defer/module) loaded after auth.js,
+// api.js, admin-shell.js, stepup.js and payouts-common.js, whose globals it uses.
 // (The old-deep-link forwarder is in <head>.)
 let _withdrawals = [];
 let _filter = 'all';
@@ -22,7 +22,7 @@ const STATUS = {
   tor_checking:      ['badge-warn',  'Checking'],
   tor_sending:       ['badge-warn',  'Sending'],
   tor_held:          ['badge-warn',  'Held'],
-  // LEGACY: no new row lands here since 2026-09-26; the scheduler migrates old ones on its
+  // LEGACY: no new row lands here; the scheduler migrates old ones on its
   // first pass (confirmed / refunded / Held). Kept so such a row never renders raw.
   retry_scheduled:   ['badge-warn',  'Legacy retry'],
   slatepack_pending: ['badge-warn',  'Awaiting slate'],
@@ -109,9 +109,10 @@ const payTable = AdminTable.create({
     const canCancel = w.status === 'tor_checking';
     const isHeld    = w.status === 'tor_held';
     // Signed payment proof — the dispute document (recipient's own signature over amount +
-    // kernel + sender). Only a confirmed Tor payout can have one; a row whose backfill has not
+    // kernel + sender). Only a confirmed Tor or Slatepack payout can have one (mirrors PROOF_METHODS in
+    // lib/withdrawal-scheduler.js); a row whose backfill has not
     // stored it yet still gets the button, because the route fetches it from the wallet on demand.
-    const canProof = w.status === 'confirmed' && w.method === 'tor' && w.slate_id && w.kernel_excess;
+    const canProof = w.status === 'confirmed' && (w.method === 'tor' || w.method === 'slatepack') && w.slate_id && w.kernel_excess;
     let actions = '';
     if (canProof)  actions += `<button class="btn-icon" data-action="download-proof" data-id="${w.id}" data-tip="${w.has_payment_proof ? 'Download the signed payment proof' : 'Fetch the signed payment proof from the wallet and download it'}" aria-label="Download the signed payment proof">🧾</button>`;
     if (isHeld) {
@@ -172,7 +173,7 @@ function setFilter(f, btn) {
 
 // Saves the proof as the JSON `grin-wallet export_proof` would write, so `grin-wallet
 // verify_proof <file>` (or the explorer's /proof page) accepts it unchanged. 409 means the
-// row has no proof to give (non-Tor rail, or not confirmed yet); 503 means the wallet could
+// row has no proof to give (Goblin rail, an older Slatepack payout, or not confirmed yet); 503 means the wallet could
 // not be asked — both are shown verbatim, neither is retried automatically.
 async function downloadProof(id) {
   try {
@@ -529,7 +530,7 @@ document.addEventListener('DOMContentLoaded', () => { refresh(); });
 // abandoned-balance poll moved to dormant.html, the payout request audit's to users.html.)
 setInterval(refresh, 30000);
 
-// ==== F3: event wiring — replaces the inline on*= attributes (strict script-src, no inline handlers).
+// ==== event wiring — replaces the inline on*= attributes (strict script-src, no inline handlers).
 // One delegated listener per event type; data-action names the handler. Every old handler ignored
 // the Event and `this` except where noted, so the wrappers pass exactly the arguments the attribute did.
 document.addEventListener('click', (e) => {

@@ -1129,8 +1129,8 @@ acn_onion_disable() {
     _acn_torrc_strip
     rm -f "$(_acn_onion_link)" "$(_acn_onion_vhost)"
 
-    # ⚠ THE GATEWAY'S ONION SNIPPET IS DELIBERATELY KEPT. It used to be deleted
-    #   here, which bought nothing — the only thing that ever includes it is the
+    # ⚠ THE GATEWAY'S ONION SNIPPET IS DELIBERATELY KEPT. Deleting it here
+    #   would buy nothing — the only thing that ever includes it is the
     #   onion vhost, and that is gone one line above, so it cannot dangle — and
     #   cost something real: _acn_write_onion_vhost only emits the include when
     #   the file exists, so the NEXT enable would silently produce an onion that

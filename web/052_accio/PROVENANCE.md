@@ -195,4 +195,4 @@ re-vendor + re-pin, with the commands in `PINNED_SHA`. The wallet is the one tha
 it is self-custodial and ships security fixes; the build script is a frozen spec and needs
 watching only if we ever revisit S7.
 
-Design → `docs/generated/script052_design.md`. Session log → `docs/generated/script052_implementation.md`.
+Design → `docs/reference/script052_design.md`. Session log → `docs/reference/script052_implementation.md`.

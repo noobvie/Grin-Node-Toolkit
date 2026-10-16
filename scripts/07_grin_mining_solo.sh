@@ -296,7 +296,7 @@ find_grin_server_toml() {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # _grin_session_name() is provided by lib/grin_node_control.sh (sourced above) —
-# the canonical copy. The previous local duplicate was removed (DRY).
+# the canonical copy (no local duplicate — keep it that way).
 
 _is_descendant_of() {
     local child_pid="$1" parent_pid="$2"
@@ -1812,7 +1812,7 @@ solo_deploy_stats_page() {
     local web_dir="/var/www/$conf_name"
     local nginx_conf="/etc/nginx/sites-available/$conf_name"
     # Resolved per network — an archive mainnet node lives in mainnet-full, and
-    # assuming "-prune" here used to abort the deploy outright with "No node
+    # assuming "-prune" here aborts the deploy outright with "No node
     # .api_secret found for either network" on a perfectly healthy box.
     local mn_secret_path tn_secret_path
     mn_secret_path=$(_solo_node_secret mainnet owner)
@@ -2885,7 +2885,7 @@ stratum_menu() {
 # chosen (SOLO_NETWORK set). Holds only the genuinely per-net actions; cross-
 # network tools (both-net status, the unified stats page, global watchdogs) stay
 # on the network-select screen. Wallet/Stratum keep their own submenus — they
-# just inherit SOLO_NETWORK now instead of prompting per action.
+# inherit SOLO_NETWORK instead of prompting per action.
 solo_net_menu() {
     local choice label mode_label
     label="Mainnet"; [[ "$SOLO_NETWORK" == "testnet" ]] && label="Testnet"
@@ -3259,7 +3259,7 @@ _solo_detect_deployed_mode() {
 }
 
 main() {
-    # Optional launch mode (mirrors Script 07 pool's singlebox|hub|satellite arg):
+    # Optional launch mode (mirrors Script 07 pool's singlebox|hub arg):
     #   lan → serve the stats page over plain HTTP on a LAN IP:port (no domain/SSL).
     # Any other value (or none) keeps the default public domain + certbot flow.
     case "${1:-}" in

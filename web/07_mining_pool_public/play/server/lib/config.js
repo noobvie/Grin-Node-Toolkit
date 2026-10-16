@@ -62,7 +62,7 @@ function port(key, value) {
   return n;
 }
 
-// The pool's internal listener. The link secret is sent to this URL (Part 4), so it must
+// The pool's internal listener. The link secret is sent to this URL, so it must
 // be the pool on THIS box: plain http to a literal loopback address with an explicit port,
 // nothing else. `localhost` is refused because it is a name, and a name can resolve away.
 function poolUrl(key, value) {
@@ -113,7 +113,7 @@ function loadConfig(env = process.env) {
   if (pool.port === listenPort) fail('GAMES_PORT', listenPort, 'must differ from the pool\'s port');
 
   // Where the game folders (manifest.json + rules.js) are deployed: <code dir>/games/ on the
-  // box. Existence is the registry's concern (Part 5) — no games is a valid, logged state.
+  // box. Existence is the registry's concern — no games is a valid, logged state.
   const gamesDir = absPath('GAMES_GAMES_DIR', env.GAMES_GAMES_DIR === undefined
     ? path.join(CODE_DIR, 'games')
     : env.GAMES_GAMES_DIR);

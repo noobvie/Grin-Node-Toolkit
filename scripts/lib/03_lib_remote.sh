@@ -8,7 +8,7 @@
 # from a producer's local nginx web dir to one or more mirrors. It never touches
 # chain_data and never stops the grin node — the node runs throughout. Do not
 # confuse this with the "rsync raw chain_data" proposal in
-# docs/generated/script03_design.md section 14.4, which is a different thing and
+# docs/reference/script03_design.md section 14.4, which is a different thing and
 # is the only one that involves node downtime.
 #
 # ERREXIT: per CLAUDE.md `project_lib_errexit_suppression`, every caller reaches
@@ -54,8 +54,8 @@ rc_err() { rc_log "ERROR: $*"; }
 # Site key — ONE mapping, used everywhere
 # ---------------------------------------------------------------------------
 # The (node_type, network) -> site_key mapping was written out separately in
-# write_chaindata_manifest and in the nginx setup, and a third copy was about to
-# appear here. They are what a mirror is addressed by, so a drift between copies
+# write_chaindata_manifest and in the nginx setup; a third copy here would be
+# one more to drift. They are what a mirror is addressed by, so a drift between copies
 # sends one network's archive into another network's directory — and because
 # rsync runs with --delete, that DELETES the other mirror rather than merely
 # misfiling. One function, no second opinion.
@@ -629,9 +629,9 @@ rc_push_target() {
     "${ssh_c[@]}" "rm -f '$rdir/.chaindata.json.prev'" 2>/dev/null || true
 
     # No chown here. rsync -a running as root preserves the producer's 644, which
-    # is all nginx needs to serve the files; the old code chowned to a hardcoded
-    # www-data:www-data, which does not exist on a RHEL-family mirror and failed
-    # silently into 2>/dev/null. If a mirror needs different ownership, that is
+    # is all nginx needs to serve the files; a hardcoded chown to
+    # www-data:www-data fails on a RHEL-family mirror (no such user) and
+    # would vanish silently into 2>/dev/null. If a mirror needs different ownership, that is
     # the mirror's business, not the producer's.
 
     rc_write_marker "$line" || true
@@ -689,7 +689,7 @@ rc_run_site_key() {
 # ---------------------------------------------------------------------------
 # One SSH login test, shared by every interactive test path
 # ---------------------------------------------------------------------------
-# There used to be two, and they disagreed. Step 3 of the SSH-access screen ran
+# Keep ONE probe: two copies disagreed. Step 3 of the SSH-access screen ran
 # `ssh -i <key> -p <port> <host>` with StrictHostKeyChecking=accept-new; the
 # rc_target_test below ran the same command WITHOUT it, under BatchMode=yes —
 # and BatchMode cannot answer the "unknown host key" prompt. So testing a mirror

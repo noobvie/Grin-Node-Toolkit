@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// T5 — inline-script ratchet for the strict-CSP front-end work (plan H9–H14, H21).
+// T5 — inline-script ratchet for the strict-CSP front-end work.
 //
 // A strict `script-src` (no 'unsafe-inline') blocks four things, and this counts all four:
 //   1. executable inline <script> blocks              (JSON-LD / other data types are NOT executable)
@@ -12,10 +12,10 @@
 // Counts may only go DOWN against scripts/fixtures/inline-baseline.json; a count above its baseline
 // (or a non-zero count in a file the baseline does not list) fails. A count below baseline passes
 // and says so — lowering the baseline is a deliberate edit (`--write`), not something a test does
-// to itself. `--zero` demands every count be zero: that is the gate F7 needs before 'unsafe-inline'
+// to itself. `--zero` demands every count be zero: that is the gate before 'unsafe-inline'
 // can come out of script-src.
 //
-// COMMENTS ARE STRIPPED FIRST (H21). public_html/js/cms-frame.js names `onclick=` in its header
+// COMMENTS ARE STRIPPED FIRST. public_html/js/cms-frame.js names `onclick=` in its header
 // comment to explain why CMS bodies are sandboxed; counting it would ratchet a comment forever and
 // make "all zero" unreachable. CMS bodies render in a sandboxed srcdoc iframe with no allow-scripts,
 // so they never needed 'unsafe-inline' and are not front-end work.
@@ -26,7 +26,7 @@
 // JS-file hit once the block is extracted, so the page's number must not drop merely by moving it.
 //
 //   node scripts/test-inline-script.js            check against the baseline
-//   node scripts/test-inline-script.js --zero     F7 gate: everything must be zero
+//   node scripts/test-inline-script.js --zero     strict-CSP gate: everything must be zero
 //   node scripts/test-inline-script.js --write    rewrite the baseline from the current tree
 
 const fs = require('fs');
@@ -128,7 +128,7 @@ function walk(dir, ext, out = []) {
 }
 const walkJs = (dir) => walk(dir, '.js');
 
-// HTML is walked recursively too (R3): a page added in a subfolder (public_html/guides/x.html)
+// HTML is walked recursively too: a page added in a subfolder (public_html/<dir>/<page>.html)
 // is served by the same `location /` and carries the same CSP, so it must be counted the same.
 // `stats` (optional) receives how many files were read — the floors in main need it.
 function scanTree(stats = {}) {
@@ -171,7 +171,7 @@ const ok = (name, cond, extra) => {
 };
 
 // Controls: the counter must see what it claims to and ignore what it claims to ignore. A counter
-// that always returns 0 would make the ratchet — and F7's gate — pass forever.
+// that always returns 0 would make the ratchet — and the strict-CSP gate — pass forever.
 {
   const h = (s) => countHtml(s);
   ok('control: <script> block counted', h('<script>var a=1</script>').inlineScripts === 1);
@@ -195,10 +195,10 @@ const ok = (name, cond, extra) => {
 const scanned = {};
 const current = scanTree(scanned);
 
-// Non-vacuity (R3): `--zero` and the ratchet both pass on a tree that holds no files — R3 ran this
+// Non-vacuity: `--zero` and the ratchet both pass on a tree that holds no files — this once ran
 // script against empty public_html/ + admin-panel/ dirs and got "16 passed, 0 failed". A moved or
-// renamed root would turn F7's gate into a no-op. Floors sit a little under today's tree (44 HTML
-// pages, 53 JS files on 2026-10-10); a deliberate large deletion lowers them in the same commit.
+// renamed root would turn the strict-CSP gate into a no-op. Floors sit a little under the tree's real counts (44 HTML
+// pages, 53 JS files when set); a deliberate large deletion lowers them in the same commit.
 ok(`non-vacuity: at least 40 HTML pages scanned (${scanned.html})`, scanned.html >= 40);
 ok(`non-vacuity: at least 45 JS files scanned (${scanned.js})`, scanned.js >= 45);
 

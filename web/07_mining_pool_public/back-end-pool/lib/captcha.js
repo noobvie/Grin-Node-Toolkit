@@ -4,8 +4,7 @@ const crypto = require('crypto');
 //
 // No external service (no Google reCAPTCHA / hCaptcha) — keeps the pool privacy- and
 // Tor-friendly and dependency-free. It exists purely to raise the per-attempt cost of
-// scripted brute force, on top of the auth rate limiter (this.limits.auth, 200/min since
-// the 2026-06 x20 bump) and the per-(username,IP) lockout in auth.js.
+// scripted brute force, on top of the auth rate limiter (this.limits.auth, 200/min) and the per-(username,IP) lockout in auth.js.
 //
 // Single-use + short TTL + in-memory: the Central API is a single process (single DB
 // writer per the hub design), so an in-process Map is sufficient. A challenge is consumed

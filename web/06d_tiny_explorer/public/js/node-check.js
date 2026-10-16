@@ -133,7 +133,7 @@
     // must read as a WAIT: the sentence says what to do, and `rows: false`
     // suppresses the row block, because the 503 carries the full `base` shape
     // (target, peers, sync_state) and drawing it would dress a queue full up as
-    // a measurement — the same trap R1 fixed for bad_input, which gets there via
+    // a measurement — the same trap bad_input avoids, which gets there via
     // the no-target guard instead.
     busy: {
       cls: 'is-warn', mark: '!', rows: false,
@@ -276,11 +276,10 @@
   // had to enumerate every code that must stay silent, and it silently opted in
   // any code added later.
   //
-  // ⚠ THIS LIST GREW WHEN THE DEFAULT FLIPPED (2026-09-10). It used to hold
-  // refused + timeout only, because the assumed endpoint was a bare PORT (3413)
-  // and those were the only two ways a port itself dead-ends. The assumed
-  // endpoint is now https://name:443, which is a port AND a protocol AND a
-  // certificate — so there are three more ways for the assumption to be wrong,
+  // ⚠ THIS LIST IS WIDER THAN refused + timeout BECAUSE THE DEFAULT IS A NAME ON 443.
+  // A bare port (3413) would need only those two, since they are the only ways a port
+  // itself dead-ends. The assumed endpoint is https://name:443, which is a port AND a
+  // protocol AND a certificate — so there are three more ways for the assumption to be wrong,
   // and every one of them means the same thing: the node is probably sitting on
   // its own port with no front.
   //
@@ -288,7 +287,7 @@
   //   · timeout      — packets to 443 are being dropped, i.e. filtered
   //   · tls_error    — 443 answered but does not speak TLS, or the certificate
   //                    does not verify. For a name with no nginx front this is
-  //                    now the single likeliest failure on the page.
+  //                    the single likeliest failure on the page.
   //   · http_status  — a web server answered 404/403/parked. Something owns 443,
   //                    but it is not publishing a node there.
   //   · not_json_rpc — a website answered 200. Same conclusion.
@@ -382,8 +381,8 @@
     }
 
     // The commonest wrong verdict this tool gives is a CORRECT answer about the
-    // wrong port: a bare host name is dialled on an assumed :3413, while the
-    // toolkit's own Script 04 publishes the node behind nginx on 443. The route
+    // wrong port: a bare host name is dialled on an assumed https :443 (the shape the
+    // toolkit's own Script 04 publishes), while a node with no nginx front answers on 3413. The route
     // does not dial the alternative itself (that would double the cost of every
     // failing check), so the fix has to be reachable in one click from the
     // verdict that caused the confusion — not buried in the placeholder text.

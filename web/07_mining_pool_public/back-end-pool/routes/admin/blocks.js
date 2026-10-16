@@ -1,5 +1,4 @@
-// /api/admin/blocks + /api/admin/metrics. Moved verbatim out of routes/index.js (code-layout
-// refactor P7); registrations stay at 2-space indent and write FULL paths.
+// /api/admin/blocks + /api/admin/metrics. Registrations stay at 2-space indent and write FULL paths.
 
 const express = require('express');
 const explorers = require('../../lib/explorers');

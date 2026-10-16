@@ -1,8 +1,8 @@
 # =============================================================================
 # lib/grin_alert_send.sh — off-box alert DELIVERY (ntfy / Telegram / email / Nostr)
 # =============================================================================
-# Extracted 2026-10-03 from 082 Provider Access Watch's worker (086 design
-# §8.10), so the node event recorder sends through the SAME code instead of a
+# Shared by 082 Provider Access Watch's worker and the node event recorder
+# (script086_design.md §8.10), so both send through the SAME code instead of a
 # copy. Delivery only: the caller owns its config file, its debounce and its
 # wording. Every configured channel is tried; one failing never blocks another.
 #

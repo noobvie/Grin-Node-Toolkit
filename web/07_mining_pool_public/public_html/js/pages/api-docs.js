@@ -1,8 +1,7 @@
-// api-docs.js — the api-docs page's own script. Until 2026-10 (pool code-layout refactor,
-// part F2) this was api-docs.html's inline <script> block; it moved out byte-for-byte so
-// a strict script-src can drop 'unsafe-inline'. The block's indent is kept.
+// api-docs.js — the api-docs page's own script, external (not inline) so a strict script-src needs no 'unsafe-inline'.
+// The original indent is kept.
 //
-// The page loads it as a CLASSIC script at the block's old position. Never add defer / async /
+// The page loads it as a CLASSIC script at its original position. Never add defer / async /
 // type="module": the order and the shared global scope are what this code was written against.
     // Auto-generated API reference. The endpoint list comes from /api/public/endpoints
     // (server walks its own Express route table → always accurate). Grouped by the path's

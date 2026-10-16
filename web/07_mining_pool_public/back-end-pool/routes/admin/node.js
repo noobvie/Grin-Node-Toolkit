@@ -1,7 +1,6 @@
 // /api/admin node + chain health — node-status, node-events, node-availability, block-monitor,
-// reward-stats, dashboard and the /api/admin/health* family. Moved verbatim out of routes/index.js
-// (code-layout refactor P7); registrations stay at 2-space indent and write FULL paths. Instances
-// come from ctx; the guard chains are the ONE createGuards(ctx) instance (I7), handed in as `guards`.
+// reward-stats, dashboard and the /api/admin/health* family. Registrations stay at 2-space indent and write FULL paths. Instances
+// come from ctx; the guard chains are the ONE createGuards(ctx) instance, handed in as `guards`.
 
 const express = require('express');
 const { readGatewayStatus, probeStratumTcp } = require('../../lib/gateway-status');
@@ -69,7 +68,7 @@ module.exports = function createAdminNodeRoutes(ctx, guards) {
     res.json(blockMonitor.getStatus());
   });
 
-  // Test endpoint removed - manual reward distribution disabled for security
+  // Deliberately absent: a test endpoint for manual reward distribution (security)
 
   router.get('/api/admin/reward-stats', secureAdmin, (req, res) => {
     rewardDistributor.rewardStats()
@@ -349,9 +348,9 @@ module.exports = function createAdminNodeRoutes(ctx, guards) {
       const endpoint = `http://127.0.0.1:${config.node_api_port || 3413}/v2/owner`;
 
       // getStatus() RESOLVES with { ok:false, error } on an unreachable node — it does not
-      // throw, so the catch below is NOT the unreachable path. api_reachable used to be a
-      // hardcoded 'ok' here, which reported the node API as reachable while every other
-      // field on the card read 0/false. Answer the question the field actually asks.
+      // throw, so the catch below is NOT the unreachable path. api_reachable must not be a
+      // hardcoded 'ok' here: that reports the node API as reachable while every other
+      // field on the card reads 0/false. Answer the question the field actually asks.
       if (!status || status.ok !== true) {
         return res.status(503).json({
           status: 'unhealthy',

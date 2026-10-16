@@ -1,6 +1,6 @@
 'use strict';
 /**
- * store.js — the suffix ↔ session table (packet S4b).
+ * store.js — the suffix ↔ session table (Script 052).
  *
  * Two tables and nothing else:
  *
@@ -43,7 +43,7 @@
  * ─── What is deliberately NOT in here ────────────────────────────────────────
  * No IP addresses, no user agents, no per-payment records. A suffix is a payee
  * address; joining it to an IP and a timestamp would build the payment graph
- * Grin exists in order not to have (design §11.11). The timestamps that ARE
+ * Grin exists in order not to have (script052_design.md §11 item 11). The timestamps that ARE
  * stored are coarse liveness marks with no counterparty attached.
  */
 
@@ -82,7 +82,7 @@ class Store {
 		this._dirty = false;
 		this.asideFiles = 0;
 
-		// ⚠ R6. Set by ListenHub to `_forgetEverywhere`. Every path that removes a
+		// ⚠ Set by ListenHub to `_forgetEverywhere`. Every path that removes a
 		// suffix from this table calls it, because a socket keeps its own claim set
 		// (`state.owned`) and nothing else tells that set the row is gone. Before
 		// this hook existed, an eviction left the claim behind forever: `Create URL`
@@ -112,13 +112,13 @@ class Store {
 		} catch (err) {
 			// ENOENT is the first run and the only benign case.
 			if (err.code === 'ENOENT') return;
-			// ⚠ R6. EVERY OTHER READ ERROR IS FATAL, and this is the one branch in
-			// this file that used to log and carry on. Carrying on means starting
+			// ⚠ EVERY OTHER READ ERROR IS FATAL — this is the one branch in
+			// this file that must not log and carry on. Carrying on means starting
 			// empty, and starting empty means the next flush RENAMES OVER a snapshot
 			// full of live receiving addresses — rename takes its permission from the
 			// directory, which we own, not from the file we just failed to read. So a
 			// listen-state.json left root:root by a restore (EACCES) silently
-			// destroyed every address in it, two seconds after boot.
+			// would destroy every address in it, two seconds after boot.
 			//
 			// The corrupt-JSON and wrong-version branches below both move the file
 			// aside before starting empty, for exactly this reason. This branch
@@ -183,7 +183,7 @@ class Store {
 	}
 
 	/**
-	 * ⚠ R6. A snapshot written under a looser config is not a licence to exceed
+	 * ⚠ A snapshot written under a looser config is not a licence to exceed
 	 * the current one. Before this, `max_suffixes_total` and `max_sessions` were
 	 * enforced on every mint and on nothing else, so lowering either one left the
 	 * cap un-applied until the table happened to be touched — i.e. the limit an
@@ -235,14 +235,14 @@ class Store {
 	}
 
 	/**
-	 * ⚠ R6. The debounce bounds how OFTEN we write, and nothing bounded how MUCH.
+	 * ⚠ The debounce bounds how OFTEN we write, and nothing bounded how MUCH.
 	 * flush() re-serialises the whole table, so at `max_suffixes_total` (100k rows,
 	 * ~10 MB) a steady trickle of mints meant ~10 MB every 2 s — several MB/s of
 	 * sustained writes on a box shared with the node, the pool and Fidelius, plus
 	 * the flash wear. Scaling the delay with the table keeps the write RATE roughly
 	 * flat instead of growing linearly with how successful the gateway has been.
 	 * The cost is bounded and stated: at most this many seconds of `seen` marks and
-	 * fresh addresses lost to a hard kill, which the S9 note on durability accepts.
+	 * fresh addresses lost to a hard kill, which the durability note in script052_implementation.md accepts.
 	 */
 	_flushDelay() {
 		const scale = 1 + Math.floor(this.suffixes.size / 10000);
@@ -252,7 +252,7 @@ class Store {
 	/** flush() — atomic, and safe to call at any time (SIGTERM does). */
 	flush() {
 		if (!this.durable || !this._dirty) return;
-		// ⚠ S8. Only sessions that OWN an address are persisted. A session is
+		// ⚠ Only sessions that OWN an address are persisted. A session is
 		// minted by any completed handshake, before the client has asked for
 		// anything, so persisting them all let a handshake flood rewrite an
 		// ever-growing snapshot every two seconds. An empty session has nothing
@@ -274,7 +274,7 @@ class Store {
 			// snapshot whole. A truncated snapshot here means new addresses for
 			// everyone, which is exactly what durability is supposed to prevent.
 			//
-			// ⚠ R6. fsync BEFORE the rename, and the directory after it. Without the
+			// ⚠ fsync BEFORE the rename, and the directory after it. Without the
 			// first, a power loss can land the rename while the data behind it is
 			// still in page cache — the classic result is a zero-length file, i.e.
 			// precisely the total loss the atomic rename was chosen to prevent.
@@ -338,7 +338,7 @@ class Store {
 	/**
 	 * createSession() → sid, or throws MintError when the table is full.
 	 *
-	 * ⚠ S8. A session is minted by ANY completed /listen handshake, before the
+	 * ⚠ A session is minted by ANY completed /listen handshake, before the
 	 * client has asked for an address, so this is a table a stranger can grow
 	 * for the price of a WebSocket. It is bounded three ways now: empty sessions
 	 * are never persisted (flush), are swept on a short ttl (sweep), and are the
@@ -404,7 +404,7 @@ class Store {
 		try {
 			this.onForget(suffix, sid);
 		} catch (err) {
-			// No suffix and no sid in the line: a suffix is a payee address (§11.11).
+			// No suffix and no sid in the line: a suffix is a payee address (script052_design.md §11 item 11).
 			this.log.error(`onForget hook threw: ${err.message}`);
 		}
 	}
@@ -575,7 +575,7 @@ class Store {
 		let empties = 0;
 		for (const [sid, row] of this.sessions) {
 			if (now - row.seen > this.ttlMs) { this.dropSession(sid); dropped += 1; continue; }
-			// ⚠ S8. A session that never got as far as owning an address only has
+			// ⚠ A session that never got as far as owning an address only has
 			// to outlive the gap between the handshake and the first `Create URL`.
 			// Keeping it for the full 90-day address ttl is what let a handshake
 			// flood sit in this table for a quarter of a year.
@@ -598,7 +598,7 @@ class Store {
 			// Surfaced because the symptom of a full table is that new wallets
 			// silently cannot get an address, which looks like a client bug.
 			table_full: this.suffixes.size >= this.cfg.max_suffixes_total,
-			// R6: a set-aside snapshot holds live receiving addresses from a table
+			// a set-aside snapshot holds live receiving addresses from a table
 			// we could not use. Left only in the directory, it is a file nobody
 			// looks for until they already know to; on /health it is a number the
 			// Status screen can print.

@@ -46,7 +46,7 @@
         </div>
 
         <!-- The "Visibility & Mining" section (Pool Visibility, Mining Mode, Address Whitelist)
-             was REMOVED 2026-09-02, audit §J9-1. Nothing in the backend read any of those keys:
+             is deliberately absent (audit §J9-1). Nothing in the backend read any of those keys:
              a pool set to "Private (whitelisted only)" accepted every miner on earth, and the
              step-up prompt on those fields told the operator the opposite. Maintenance mode is
              on the Announcements tab and is unaffected. -->
@@ -98,7 +98,7 @@
           </div>
         </div>
 
-        <!-- A "Homepage → Banner Message" field lived here until 2026-07-27. It was DEAD:
+        <!-- There is no "Homepage → Banner Message" field: it was dead —
              branding.js wrote it into [data-brand="banner"], an attribute that never existed
              in any page's markup, so whatever an operator typed here silently went nowhere.
              Site notices come from Settings → Announcements — do not re-add a second one. -->

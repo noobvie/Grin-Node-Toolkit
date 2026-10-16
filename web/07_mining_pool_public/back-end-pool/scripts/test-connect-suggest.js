@@ -2,7 +2,7 @@
 
 // Connect-page suggestion — lib/connect-suggest.js (the geographic ESTIMATE behind
 // GET /api/pool/connect/suggest) and the route's privacy stance.
-// Covers: the K calibration against the 2026-09-23 measurements to OVH Gravelines (±25%);
+// Covers: the K calibration against measurements to OVH Gravelines (±25%);
 // effective latency = viewer→gateway + hub_rtt_ms, so a near gateway with a long link home loses
 // to connecting direct (the Singapore case); the direct bias; a gateway with no hub_rtt_ms or an
 // offline one gets no estimate; an unknown country gets no recommendation; a same-country server

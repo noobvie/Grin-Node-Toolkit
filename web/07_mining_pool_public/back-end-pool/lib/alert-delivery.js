@@ -274,10 +274,9 @@ class AlertDelivery {
       'tor_unreachable': 'Tor Unreachable',
       'difficulty_spike': 'Difficulty Spike',
       'connection_surge': 'Connection Surge',
-      // Money-integrity detectors (AlertMonitor). Added here 2026-08-22: this map was
-      // written before they existed, so the seven alerts that can FREEZE PAYOUTS were the
-      // only ones arriving as raw snake_case — "coverage_shortfall" in the email subject
-      // line, next to properly named cosmetic ones like "Difficulty Spike".
+      // Money-integrity detectors (AlertMonitor). Every alert type needs an entry: the seven that
+      // can FREEZE PAYOUTS would otherwise arrive as raw snake_case — "coverage_shortfall" in
+      // the email subject line, next to properly named cosmetic ones like "Difficulty Spike".
       'coverage_shortfall': 'Coverage Shortfall',
       'ledger_integrity_drift': 'Ledger Integrity Drift',
       'wallet_drain': 'Wallet Drain',
@@ -315,8 +314,8 @@ Grin Pool Alert Monitor
   /**
    * Pretty-print alert.data, which is a JSON string written by AlertMonitor.
    *
-   * Guarded: this used to be a bare JSON.parse inside the template literal, so a row whose
-   * data was truncated or non-JSON threw from formatEmailBody → sendEmail → the .catch() in
+   * Guarded: a bare JSON.parse inside the template literal would throw for a row whose
+   * data was truncated or non-JSON, from formatEmailBody → sendEmail → the .catch() in
    * send(), and the alert was dropped with only a delivery-failure line to show for it.
    * Losing a critical money alert to a formatting error is the wrong trade — show the raw
    * string instead.

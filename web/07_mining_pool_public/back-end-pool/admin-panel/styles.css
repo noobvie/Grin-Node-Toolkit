@@ -1,9 +1,8 @@
 /* ============================================================================
-   Admin Panel — sidebar dashboard shell (rebuilt 2026-06)
+   Admin Panel — sidebar dashboard shell
    ----------------------------------------------------------------------------
    Self-contained: defines the FULL CSS-variable set for both admin themes so it
-   no longer depends on the runtime /js/theme.js registry (dropped from the admin
-   pages). Two themes only — Dark (default) and Light — switched by setting
+   does not depend on a runtime theme registry. Two themes only — Dark (default) and Light — switched by setting
    data-theme on <html>; admin-shell.js persists the choice. pool.css is imported
    for the shared component classes (.card .badge .kpi-grid table .btn .spinner …);
    everything below re-skins the chrome (sidebar + topbar) and the layout.
@@ -112,6 +111,26 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   padding: 0;
   width: 100%;
 }
+/* Data tables fit WITHOUT a sideways scroll (operator request). The .table-wrap
+   scroller stays as a last resort for a phone, never the normal desktop view. Three levers:
+   1. a page with a data table may use a wide screen — the 1200px cap left ~700px unused at
+      1920 while a 10-column table scrolled; text-only pages (settings forms) keep the cap;
+   2. headers WRAP: pool.css sets th nowrap, so "MINERS / SHARES (15M)" alone fixed a
+      column's width at its full one-line length — the main cause of the overflow;
+   3. tighter cell gutters (.8rem → .6rem a side is 48px back on a 10-column table).
+   Cells keep their own wrapping; a cell that must not wrap says so where it is rendered.
+   :where() keeps these at (0,1,1) — a DEFAULT. A page's own table rule must still win
+   (miners.html `tr.mn-detail > td { padding: 0 }`, `.mn-rigs th, .mn-rigs td`); at (0,2,1)
+   this outranked them and padded the expanded miner panel. */
+.admin-main > main > .container:has(.table-wrap) { max-width: 1600px; }
+.admin-main :where(.table-wrap) th {
+  white-space: normal;
+  vertical-align: bottom;
+  line-height: 1.3;
+  letter-spacing: .04em;
+  padding: .5rem .6rem;
+}
+.admin-main :where(.table-wrap) td { padding: .5rem .6rem; }
 
 /* ============================================================================
    Sidebar

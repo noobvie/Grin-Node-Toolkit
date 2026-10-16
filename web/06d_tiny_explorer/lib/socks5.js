@@ -164,7 +164,7 @@ function buildConnect(host, port) {
   ]);
 }
 
-// connect({ socksHost, socksPort, host, port, timeoutMs, isolationTag })
+// Signature: connect({ socksHost, socksPort, host, port, timeoutMs, isolationTag })
 //   → Promise<net.Socket> already tunnelled to host:port.
 //
 // `isolationTag`, when set, is sent as the SOCKS username. Tor's default

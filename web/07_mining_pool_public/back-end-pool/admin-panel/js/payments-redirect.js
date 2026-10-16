@@ -1,7 +1,7 @@
-// payments.html <head> deep-link redirect — moved BYTE-verbatim out of the inline <script> (code-layout F3).
-// MUST stay the FIRST script in <head>, before every stylesheet and script (H18): it is a blocking
+// payments.html <head> deep-link redirect.
+// MUST stay the FIRST script in <head>, before every stylesheet and script: it is a blocking
 // classic <script src>, so it still runs before the queue paints.
-  // Old deep links (2026-10 split): the section rail slugged these headings while they lived on
+  // Old deep links: the section rail slugged these headings while they lived on
   // this page (admin-shell.js slugify of each h2's data-sec / text). Two now have pages of their
   // own; the request audit is a section of the Security page, where the same data-sec gives the
   // same slug. replace(), so Back does not bounce here again. It sits in <head>, ahead of every

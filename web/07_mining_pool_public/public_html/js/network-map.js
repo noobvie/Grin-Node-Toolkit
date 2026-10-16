@@ -10,7 +10,7 @@
  * miners is real data (hub + gateway·offline + node twinkle), not "empty". There is NO
  * sample/demo dataset: when a feed is unreachable (the operator has not published it, or
  * the API is down) the globe renders bare and the on-page note says so. A fabricated
- * topology on a live pool read as real data (2026-09-13), so it was removed.
+ * topology on a live pool reads as real data, so there must never be one.
  * LOCATION PRECISION: country, and nothing finer — no coordinate or IP is ever resolved.
  * Miner countries are drawn as the FILLED COUNTRY (fill intensity = miner count), so the
  * shape itself states the precision we have and there is no point position to misread; the
@@ -20,8 +20,8 @@
  * folded into the hub marker here), else on its own row's pin, else on the country centroid
  * (see back-end lib/geoip.js). A gateway sits on the
  * lat/lng the operator declared for it in admin → Regions, else on the centroid: a gateway is
- * the pool's own public server, not a miner, and two US gateways on the centroid drew
- * "Los Angeles" and "New York" 140 km apart in Kansas (2026-09-21) — a bug to any viewer.
+ * the pool's own public server, not a miner, and two US gateways on the centroid draw
+ * "Los Angeles" and "New York" 140 km apart in Kansas — a bug to any viewer.
  *
  * Canvas colours are intentionally the dark Reactor palette (the phosphor glow only
  * reads on black); the surrounding panels use the theme tokens and reskin normally.
@@ -33,7 +33,7 @@
   // Escape before any interpolation into innerHTML. Node names are operator-authored region
   // labels from pool_locations (POST /api/admin/locations), i.e. free text that reaches this
   // page through the API — not an HTML-authoring field like the CMS body or an ad's html_code.
-  // See audit §I10.
+  // See script07_security_audit_archive.md §I10.
   const esc = (s) => String(s == null ? "" : s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -108,8 +108,8 @@
   function ingest(topo, peers) {
     TOTALS = topo.totals || {};
     const h = topo.hub || {};
-    // An UNLOCATED hub (no country resolved server-side → lat null) is never drawn. It used to
-    // fall back to lat 20 / lng 0, which is the middle of the Sahara: a marker labelled with the
+    // An UNLOCATED hub (no country resolved server-side → lat null) is never drawn. Falling
+    // back to lat 20 / lng 0 would put it in the middle of the Sahara: a marker labelled with the
     // pool name sitting on a country that has nothing to do with the pool, plus every gateway arc
     // converging on it. `v` keeps a defined vector so the geometry helpers stay simple, but
     // `located` gates the marker and every arc that targets the hub (see draw()).
@@ -226,10 +226,10 @@
   // ── render loop ─────────────────────────────────────────────────────────────
   let t0 = performance.now();
   // REDUCED belongs in the DEFAULT (boot clears opts.spin and unlights the chip), never in this
-  // gate. It used to be `!dragging && !REDUCED`, which made prefers-reduced-motion a hard lock:
-  // clicking Auto-rotate flipped opts.spin and lit the chip, but the globe still refused to
+  // gate. A gate of `!dragging && !REDUCED` makes prefers-reduced-motion a hard lock:
+  // clicking Auto-rotate would flip opts.spin and light the chip, but the globe would still refuse to
   // turn — an explicit click is the user asking for motion and must beat the passive OS
-  // default. The same gate was also killing drag-flick inertia for those users.
+  // default. It would also kill drag-flick inertia for those users.
   function frame(now) { const dt=Math.min(now-t0,50); t0=now; if (!dragging){ if (opts.spin) rotY += AUTO*dt; else { rotY += spinVel; spinVel *= 0.94; if (Math.abs(spinVel)<1e-4) spinVel=0; } } draw(now); requestAnimationFrame(frame); }
 
   function draw(now) {
@@ -242,7 +242,7 @@
     drawLand(); drawGrat(MERIDIANS); drawGrat(PARALLELS); drawCountries();
     if (opts.nodes) drawPeers(now);
     if (opts.arcs) {
-      // Arcs are LINKS, not launches (2026-09-21): lift ≤ 0.06 R (0.17 drew a ballistic bulge)
+      // Arcs are LINKS, not launches: lift ≤ 0.06 R (0.17 drew a ballistic bulge)
       // and the motion is evenly spaced packets at constant speed — see drawAnimArc. Hub links
       // encode status: connected = 3 packets (traffic), handshake = 1 slow packet (keepalive,
       // no miners yet), checking = static grey, offline = static red DASHED (link down).
@@ -302,9 +302,9 @@
   // bulge (`lift`, as a fraction of R), dashed when opt.dashed — a link that is down. Motion
   // (active && !REDUCED): opt.packets (default 3) evenly spaced short dashes riding a → b at
   // constant speed and constant width, each a little brighter at its front so direction still
-  // reads — data on a cable. The previous version was ONE comet with a thickening fade tail
-  // and a blurred glowing head on a 17%-lift arc, which made every hub link look like a rocket
-  // launch (2026-09-21); there is deliberately no tail flare and no glow here.
+  // reads — data on a cable. A single comet with a thickening fade tail
+  // and a blurred glowing head on a 17%-lift arc makes every hub link look like a rocket
+  // launch; there is deliberately no tail flare and no glow here.
   function drawAnimArc(a, b, rgb, width, lift, now, phase, period, active, opt) {
     // Endpoints on (nearly) the same spot: slerp returns `a` for every t while the lift still
     // raises the middle, so the "arc" is a radial spike shooting off the surface — packets
@@ -354,8 +354,8 @@
     const svg=document.getElementById(svgId), legend=document.getElementById(legendId);
     if (!svg || !legend) return;
     // `sum` is what the centre shows; `total` is the divisor and must never be 0. Keeping
-    // them apart matters now that an empty feed reaches here: the old `total||1` was also
-    // the displayed number, so a pool with no data showed "1 miners".
+    // them apart matters for an empty feed: `total||1` as the displayed number would show
+    // "1 miners" on a pool with no data.
     const rows=topN(raw,limit), sum=rows.reduce((s,r)=>s+r[1],0), total=sum||1; let ang=-Math.PI/2; svg.innerHTML=""; legend.innerHTML=""; const slices=[];
     if (!rows.length) { const ring=document.createElementNS(SVGNS,"path"); ring.setAttribute("d",arcPath(100,100,88,54,-Math.PI/2,Math.PI*1.4999)); ring.setAttribute("fill","rgba(140,205,235,0.08)"); svg.appendChild(ring);
       const row=document.createElement("div"); row.className="nm-dl-row other"; row.innerHTML='<span class="sw" style="background:'+OTHER_COL+'"></span><span class="nm">no data yet</span><span class="pc">—</span>'; legend.appendChild(row); }
@@ -418,10 +418,9 @@
     // with an offline gateway and zero miners is REAL data (hub + gateway·offline + node
     // twinkle), NOT "empty". An UNREACHABLE feed (publishing switched off → 404, or the API
     // down) renders a BARE globe with zeroed placards and a note — never a stand-in dataset.
-    // A sample topology used to fill this gap and was read as the pool's real footprint the
-    // first time anyone looked (2026-07-26, and again 2026-09-13): the note under the globe
-    // is the only thing that says "sample", and nobody reads a 12px mono line before the
-    // picture. `noMiners` is the softer state: the topology is real, there just aren't any
+    // A sample topology filling this gap is read as the pool's real footprint:
+    // the note under the globe would be the only thing that says "sample", and nobody reads
+    // a 12px mono line before the picture. `noMiners` is the softer state: the topology is real, there just aren't any
     // miner-countries online yet.
     const topoUsable = topoOk;
     const noMiners = !topo || !Array.isArray(topo.countries) || topo.countries.length === 0;

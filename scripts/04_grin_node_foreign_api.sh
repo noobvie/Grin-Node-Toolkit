@@ -315,7 +315,7 @@ _nginx_add_limit_req_zone() {
 # grin_conn now lives in a shared conf.d file (grin-conn-limit.conf). On proxy
 # removal we deliberately LEAVE it: an unreferenced limit_conn_zone is harmless, and
 # the other network's proxy (mainnet vs testnet) may still reference it — removing it
-# here used to break the surviving network. We only clean up any legacy inline copy.
+# here would break the surviving network. We only clean up any legacy inline copy.
 _nginx_remove_limit_req_zone() {
     _nginx_strip_legacy_inline_conn_zone
 }

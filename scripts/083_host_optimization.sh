@@ -21,7 +21,7 @@
 # restarting, and offers a dead-man timer. A second path to the same change
 # would be a worse path, so this screen only tells you whether to go there.
 #
-# Menu key 3 in hub 08. See docs/generated/script083_design.md.
+# Menu key 3 in hub 08. See docs/reference/script083_design.md.
 # =============================================================================
 
 set -euo pipefail

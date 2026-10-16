@@ -2,16 +2,15 @@
 
 // Source readers for tests that assert on the pool's ROUTE code.
 //
-// The routes used to live in ONE file (index.js, inside setupRoutes). They are moving into
-// routes/**/*.js, and a test that does `fs.readFileSync('index.js')` then either FAILS after a
-// move or — worse — PASSES VACUOUSLY: a "this must not appear" check over a file that no longer
+// Routes live in routes/**/*.js (index.js is boot only), and a test that does
+// `fs.readFileSync('index.js')` either FAILS or — worse — PASSES VACUOUSLY: a "this must not appear" check over a file that no longer
 // holds the code asserts nothing. Every test that asserts on route code reads it through here.
 //
 //   readAppSource()          index.js, then routes/**/*.js, as one string
 //   routeSource(verb, path)  the source of ONE route registration, cut out for a harness to run
 //
 // Order of readAppSource(): index.js first (verbatim, no header — while routes/ is empty the
-// result is byte-identical to the file, which the P0 conversion relies on), then every file under
+// result is byte-identical to the file), then every file under
 // routes/ in REGISTRATION order: start at routes/index.js and follow its relative require()s
 // depth-first, in the order they appear, each file once. Any file under routes/ the walk did not
 // reach is appended last, sorted — a route file is never silently dropped from the read. Each
@@ -110,7 +109,7 @@ function routeSource(verb, routePath, src) {
   const rest = text.slice(start + 1);
   const next = rest.search(REGISTRATION_START);
   if (next >= 0 && (end < 0 || start + 1 + next < end)) end = start + 1 + next;
-  // R1 L6: never run past the end of the file the registration is in (readAppSource separates files with this marker).
+  // never run past the end of the file the registration is in (readAppSource separates files with this marker).
   const sep = text.indexOf('\n// ==== FILE:', start);
   if (sep >= 0 && (end < 0 || sep + 1 < end)) end = sep + 1;
   if (end < 0) throw new Error(`routeSource: ${verb.toUpperCase()} ${routePath} has no close after it`);

@@ -1,6 +1,6 @@
 'use strict';
 
-// Part 10 (design §19.6, §19.8, §19.9, D20): PvP correspondence chess over a real loopback
+// PvP (design §19.6, §19.8, §19.9, D20): PvP correspondence chess over a real loopback
 // server — seeks, challenges, accept / decline / cancel, draw / abort / resign / timeout,
 // the rated pair cap, Elo + the recompute after an admin void, the lobby and turns reads.
 //
@@ -78,7 +78,7 @@ async function main() {
 
   // ── setup ───────────────────────────────────────────────────────────────────────────
   console.log('\n[b] seeks, challenges, accept / decline / cancel\n');
-  let T = Date.UTC(2026, 9, 7, 9, 0, 0);            // ms — 2026-10-07 09:00 UTC
+  let T = Date.UTC(2026, 9, 7, 9, 0, 0);            // ms — 09:00 UTC on the fixture day
   const nowS = () => Math.floor(T / 1000);
   const SECRET = 'p'.repeat(20) + 'V3'.repeat(22);
   const linkFile = path.join(TMP, 'link');
@@ -470,7 +470,7 @@ async function main() {
     && refs(D, 'match_refund', so.json.match.id) === 1);
   ok('e. a bad void reason → 400', (await adm('POST', `matches/${g5}/void`, { reason: '' + 'x'.repeat(201) }, { stepup: true })).json.field === 'reason');
   // A FREE match (pvp_play_cost 0) enters no results_daily row, and voiding one takes nothing
-  // off a paid match's row of the same day (§19.15 Part 11 review).
+  // off a paid match's row of the same day (see script07_implementation_games.md).
   T += 86400 * 1000;
   const gp = await game(ca, cb);
   await foolsMate(gp, ca, cb);

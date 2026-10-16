@@ -3,8 +3,8 @@
 // Pins three things a later edit could silently undo:
 //   1. The status rules (mining / degraded / connecting / offline, per-rig mining / stalled /
 //      offline), including the §J6-9 rule that a session with no accepted share proves nothing.
-//   2. The query plan. The list used to walk every retained share twice per refresh; the
-//      windowed replacement is only cheap while SQLite SEARCHes idx_share_created, and that
+//   2. The query plan. The list must not walk every retained share twice per refresh; the
+//      windowed query is only cheap while SQLite SEARCHes idx_share_created, and that
 //      depends on the query keeping BOTH time bounds (a one-sided range plans as a full SCAN).
 //   3. The real route handlers, run in-process against a throwaway DB (index.js starts a server
 //      on require, so each handler is cut out of the source — the same loader

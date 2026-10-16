@@ -77,7 +77,7 @@ const files = [path.join(APP, 'index.js')].concat(routeFilesInOrder()).concat(
 const queries = files.flatMap(extract);
 
 console.log('\n[1] every shares statement in index.js + lib/*.js');
-// Floors, per file, from a `grep -E "(FROM|INTO|UPDATE) shares"` count on 2026-09-27 — so an
+// Floors, per file, from a `grep -E "(FROM|INTO|UPDATE) shares"` count when set — so an
 // extractor that silently stops matching (or a file it cannot parse) fails here, not by omission.
 const fromIndex = queries.filter((q) => /^(index\.js|routes[\\/])/.test(q.where)).length;
 ok(`the extractor found the statements (${queries.length}; index.js ${fromIndex})`,

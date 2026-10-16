@@ -416,8 +416,8 @@ async function torProbeSection() {
   }
   {
     // R2. Something that is not a SOCKS5 proxy on tor_socks_port (a mis-set port: tor's
-    //     ControlPort, an HTTP proxy) is OUR side broken — we could not look. It used to come
-    //     back online:false (it "responded"), which the pre-flight gate turns into a 409 on
+    //     ControlPort, an HTTP proxy) is OUR side broken — we could not look. It must not come
+    //     back online:false (it "responded"), which the pre-flight gate would turn into a 409 on
     //     EVERY Tor payout: the misconfigured-box brick the fail-open contract exists to prevent.
     const px = await startFakeSocks(() => 'garbage');
     try {
@@ -447,12 +447,12 @@ async function torProbeSection() {
 // ─── The withdraw pre-flight gate: a requester that left must not get a payout ─────────────
 // nginx gives /api/ `proxy_read_timeout 30s`; the gate's probe can take ~32 s at the defaults.
 // Past 30 s nginx answers the browser 504 ("Withdrawal failed") and closes the upstream socket —
-// but Express keeps running the handler, so the gate used to pass and createWithdrawal LOCKED the
+// but Express keeps running the handler, so a gate that merely passes would let createWithdrawal LOCK the
 // balance and queued a payout the miner had just been told failed.
 // ─── Tor rail — what `grin-wallet send` printed, not what it exited with ─────
 // The CLI exits 0 when Tor delivery fails: it locks the outputs, prints a slatepack and stops.
-// The pool used to read that exit 0 as "paid". Fixtures below reproduce the exact println!
-// sequence of upstream controller/src/command.rs `send` / `output_slatepack` (v5.4.1 = v5.5.0).
+// The pool must not read that exit 0 as "paid". Fixtures below reproduce the exact println!
+// sequence of upstream controller/src/command.rs `send` / `output_slatepack` (same in every grin-wallet release the toolkit pins).
 const FB_ID = '5c8a4e6b-3f1d-4a92-9b7e-0d2c1f3e4a5b';
 const FALLBACK_OUT = [
   `/opt/grin/pool-testnet/wallet/slatepack/${FB_ID}.S1.slatepack`,
@@ -541,7 +541,7 @@ async function torSendSection() {
   // The ARGV itself, checked against grin-wallet v5.5.0's own CLI spec (src/bin/grin-wallet.yml,
   // clap 2.34 — which matches long flags EXACTLY: no hyphen/underscore folding). Every case above
   // stubs execWalletCommand, so none of them ever saw the command line; that is how
-  // `--top-level-dir … send … -a <amount>` shipped from 2026-06 to 2026-09-26 — both halves are
+  // `--top-level-dir … send … -a <amount>` once shipped — both halves are
   // clap errors (exit 1), so every real Tor payout would have failed before sending anything.
   // The spec below is the subset the pool can use, copied from the v5.5.0 yml; `amount` is send's
   // POSITIONAL arg (index 1) and `-a` is the TOP-LEVEL `account` flag, so it is invalid after `send`.
@@ -622,7 +622,7 @@ async function torSendSection() {
       p.top.top_level_dir === '/opt/grin/pubpool/mainnet/wallet', JSON.stringify(p));
   }
   {
-    // Change splitting (2026-10-05): `-o N` = send's change_outputs, only for N in 2..3.
+    // Change splitting: `-o N` = send's change_outputs, only for N in 2..3.
     const argvFor = async (opts) => {
       let argv = null;
       const t = new WalletTor({ network: 'mainnet', wallet_dir: '/w' });
@@ -639,11 +639,11 @@ async function torSendSection() {
   }
 }
 
-// ─── The CLI's own output reaches the error (review 2026-09-26, #3 and #6) ─────────────────
+// ─── The CLI's own output reaches the error ─────────────────
 // grin-wallet v5.5.0 prints every error on STDOUT (src/cmd/wallet.rs: `println!("Wallet command
 // failed: {}")`, exit 1) and its log goes there too; only clap's usage errors use stderr. The pool
-// kept stderr alone, so every real failure reached the scheduler as "Command failed (code 1): " —
-// its NotEnoughFunds branch (outcome C) could never match and fail_detail was always empty. These
+// must not read stderr alone, or every real failure reaches the scheduler as "Command failed (code 1): " —
+// its NotEnoughFunds branch (outcome C) could never match and fail_detail would be empty. These
 // run the REAL execWalletCommand against a `node -e` child standing in for the binary; each child
 // exits by itself or is killed by the timeout under test.
 async function cliOutputSection() {
@@ -714,8 +714,7 @@ async function cliOutputSection() {
 
 // ─── The probe's check_version transport (WalletTor.checkVersionOverSocket) ────────────────
 // Real socks5.js + real http over a fake SOCKS5 proxy (127.0.0.1:0, this process, closed in
-// finally). The step-by-step Tor send's delivery cases (T1–T8) were DELETED with that sender on
-// 2026-09-26; T9 stays because the probe still runs on the shared postJsonRpcOverSocket.
+// finally). There is no step-by-step Tor sender; T9 covers the probe, which still runs on the shared postJsonRpcOverSocket.
 async function probeTransportSection() {
   section('probe-transport');
   {
@@ -783,7 +782,7 @@ async function preflightRequesterGoneSection() {
   }
 }
 
-// ─── Account page: the Slatepack offer after a Tor "no" (plan Session 3, 2026-09-26) ─────────
+// ─── Account page: the Slatepack offer after a Tor "no" ─────────
 // The page's own helpers, lifted out of public_html/account-settings.html by name and run in a vm
 // — no DOM, no browser. The offer is the one place the page could create a slatepack, so what it
 // decides (and that nothing but a click reaches slatepackCreate) is pinned here.
@@ -954,8 +953,8 @@ function accountOfferSection() {
   } catch (e) { ok('the watch evaluates', false, e.message); }
 }
 
-// ─── Account page: switching address forgets the previous address's form (2026-10-12) ────────
-// A miner with two addresses looked up A, paid out, looked up B — and B's form still held A's
+// ─── Account page: switching address forgets the previous address's form ────────
+// A miner with two addresses looks up A, pays out, looks up B — B's form must not keep A's
 // proof, amount and Goblin entries. One rig mining to both makes A's IP a valid proof for B, so
 // the stale amount was one click from being paid out of the wrong account.
 function accountAddressSwitchSection() {
@@ -1097,8 +1096,8 @@ function accountAddressSwitchSection() {
       wire[0] && JSON.stringify(wire[0].params));
   }
   {
-    // d (retry). The array path's retry branch still refills params[0]. (This used cancelTx until
-    // F5 moved cancel_tx to named params; retrieve_payment_proof is still positional.)
+    // d (retry). The array path's retry branch still refills params[0]. (cancel_tx uses named params;
+    // retrieve_payment_proof is still positional.)
     const { w, wire } = harness({ failFirst: 'HTTP 401: Unauthorized' });
     await w.retrievePaymentProof(SLATE.id);
     ok('d. an array call\'s session retry refills params[0] with the rotated token',
@@ -1106,10 +1105,9 @@ function accountAddressSwitchSection() {
       same(wire[1].params.slice(1), [false, null, SLATE.id]), wire[1] && JSON.stringify(wire[1].params));
   }
 
-  // ─── F5 (Part 6): the send-path Owner v3 calls go out NAMED ───────────────
-  // The step-by-step Tor send that F5 built these for was deleted 2026-09-26; the slatepack and
-  // Goblin rails still make every one of these calls, so the wire shape stays pinned.
-  // Names from owner_rpc.rs, identical in v5.4.1 and v5.5.0. A positional call here is how the
+  // ─── the send-path Owner v3 calls go out NAMED ───────────────
+  // The slatepack and Goblin rails make every one of these calls, so the wire shape stays pinned.
+  // Names from owner_rpc.rs, same in every grin-wallet release the toolkit pins. A positional call here is how the
   // slatepack rail was broken for weeks (memory reference_grinwallet_owner_v3_params).
   section('Owner v3 send path — named params (init / lock / finalize / post / cancel)');
   {
@@ -1141,13 +1139,27 @@ function accountAddressSwitchSection() {
     ok('the other calls keep the default timeout (no opts)', ['tx_lock_outputs', 'finalize_tx', 'post_tx', 'cancel_tx'].every((m) => by(m).opts === null));
   }
   {
-    // No rail requests a payment proof through init: the only one that did (the stepwise Tor send)
-    // is gone, and the option went with it — a stray one is ignored, never forwarded.
+    // Payment proof on init: requested only when a recipient is passed, a malformed one throws
+    // before anything goes on the wire, and no recipient → null (the Goblin rail's slate).
     const { w, wire } = harness();
     await w.initSendTx(2, { paymentProofRecipient: TOR_ADDR });
-    const a = (wire[0] && wire[0].params && wire[0].params.args) || {};
-    ok('initSendTx always sends payment_proof_recipient_address null (the stepwise-only option is gone)',
-      Object.prototype.hasOwnProperty.call(a, 'payment_proof_recipient_address') && a.payment_proof_recipient_address === null, JSON.stringify(a));
+    await w.initSendTx(2);
+    let threw = false;
+    try { await w.initSendTx(2, { paymentProofRecipient: 'not-an-address' }); } catch (_) { threw = true; }
+    const a0 = (wire[0] && wire[0].params && wire[0].params.args) || {};
+    const a1 = (wire[1] && wire[1].params && wire[1].params.args) || {};
+    ok('initSendTx forwards paymentProofRecipient as payment_proof_recipient_address',
+      a0.payment_proof_recipient_address === TOR_ADDR, JSON.stringify(a0));
+    ok('initSendTx with no recipient sends payment_proof_recipient_address null',
+      Object.prototype.hasOwnProperty.call(a1, 'payment_proof_recipient_address') && a1.payment_proof_recipient_address === null, JSON.stringify(a1));
+    ok('a malformed proof recipient throws and puts nothing on the wire', threw && wire.length === 2, String(wire.length));
+    // Which rail asks: manual slatepack passes the miner's address, Goblin passes none.
+    const sched = fs.readFileSync(path.join(APP, 'lib/withdrawal-scheduler.js'), 'utf8');
+    const body = (name) => { const i = sched.indexOf('  async ' + name + '('); return i < 0 ? '' : sched.slice(i, sched.indexOf('\n  async ', i + 10)); };
+    ok('createSlatepackWithdrawal requests a proof addressed to the miner',
+      /initSendTx\(netSend, \{ changeOutputs, paymentProofRecipient: grinAddress \}\)/.test(body('createSlatepackWithdrawal')));
+    ok('createNostrWithdrawal requests no proof',
+      /initSendTx\(/.test(body('createNostrWithdrawal')) && !/paymentProofRecipient/.test(body('createNostrWithdrawal')));
   }
   {
     // withSendLock: strictly serial, and a throw releases the lock.
@@ -1177,7 +1189,7 @@ function accountAddressSwitchSection() {
   process.exit(fail === 0 ? 0 : 1);
 })().catch((e) => { console.error(e); process.exit(1); });
 
-// ─── Change splitting — the Owner-API side (2026-10-05) ─────────────────────────
+// ─── Change splitting — the Owner-API side ─────────────────────────
 async function changeSplitWalletSection() {
   section('Change splitting — init_send_tx num_change_outputs + countSpendableOutputs');
   {

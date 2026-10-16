@@ -257,7 +257,7 @@ hp_unattended_ok() {
 }
 
 # Same `grep -c` trap as above — the zero case is the COMMON one here (a fully
-# patched box), and the "0\n0" it used to emit failed adv_is_num, so the one
+# patched box), and the "0\n0" it would emit fails adv_is_num, so the one
 # host that deserved the "none pending" OK line was the only one that never
 # got it. A check that disappears exactly when it passes is worse than no check.
 hp_pending_security_updates() {

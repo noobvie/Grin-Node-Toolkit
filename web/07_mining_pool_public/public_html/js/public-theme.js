@@ -5,10 +5,8 @@
 //   · everything else → body.<name>-theme + body.themed  (styled in /css/themes.css)
 // The legacy key 'dark' (the retired cyan default) is normalised to 'atomic' so
 // old localStorage picks and stored operator configs keep working. The old
-// dark/atomic/light looks were kept for a while as admin palettes in js/theme.js
-// (Cyber Classic / Atomic Classic / Gradient Light), but nothing loaded that file
-// after the 2026-06 admin rebuild and it was deleted in 2026-08 — those palettes
-// now exist only in git history.
+// dark/atomic/light looks are gone (no admin palette file loads them) — they exist only
+// in git history.
 //
 // WHAT VISITORS SEE IS OPERATOR-CONTROLLED. The admin panel exposes:
 //   · default_theme        — the look applied first
@@ -129,8 +127,8 @@
       container = document.createElement('div');
       container.className = 'theme-switcher';
       // Minimal fixed PLACEMENT only, for pages that never had a switcher (login, etc.).
-      // Deliberately no surface: this used to add a rounded black pill + border, which is
-      // a hardcoded dark chrome that theme CSS cannot override and that looked like a
+      // Deliberately no surface: a rounded black pill + border would be
+      // a hardcoded dark chrome that theme CSS cannot override and would look like a
       // floating black blob on the light themes. The button inside carries all the
       // styling (.theme-cycle-btn), so it re-skins with the theme like everywhere else.
       container.style.cssText = 'position:fixed;top:20px;right:20px;z-index:9999;' +

@@ -216,7 +216,7 @@ class HashrateTracker {
   // SUM(gps × window_seconds) / totalWindowSeconds is the time-weighted average GPS across the
   // whole window (gaps count as zero), rewarding sustained mining rather than a peak burst.
   // ── §J12-1 ────────────────────────────────────────────────────────────────────────────────
-  // This used to aggregate the RAW hashrate_history table:
+  // Aggregating the RAW hashrate_history table directly is the trap:
   //
   //     WHERE recorded_at > ? GROUP BY grin_address
   //
@@ -782,7 +782,7 @@ class HashrateTracker {
   //   Counts are MAX, not AVG, on purpose: the hourly value is already "distinct miners active
   //   that hour", and averaging it across a day counts every idle hour as a zero — the live pool
   //   showed 2 miners for 3 hours of a 16-hour day and the Month/Year/All charts rounded
-  //   6/16 to 0 miners for that day while the Day chart showed 2 (2026-09-20). "Online" at a
+  //   6/16 to 0 miners for that day while the Day chart showed 2. "Online" at a
   //   coarser bucket means the busiest hour in it; the frontend labels it as the peak.
   //   worker_count is NULL for hours rolled up before the column existed (MAX of all-NULL is
   //   NULL) — the chart draws those as a gap, never as 0.
@@ -1048,21 +1048,28 @@ class HashrateTracker {
           giveaways: round9(s.giveaways)
         }));
 
-      // Payout-size histogram over the window (fixed GRIN buckets). Edges chosen for typical
-      // Grin payout magnitudes; the last bucket is open-ended.
-      const edges = [1, 5, 10, 25, 50, 100];
-      const labels = ['<1', '1–5', '5–10', '10–25', '25–50', '50–100', '≥100'];
+      // Payout-size histogram over the window (fixed GRIN buckets). Bands start at the default
+      // 25 GRIN min_withdrawal floor and the last one is open-ended. Binned on the GROSS amount
+      // withdrawn — the floor applies to that; the net (amount − fee_charged) would put every
+      // at-minimum payout at 24.96 and below the first band. A '<25' band is prepended only when
+      // something lands there (operator lowered min_withdrawal, legacy rows), so the bars always
+      // sum to the payout count instead of silently dropping rows.
+      const edges = [30, 40, 50, 75, 100, 250, 500];
+      const labels = ['25–30', '30–40', '40–50', '50–75', '75–100', '100–250', '250–500', '≥500'];
       const counts = new Array(labels.length).fill(0);
+      let under = 0;
       this.db.prepare(`
-        SELECT (amount - COALESCE(fee_charged, 0)) AS amount FROM withdrawals
+        SELECT amount FROM withdrawals
         WHERE status = 'confirmed' AND confirmed_at >= ? AND grin_address != 'pool_fee'
       `).all(cutoff).forEach(w => {
         const a = Number(w.amount) || 0;
+        if (a < 25) { under++; return; }
         let i = edges.findIndex(e => a < e);
         if (i === -1) i = labels.length - 1;
         counts[i]++;
       });
       const distribution = labels.map((label, i) => ({ label, count: counts[i] }));
+      if (under > 0) distribution.unshift({ label: '<25', count: under });
 
       // Lifetime totals for the transparency tiles (range-independent).
       const pay = this.db.prepare(`
@@ -1072,7 +1079,7 @@ class HashrateTracker {
         FROM withdrawals WHERE status = 'confirmed' AND grin_address != 'pool_fee'
       `).get();
       // The operator's own take, as actually sent out of the pool_fee bucket (published by
-      // operator decision 2026-10-05, beside — never inside — what miners were paid).
+      // operator decision, beside — never inside — what miners were paid).
       const opw = this.db.prepare(`
         SELECT COALESCE(SUM(amount), 0) AS s, COUNT(*) AS n
         FROM withdrawals WHERE status = 'confirmed' AND grin_address = 'pool_fee'

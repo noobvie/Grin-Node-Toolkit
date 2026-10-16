@@ -1,6 +1,6 @@
-// posts.html page script — moved out of the page's inline <script> (code-layout F4): byte-verbatim, then a second commit
-// turned the on*= attributes inside its markup STRINGS into data-action (the delegated wiring is at the end).
-// Classic script (no defer/module) loaded at the same position as the old block, after auth.js, api.js, admin-shell.js, vendor/quill.js and cms-editor.js, whose globals it uses (H14).
+// posts.html page script.
+// Event wiring is delegated (data-action) and sits at the end of the file.
+// Classic script (no defer/module) loaded after auth.js, api.js, admin-shell.js, vendor/quill.js and cms-editor.js, whose globals it uses.
 API.guardAdminPage();
 
 let _posts = [];
@@ -174,7 +174,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadPosts();
 });
 
-// ==== F4: event wiring — replaces the on*= attributes (inline handlers are blocked by a strict script-src) ====
+// ==== event wiring — replaces the on*= attributes (inline handlers are blocked by a strict script-src) ====
 document.addEventListener('click', function (e) {
   var el = e.target.closest && e.target.closest('[data-action]');
   if (!el) return;

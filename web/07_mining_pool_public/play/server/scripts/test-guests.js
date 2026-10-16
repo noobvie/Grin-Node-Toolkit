@@ -1,6 +1,6 @@
 'use strict';
 
-// Guest accounts (design §19.17.3/§19.17.4, D24–D26/D32, Part C5; threat notes #26–#29).
+// Guest accounts (design §19.17.3/§19.17.4, D24–D26/D32; threat notes #26–#29).
 //
 //   [a] the pieces: ids + tags, the proof-of-work (replay, expiry, another IP, forgery, the floor,
 //       a restart, the used-set bound, its cost), the scrypt cap, passwords
@@ -402,8 +402,8 @@ async function main() {
     const fs10 = [];
     for (let i = 0; i < 11; i++) fs10.push((await guestLogin(`Name${i}x`, 'guess', ipF)).status);
     ok('c. one IP failing 10 times (any names) is locked: 429', fs10.slice(0, 10).every((s) => s === 401) && fs10[10] === 429, fs10.join());
-    // R2-1: the budget must hold under a PARALLEL burst too. With peek-then-take-after-scrypt every
-    // request of a burst passed on the same token (R2 measured 60 of 60 evaluated against 20).
+    // The budget must hold under a PARALLEL burst too. With peek-then-take-after-scrypt every
+    // request of a burst passed on the same token (measured 60 of 60 evaluated against 20).
     await signup('Petra', 'a long random phrase');
     const burst = async (n, base) => Promise.all(Array.from({ length: n }, (_, i) => guestLogin('Petra', 'burst guess ' + base + i, `100.${68 + ((base + i) >> 8)}.${(base + i) & 255}.1`)));
     let rs = await burst(40, 0);
@@ -441,7 +441,7 @@ async function main() {
     for (let i = 0; i < 6; i++) st5.push((await post('/play/api/account/password', { current: 'guess ' + i + ' xxxxxx', next: 'another phrase here' }, { cookie: cW })).status);
     ok('d. a stolen cookie is not an unlimited guesser: 5 wrong current passwords, then 429', st5.slice(0, 5).every((s) => s === 401) && st5[5] === 429, st5.join());
     T += 7 * 3600 * 1000;    // past the account lockout ladder's first steps
-    // R2-1: the per-account lockout records a failure only after scrypt, so it must not be raced.
+    // The per-account lockout records a failure only after scrypt, so it must not be raced.
     const par = await Promise.all(Array.from({ length: 8 }, (_, i) =>
       post('/play/api/account/password', { current: 'parallel guess ' + i, next: 'another phrase here' }, { cookie: cW })));
     ok('d. R2-1: 8 PARALLEL wrong current passwords on one account — one is evaluated, the rest 429',

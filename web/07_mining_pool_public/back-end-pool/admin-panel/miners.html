@@ -74,9 +74,14 @@
     .mn-fact dd { margin: 0; font-size: .88rem; line-height: 1.5; }
     .mn-fact-wide { grid-column: 1 / -1; }
     .mn-sub { font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); margin: 0 0 .4rem; }
-    .mn-rigs-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); }
+    /* width:0 + min-width:100% = fill the expanded row WITHOUT adding to its intrinsic width.
+       Without it the ten nowrap rig columns set the min-content of the whole miners table, so
+       expanding one miner widened every row and the page scrolled sideways (120px at 1280). Now
+       only this inner box scrolls, and only when one rig's figures truly do not fit. */
+    .mn-rigs-wrap { overflow-x: auto; width: 0; min-width: 100%; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); }
     .mn-rigs { width: 100%; font-size: .82rem; }
     .mn-rigs th, .mn-rigs td { padding: .4rem .6rem; white-space: nowrap; }
+    .mn-rigs th { white-space: normal; vertical-align: bottom; }   /* headers wrap, as on every admin table */
     .mn-rig-name { display: inline-flex; align-items: center; gap: .4rem; font-family: var(--font-mono); }
     .mn-links { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-top: .9rem; }
     .mn-stale-note { font-size: .8rem; color: var(--warn-color); margin: 0 0 .6rem; }

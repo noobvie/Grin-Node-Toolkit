@@ -16,25 +16,18 @@
 #
 # Key = sub-script number. Every numbered sub-script sits on its own digit
 # (081→1, 082→2, 083→3, 084→4, 086→6, 089→9); un-numbered inline features fill
-# the rest (5, 7, 8). Re-sorted 2026-08-05 — Provider Access Watch was on key 7
-# and Backup on key 10, so neither key matched its script. Keeping that mapping
-# is why Service & Port Dashboard and Chain Sync Status were merged into one
-# "Node Status & Sync" screen: 10 rows do not fit 9 digits.
+# the rest (5, 7, 8). Ten rows do not fit 9 digits, which is why the port
+# dashboard and the chain-sync check are ONE "Node Status & Sync" screen.
 #
-# 2026-08-25 — 083 Host Optimization added. Adding a 10th row would have broken
-# the digit mapping again, so SSH Key Hardening (085) came OFF the top level and
-# is now reached from inside 083, whose remit (harden + tune this host) contains
-# it. That freed key 5 for Node Status & Sync, which vacated key 3 for 083.
-# TWO KEYS THEREFORE CHANGED HANDS: 3 was Node Status, 5 was SSH. Per the
-# repo-wide rule a reassigned key gets NO alias `case` arm — bash takes the
-# first match, so an alias would silently open the wrong product. The per-screen
-# banner is the mis-key safety net. 085 itself is unchanged and still numbered
-# 085; only its route into the menu moved.
+# SSH Key Hardening (085) is not a top-level row: it is reached from inside 083,
+# whose remit (harden + tune this host) contains it, so a 10th row never breaks
+# the digit mapping. Top 20 Bandwidth Consumers lives in 084 as its option 5 (it
+# parses nginx access logs, which is 084's remit).
 #
-# 2026-09-25 — 086 Diagnostics & Support Bundle added on key 6, per the digit
-# rule. Top 20 Bandwidth Consumers (inline, was key 6) moved into 084 Nginx
-# Extended Features as its option 5: it parses nginx access logs, which is
-# 084's remit. KEY 6 CHANGED HANDS, so again NO alias arm for the old meaning.
+# Keys 3, 5 and 6 changed hands (3 was Node Status, 5 was SSH, 6 was Top 20
+# Bandwidth). Per the repo-wide rule a reassigned key gets NO alias `case` arm —
+# bash takes the first match, so an alias would silently open the wrong product.
+# The per-screen banner is the mis-key safety net.
 # =============================================================================
 
 set -euo pipefail
@@ -50,8 +43,8 @@ source "$SCRIPT_DIR/lib/grin_node_control.sh"
 # secret path again — see _query_node_tip().
 source "$SCRIPT_DIR/lib/grin_node_secrets.sh"
 # ui_ask()/ui_ask_num() — value prompts that can be cancelled with `q` instead
-# of Ctrl+C. See the lib header: several prompts here used to treat a bare Enter
-# as "proceed with the default", so backing out USED to confirm the action.
+# of Ctrl+C. See the lib header: a prompt that treats a bare Enter as "proceed
+# with the default" makes backing out CONFIRM the action.
 source "$SCRIPT_DIR/lib/ui_shared_helpers.sh"
 
 # ─── GitHub self-update ───────────────────────────────────────────────────────
@@ -85,14 +78,14 @@ AUTO_CLEANUP_SCRIPT="/opt/grin/auto_cleanup.sh"
 AUTO_CLEANUP_CRON="/etc/cron.d/grin-auto-cleanup"
 AUTO_CLEANUP_RETENTION_DEFAULT=7
 # Rotation for the toolkit's continuous (fixed-name) logs — watchdogs, scheduler,
-# solo-backup, satellite. Service logs that already ship their own
+# solo-backup, and the legacy satellite log. Service logs that already ship their own
 # /etc/logrotate.d/grin-* (e.g. grin-pool.log) are deliberately NOT listed here.
 TOOLKIT_LOGROTATE="/etc/logrotate.d/grin-toolkit-logs"
 
 # ─── Press-enter helper ───────────────────────────────────────────────────────
 pause() { echo ""; echo "Press Enter to return to menu..."; read -r; }
 
-# _grin_session_name() now lives in lib/grin_node_control.sh (sourced near top).
+# _grin_session_name() lives in lib/grin_node_control.sh (sourced near top).
 
 # =============================================================================
 # 8.1  Remote Node Manager
@@ -150,8 +143,8 @@ menu_access_watch() {
 # =============================================================================
 # One read-only screen for "is my node alive, and is it caught up": the service
 # /port dashboard (ports, tmux, processes, binary versions) followed by the
-# chain tip of each net. Merged from the former 8.2 + 8.3 on 2026-08-05 so the
-# numbered sub-scripts could each keep their own menu digit.
+# chain tip of each net. One screen, so the numbered sub-scripts can each keep
+# their own menu digit.
 show_node_status_sync() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
@@ -221,9 +214,9 @@ _ns_service_dashboard() {
     # ── tmux sessions (BOTH tmux servers) ─────────────────────────────────────
     # Since the gtmux unification the node's tmux SERVER runs on the grin user's
     # per-user socket (/tmp/tmux-<uid>/default), which a plain root `tmux ls`
-    # cannot see. This panel used to call bare `tmux ls` and so reported "No
-    # grin* tmux sessions found" while the node was running perfectly — the
-    # classic false negative. Enumerate grin's socket first, then root's, and
+    # cannot see. A bare `tmux ls` here reports "No grin* tmux sessions found"
+    # while the node is running perfectly — the classic false negative.
+    # Enumerate grin's socket first, then root's, and
     # label each row so a root-socket leftover (the duplicate-node trap) is
     # visible rather than silently merged into the same list.
     echo ""
@@ -308,11 +301,11 @@ _ns_chain_sync() {
     # -------------------------------------------------------------------------
     # get_tip lives on the FOREIGN API, so it needs .foreign_api_secret — NOT
     # the owner .api_secret. Both are resolved from the LIVE node through
-    # grin_node_secret_path(). This used to hardcode "$HOME/.grin/<net>/api_secret",
-    # which is not a path the toolkit ever writes (secrets live in the node dir,
-    # the filename is dot-prefixed, and $HOME is /root here). The secret read
-    # back empty, grin answered 401 with an empty body, and the empty-body test
-    # below printed [OFFLINE] — so a perfectly healthy node rendered as dead.
+    # grin_node_secret_path(). Never hardcode "$HOME/.grin/<net>/api_secret": the
+    # toolkit never writes that path (secrets live in the node dir, the filename
+    # is dot-prefixed, and $HOME is /root here). The secret reads back empty,
+    # grin answers 401 with an empty body, and the empty-body test below prints
+    # [OFFLINE] — a perfectly healthy node rendered as dead.
     #
     # An empty reply is therefore NOT proof a node is down. Separate the cases
     # by HTTP status so an auth fault can never masquerade as an outage.
@@ -495,7 +488,7 @@ _auto_cleanup_enabled() { [[ -f "$AUTO_CLEANUP_CRON" ]]; }
 
 # Bound the toolkit's continuous fixed-name logs (watchdogs run every minute, so
 # they can't be per-run dated — they get rotated instead). copytruncate keeps
-# daemons that hold the file open (e.g. the satellite) writing to the same fd;
+# daemons that hold the file open writing to the same fd;
 # missingok skips any product that isn't installed. Picked up by the OS's daily
 # logrotate run — no extra cron needed.
 _install_toolkit_logrotate() {
@@ -1176,10 +1169,10 @@ self_update() {
         4) branch="publicpool" ;;
         5)
             # Cancel returns to the menu — it must NOT fall through to `main`.
-            # This prompt used to answer a bare Enter with "Defaulting to
-            # 'main'", so the instinctive way to back out of a mistyped choice
-            # silently armed a self-update from a branch the operator never
-            # picked. Backing out has to mean backing out.
+            # Never answer a bare Enter with "Defaulting to 'main'": the
+            # instinctive way to back out of a mistyped choice would silently
+            # arm a self-update from a branch the operator never picked.
+            # Backing out has to mean backing out.
             if ! ui_ask branch "  Branch name"; then
                 info "Update cancelled — nothing was downloaded."
                 pause; return
@@ -1328,7 +1321,7 @@ main() {
             # of returning here. `0)` is exempt — break must not be guarded.
             "1")   menu_node_monitor        || true ;;
             "2")   menu_access_watch        || true ;;
-            # Keys 3 and 5 changed hands on 2026-08-25 (see the header note):
+            # Keys 3 and 5 changed hands (see the header note):
             # 3 was Node Status, 5 was SSH Key Hardening. Deliberately NO alias
             # arm for either old meaning — bash takes the first matching arm, so
             # an alias here would silently open the wrong product instead of
@@ -1336,14 +1329,14 @@ main() {
             "3")   menu_host_optimization   || true ;;
             "4")   menu_nginx_extended      || true ;;
             "5")   show_node_status_sync    || true ;;
-            # Key 6 changed hands on 2026-09-25: it was Top 20 Bandwidth
-            # Consumers, now inside 084 (key 4 → 5). No alias arm, as above.
+            # Key 6 changed hands: it was Top 20 Bandwidth Consumers, now inside
+            # 084 (key 4 → 5). No alias arm, as above.
             "6")   menu_diagnostics         || true ;;
             "7")   clean_maintenance        || true ;;
             "8")   self_update              || true ;;
             "9")   backup                   || true ;;
-            # Retired key: Backup & Restore sat on 10 until 2026-08-05 and
-            # nothing else took 10, so it stays a silent alias for muscle memory.
+            # Retired key: Backup & Restore once sat on 10 and nothing else took
+            # 10, so it stays a silent alias for muscle memory.
             "10")  backup                   || true ;;
             "del") menu_full_cleanup        || true ;;
             "0")   break                    ;;

@@ -1,8 +1,8 @@
 // payout-methods.js — payout-rail registry for the account page.
 //
 // WHY THIS EXISTS
-// Every payout rail (Tor, Slatepack, Goblin/Nostr) used to leak into the account
-// page through the same four scattered places: a hardcoded line in
+// Every payout rail (Tor, Slatepack, Goblin/Nostr) would otherwise leak into the account
+// page through four scattered places: a hardcoded line in
 // syncPayMethod(), an entry in WD_METHOD, two or three entries in WD_STATUS, and a
 // special-case inside the pending-strip label. Adding or removing a rail meant hunting all
 // four down in a 1,800-line file, and missing one produced a silent wrong label rather than
@@ -49,7 +49,7 @@
   // Keys must be statuses the SCHEDULER actually writes. 'expired' was not one of them — the TTL
   // sweep writes 'slatepack_expired' — so that entry never matched and those rows rendered the raw
   // token. The label now also says what the miner most wants to know: the balance came back.
-  // retry_scheduled is LEGACY since 2026-09-26: a Tor payout is tried once and nothing re-sends it.
+  // retry_scheduled is LEGACY: a Tor payout is tried once and nothing re-sends it.
   // A row can still sit there until the scheduler's first pass after an upgrade migrates it
   // (confirmed / refunded / held), so it reads as being checked — never as "retrying".
   var BASE_STATUS = {
@@ -104,8 +104,8 @@
   }
 
   // ── Live pending strip ────────────────────────────────────────────────
-  // (The pool-wallet-short retry wording that lived here went with the retry ladder on 2026-09-26:
-  // nothing re-sends a payout now, so "will be retried automatically" was no longer true. A pool
+  // (No pool-wallet-short retry wording: nothing re-sends a payout, so "will be retried
+  // automatically" would be untrue. A pool
   // that cannot cover a Tor payout refunds it at once — fail_code pool_busy, worded by the page.)
   function pendingLabel(p) {
     if (!p) return '';

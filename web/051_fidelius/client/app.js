@@ -211,8 +211,8 @@ async function refreshDashboardPeers() {
     try {
         const d = await apiGet(nodeQ('/api/node/peers'));
         // get_connected_peers is Owner-only, so a wallet on a public node cannot
-        // have a peer list. That used to render as "Error: HTTP 403" — a healthy
-        // node described to the operator as broken.
+        // have a peer list. Rendering that as "Error: HTTP 403" would describe a healthy
+        // node to the operator as broken.
         if (d.available === false) {
             // reason = "not visible from here" (a fact about a public node).
             // error  = the local node genuinely failed to answer, which IS
@@ -1347,9 +1347,9 @@ q('recoverLockedBtn')?.addEventListener('click', recoverLockedOutputs);
 
 // Grey out AND actually disable a send panel.
 //
-// The greying used to be pure CSS (`pointer-events: none`), which meant the
-// panel could not receive :hover either — so a `:hover { pointer-events: auto }`
-// rule was added to get the explanatory tooltip back, and that handed every
+// Greying must not be pure CSS (`pointer-events: none`): then the
+// panel cannot receive :hover either, and a `:hover { pointer-events: auto }`
+// rule added to get the explanatory tooltip back hands every
 // control in the panel straight back to the user. A "disabled" Send button you
 // can click is worse than no greying at all: the server refuses it (503/409), so
 // nothing is lost, but the UI has told the user something untrue.
@@ -2442,7 +2442,7 @@ async function wizardStep5Init() {
 }
 
 // Wizard Tor step is read-only on Linux — Tor is managed by host systemd.
-// Install/start buttons were removed; users see status only.
+// There are no install/start buttons; users see status only.
 
 q('wNext5').addEventListener('click', () => {
     showWizardStep(5);

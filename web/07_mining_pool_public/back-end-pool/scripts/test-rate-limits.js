@@ -59,7 +59,7 @@ console.log('\n[1] §J12-4 — the exponential backoff is reachable and escalate
     Math.abs((v1.lockedUntil - Date.now()) - 30000) < 2000, JSON.stringify(v1));
 
   // Expire the lockout WITHOUT letting the request window drain — i.e. the client hammered
-  // straight back through it. This is the path that used to delete the record.
+  // straight back through it. This is the path that must not delete the record.
   v1.lockedUntil = Date.now() - 1;
   ok('§J12-4 the next refusal escalates to 60 s (count survived the expiry)',
     (() => {
@@ -311,8 +311,8 @@ console.log('\n[8] §J12-3 / -5 / -9 / -11 / -12 — the remaining resolution pa
       require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'http-util.js'), 'utf8')));   // P10: moved out of index.js
 
   // §J12-5 — the pool-wide admin exports must be capped, paged, throttled and streamed.
-  // Every pool-wide admin export, not a count: the operator revenue CSV (2026-10-05) made it three,
-  // and a fixed number would pass again the day a fourth one forgot the gate while one was removed.
+  // Every pool-wide admin export, not a count: the operator revenue CSV makes it three,
+  // and a fixed number would pass if a fourth forgot the gate while another export was dropped.
   {
     const exportRoutes = [...indexSrc.matchAll(/(?:app|router)\.get\('(\/api\/admin\/export\/[^']+)'/g)].map((m) => m[1]);
     const ungated = exportRoutes.filter((p) => {
@@ -335,7 +335,7 @@ console.log('\n[8] §J12-3 / -5 / -9 / -11 / -12 — the remaining resolution pa
   ok('§J12-9 /api/pool/topology holds a server-side memo',
     /TOPOLOGY_TTL_MS/.test(indexSrc) && /caches\.topology = \{ at: Date\.now\(\), body \}/.test(indexSrc));
 
-  // §J12-11 — every previously unbounded map now has a bound, and violations still does NOT
+  // §J12-11 — every map has a bound, and violations still does NOT
   // get size-evicted (that would lift a lockout).
   ok('§J12-11 the limiter request map has a hard cap',
     /MAX_TRACKED_BUCKETS/.test(rlSrc) && /EVICT_BATCH/.test(rlSrc));

@@ -23,7 +23,7 @@
 #
 # This scans for that property by reading each wallet's OWN grin-wallet.toml
 # rather than re-deriving four products' directory conventions — those move
-# (Drop 052→059, Fidelius rename), and a hardcoded path list silently reports
+# (product folders get renumbered), and a hardcoded path list silently reports
 # "no wallet" the day one of them does.
 
 # Read a scalar key out of a grin-wallet.toml. Strips quotes and whitespace.

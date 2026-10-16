@@ -40,8 +40,7 @@
 #                                — optional, default Y. Detected live (glob of
 #                                wallet_<net>_*), NOT via grin_wallets_location.conf:
 #                                Fidelius creates wallets from its web UI and never
-#                                writes that conf, which is why its seeds were missing
-#                                from every archive before 2026-08-05.
+#                                writes that conf, so Step 3 alone would miss its seeds.
 #   · /opt/grin/accio-{main,test}/gateway-state/  — Accio (052) suffix ↔ session
 #                                table + gateway.json — optional, default Y. NOT a cache:
 #                                the browser client mints a NEW address for any suffix the
@@ -286,9 +285,9 @@ run_backup() {
     fi
 
     # ── Step 4: Grin Drop data ───────────────────────────────────────────────
-    # The Drop DB moved OUT of the wallet dir (2026-07) into its own data dir
-    # /opt/grin/drop-<net>-data/ so a wallet re-install can't wipe it. Detect a
-    # deployment via the NEW db path, the legacy in-dir db, or the config file.
+    # The Drop DB lives OUT of the wallet dir, in its own data dir
+    # /opt/grin/drop-<net>-data/, so a wallet re-install can't wipe it. Detect a
+    # deployment via that db path, the legacy in-dir db, or the config file.
     local -a _drop_nets=()
     for _net in test main; do
         if [[ -f "/opt/grin/drop-${_net}-data/drop-$_net.db" \
@@ -485,7 +484,7 @@ run_backup() {
     fi
 
     # ── Step 5d: Fidelius web wallet (051) ───────────────────────────────────
-    # Fidelius holds SEEDS and was invisible to this script until 2026-08-05: it
+    # Fidelius holds SEEDS and is invisible to Step 3: it
     # registers wallets in its own /opt/grin/fidelius/wallets_info.json and never
     # writes grin_wallets_location.conf, which is the only thing Step 3 reads. So
     # detect it directly. Its wallets are created from the WEB UI at any time, so
@@ -1162,7 +1161,7 @@ run_restore() {
     # replacing it, and started again only if it was running.
     # Perms are re-asserted, not trusted from the archive: 700 on wallet dirs,
     # 600 on the registry and the two API secrets. server.js runs as root
-    # (design D6), so ownership stays root — do NOT chown to grin here, unlike
+    # (script051_design.md D6), so ownership stays root — do NOT chown to grin here, unlike
     # /opt/grin/wallet, or the Node process loses its own wallets.
     if [[ -d "$extract_dir/opt/grin/fidelius" ]]; then
         local _ww_was_running=0
@@ -1307,7 +1306,7 @@ run_restore() {
             chown -R grin:grin "$_drop_dest" 2>/dev/null || true
         fi
 
-        # DB → its own data dir (post-2026-07 layout: survives wallet
+        # DB → its own data dir (survives wallet
         # re-install). Accept either archive layout: new (drop-<net>-data/)
         # or legacy (db inside the wallet dir) — never land it back in the
         # wallet dir, or the app restarts with a fresh empty DB.

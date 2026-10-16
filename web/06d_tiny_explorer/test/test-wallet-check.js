@@ -89,10 +89,10 @@ ok('sha3-256 of the empty string is the published NIST vector', () => {
 console.log('\n[2] onion derivation — browser port vs lib/wallet-tor.js');
 
 // Addresses, not raw keys: the pair has to agree end-to-end, bech32 included.
-// Both keys come from the R4 payment-proof fixture, so a single real-wallet
+// Both keys come from the payment-proof fixture, so a single real-wallet
 // artefact ties this file to test-payment-proof.js. The `grin1…` pair is the
 // same two keys re-encoded under the mainnet HRP — which is legitimate here
-// precisely because R4 row 6 established the HRP is not part of the key.
+// precisely because negative-control row 6 of test-payment-proof.js established the HRP is not part of the key.
 const ADDRESSES = [
   'grin1xtxavwfgs48ckf3gk8wwgcndmn0nt4tvkl8a7ltyejjcy2mc6nfs6ak9cv',
   'grin10qlk22rxjap2ny8qltc2tl996kenxr3hhwuu6hrzs6tdq08yaqgql0xgkw',

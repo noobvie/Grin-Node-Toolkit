@@ -18,8 +18,8 @@ class RateLimiter {
     this.violations = new Map();    // `<type>|<ip>` → violation count + lockout time
     this.cleanupInterval = null;
 
-    // Default limits (requests per minute). NOTE: the values below carry the 2026-06
-    // ×20 "loosen now" bump (see the assignment); the rationale numbers in this comment
+    // Default limits (requests per minute). NOTE: the values below carry a ×20 "loosen now"
+    // bump (see the assignment); the rationale numbers in this comment
     // are the PRE-bump baselines that explain why each bucket exists.
     // `auth` covers POST login / register / 2FA. It is intentionally low (baseline 10/min)
     // to blunt password brute force, but must still allow a human to fumble the form a few
@@ -32,17 +32,16 @@ class RateLimiter {
     // to /login), which is why it was raised to 120/min, then ×20. The admin surface is already
     // gated by JWT + login captcha + per-account lockout + IP auto-ban + (optional) the nginx
     // admin_allowlist, so this limiter is DoS-padding, not the brute-force control.
-    // NOTE: all four buckets were multiplied ×20 in 2026-06 ("loosen now, tighten
+    // NOTE: all four buckets are multiplied ×20 ("loosen now, tighten
     // later" testing posture) so request throttling never breaks normal browsing or
     // admin polling. These are DoS-padding only — the real brute-force controls are
     // JWT + login captcha + per-account lockout + IP auto-ban (in index.js), which were
     // deliberately NOT loosened. Dial these back down when you tighten security.
     //
-    // There was an `api: 600` bucket here until 2026-09-02. It was defined, documented, and was
-    // middleware()'s default argument — and a sweep of every middleware()/peek()/consume() call
-    // in index.js found ZERO uses of it (audit §J12-10). A bucket nobody references is a number
-    // the next reviewer assumes covers something. Removed; middleware()'s default moved to
-    // `public`. If a genuinely separate API tier is ever wanted, add it AND attach it.
+    // No `api` bucket: one was defined, documented and middleware()'s default argument, yet no
+    // middleware()/peek()/consume() call in index.js used it (audit §J12-10). A bucket nobody
+    // references is a number the next reviewer assumes covers something. middleware()'s default
+    // is `public`. If a genuinely separate API tier is ever wanted, add it AND attach it.
     this.limits = {
       public: 1200,
       auth: 200,
@@ -238,7 +237,7 @@ class RateLimiter {
       }
       // Lockout EXPIRED — but the record is deliberately kept, with its `count` intact.
       //
-      // This used to `delete` it here, which made the exponential backoff below unreachable
+      // Deleting it here makes the exponential backoff below unreachable
       // code (audit §J12-4): the only path that reads `violations.get(key)?.count` is the
       // escalation line, and by the time it ran the record had always just been removed — so
       // `count` was always 1, every lockout was 30 s, and the documented 30→60→120 ladder and
@@ -256,7 +255,7 @@ class RateLimiter {
     // Get requests for this bucket in current window
     if (!this.requests.has(key)) {
       // Bound the map before adding a NEW key (audit §J12-11). One entry per distinct source IP
-      // per bucket type, swept only every 5 minutes and previously with no cap at all — so a
+      // per bucket type, swept only every 5 minutes and with no cap of its own — so a
       // distributed flood grew it unchecked between sweeps, while getStatus(), getViolations()
       // and resetIp() each walk it end to end.
       //
@@ -405,7 +404,7 @@ class RateLimiter {
    * Uses Express's req.ip, which — with `app.set('trust proxy', 'loopback')` in index.js —
    * resolves to the real client IP from X-Forwarded-For for requests proxied by the local
    * nginx, while a direct off-box hit keeps its real socket IP. Reading the raw
-   * x-forwarded-for header here (as before) let a client rotate forged IPs and evade
+   * x-forwarded-for header here would let a client rotate forged IPs and evade
    * per-IP throttling/lockout.
    */
   getClientIp(req) {

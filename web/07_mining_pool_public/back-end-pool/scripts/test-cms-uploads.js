@@ -53,7 +53,7 @@ ok('GIF87a signature → gif',          (detectImage(GIF7, MEDIA_EXTRA) || {}).e
 ok('real SVG → svg/image/svg+xml',    (detectImage(SVG,  MEDIA_EXTRA) || {}).mime === 'image/svg+xml');
 ok('SVG behind an XML prolog → svg',  (detectImage(SVGX, MEDIA_EXTRA) || {}).ext === 'svg');
 
-// The finding itself: these all used to be written to disk with an extension the CLIENT chose.
+// The finding itself: each of these must never be written to disk under an extension the CLIENT chose.
 ok('§J10-1 HTML+script is not an image', detectImage(HTML, MEDIA_EXTRA) === null);
 ok('§J10-1 plain text is not an image',  detectImage(TEXT, MEDIA_EXTRA) === null);
 ok('§J10-1 a PDF is not an image',       detectImage(PDF,  MEDIA_EXTRA) === null);

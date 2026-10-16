@@ -8,7 +8,7 @@ const { getDb } = require('./db');
 // secureAdmin-gated; the public read endpoint returns only active, in-window ads.
 //
 // The third kind, `code` (a raw ad-network HTML/JS snippet the public renderer re-created as
-// executing <script> nodes), was DELETED in design §19.17 D22 (Option B, Part C1). One origin
+// executing <script> nodes), is DELETED (script07_design_games.md §19.17 D22). One origin
 // is one trust zone: with a sign-in form on every page, a snippet on any page can read a
 // password typed on any other and ride its session. So:
 //   · create/update refuse ad_type 'code' with a message that says why;
@@ -77,7 +77,7 @@ class AdsManager {
     if (!partial || data.link_url !== undefined)  out.link_url = checkUrl('link_url', str(data.link_url));
     if (!partial || data.alt_text !== undefined)  out.alt_text = str(data.alt_text);
     // html_code is deliberately NOT read: a body that still carries it (an old admin page in a
-    // cached tab) stores nothing (design §19.17 D22).
+    // cached tab) stores nothing (script07_design_games.md §19.17 D22).
     // Native text-ad fields (used when ad_type === 'text').
     if (!partial || data.headline !== undefined)  out.headline = str(data.headline);
     if (!partial || data.body_text !== undefined) out.body_text = str(data.body_text);
@@ -205,7 +205,7 @@ class AdsManager {
   // the numbers mean anything (`_counted[id]` in public_html/js/ads.js) runs in the
   // ATTACKER'S OWN BROWSER. Do not add a fix here that implies otherwise.
   //
-  // What IS enforced (the cheap half of §J10-3, applied 2026-09-03): the UPDATE carries the
+  // What IS enforced (the cheap half of §J10-3): the UPDATE carries the
   // same serving predicate as publicByPlacement(), so an ad that the public site is not
   // showing — switched off, not started yet, or expired — cannot accrue events at all. That
   // does not stop a determined client inflating a LIVE ad; it stops the counters of a
@@ -444,7 +444,7 @@ class AdsManager {
         body_text: 'No accounts · no emails · Tor payouts · your address is your account',
         cta_label: 'Start anonymously →' },
 
-      // v4 — the in-content band now defaults to ONE responsive TEXT banner instead of two
+      // v4 — the in-content band defaults to ONE responsive TEXT banner, not two
       // 300×250 squares. A text card reflows and stays readable at every width (a fixed square
       // marooned in the wide band looked imbalanced, and an image strip goes unreadable on a
       // phone), and at ~1 line tall it reclaims vertical space in the main pool column.

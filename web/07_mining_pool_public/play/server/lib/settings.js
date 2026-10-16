@@ -12,7 +12,7 @@
 // "false" is a string, and a string is never a boolean here (memory
 // project_config_loader_type_traps).
 //
-// Writes come from the admin proxy (Part 9); Part 4 only reads. A change applies from the
+// Writes come from the admin proxy; this module only reads. A change applies from the
 // next read — the 30 s memo bounds how stale a read can be — and never recomputes the past
 // (§19.6).
 
@@ -29,18 +29,18 @@ const SPEC = Object.freeze({
   // sessions.js, applied on top, so lowering this setting can never remove it.
   chat_min_proof_age:     { type: 'int', def: DAY, min: 0, max: 30 * DAY },
   chat_requires_password: { type: 'bool', def: false },
-  // §19.6 spending + points (Part 5). 0 makes bot games free — and a free game pays no
-  // points (matches.js pointsFor, §19.15 Part 5).
+  // §19.6 spending + points. 0 makes bot games free — and a free game pays no
+  // points (matches.js pointsFor, script07_implementation_games.md).
   bot_play_cost:          { type: 'int', def: 1,   min: 0, max: 10 },
   points_daily_cap:       { type: 'int', def: 100, min: 0, max: 100000 },
-  // §19.6 / §19.8 PvP (Part 10). Each side pays pvp_play_cost (the creator at create, the
+  // §19.6 / §19.8 PvP. Each side pays pvp_play_cost (the creator at create, the
   // acceptor at accept); 0 makes PvP free, and a free match pays no points (as a free bot
   // game). pair_rated_daily 0 = no PvP match is rated (no ratings move, no PvP points).
   pvp_play_cost:          { type: 'int', def: 1,   min: 0, max: 10 },
   pvp_active_max:         { type: 'int', def: 10,  min: 1, max: 50 },
   pvp_open_max:           { type: 'int', def: 5,   min: 1, max: 20 },
   pair_rated_daily:       { type: 'int', def: 3,   min: 0, max: 20 },
-  // §19.10 chat (Part 8). The fixed floors — 5 s between one address's posts, 60 posts an
+  // §19.10 chat. The fixed floors — 5 s between one address's posts, 60 posts an
   // hour per IP, the 24 h cap on a moderator's mute — are constants in chat.js, not here.
   chat_min_minutes:       { type: 'int', def: 60,  min: 0, max: 10080 },   // 0 = no mining gate
   chat_recent_days:       { type: 'int', def: 7,   min: 1, max: 30 },
@@ -53,12 +53,12 @@ const SPEC = Object.freeze({
   // D21: a moderator acts only from a session opened with the rig PASSWORD proof (an IP
   // proof can be a CGNAT neighbour, §19.13 #7), unless the operator turns this off.
   mod_requires_password:  { type: 'bool', def: true },
-  // §19.17.5 (Part C3) nicknames, checked automatically and live at once. Off = no new names
+  // §19.17.5 nicknames, checked automatically and live at once. Off = no new names
   // AND every surface shows the bare mask again (nothing is deleted; on restores the live names).
   nicknames_enabled:      { type: 'bool', def: true },
   // One own change per this many days (0 = no cooldown). Removing your own name is always allowed.
   nickname_change_days:   { type: 'int', def: 7,   min: 0, max: 90 },
-  // §19.17.3/§19.17.4 (Part C5) guest accounts. Sign-up's switch is smaller than the whole games
+  // §19.17.3/§19.17.4 guest accounts. Sign-up's switch is smaller than the whole games
   // mode: under a sign-up flood the operator closes the door and existing guests keep signing in.
   guest_signup_enabled:   { type: 'bool', def: true },
   guest_signups_per_ip:   { type: 'int', def: 3,   min: 1, max: 10 },        // per /24 (/48) per 24 h

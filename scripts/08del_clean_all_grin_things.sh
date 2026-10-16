@@ -619,9 +619,9 @@ step_remove_install_dirs() {
         # Script 091 (Floonet relay) follows UPSTREAM's layout, which has no
         # "grin" anywhere in it — the /opt scan below would never see these.
         "/usr/local/bin/floonet-rs"
-        # 091 stopped offering the Nym mixnet exit on 2026-08-07 (upstream
-        # archived it), but a box set up before then still has the binary —
-        # keep removing it or full cleanup would leave it behind forever.
+        # 091 no longer offers the Nym mixnet exit (upstream archived it), but
+        # an older box still has the binary — keep removing it or full cleanup
+        # would leave it behind forever.
         "/usr/local/bin/floonet-mixexit"
         "/etc/floonet-rs"
         "/var/lib/floonet-rs"
@@ -864,8 +864,8 @@ step_remove_tor_hidden_services() {
     fi
     # Any /var/lib/tor/grin-* directory, not just grin-{mainnet,testnet}: other
     # products name their own hidden services (script 093 uses
-    # grin-transporter-<net>), and those were previously left running with a
-    # live .onion pointing at a deleted service.
+    # grin-transporter-<net>); leaving those running keeps a live .onion
+    # pointing at a deleted service.
     local hs
     while IFS= read -r hs; do
         [[ -n "$hs" ]] || continue

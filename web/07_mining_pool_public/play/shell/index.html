@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- The /play/ shell (design §19, Part 6). Served by nginx from /var/www/grin-play[-testnet]
+<!-- The /play/ shell (design §19). Served by nginx from /var/www/grin-play[-testnet]
      under a CSP with script-src 'self' and NO 'unsafe-inline': this file must never carry an
      inline <script> or an on* attribute. Every script is a file.
 
@@ -161,7 +161,7 @@
 
         <!-- ═══ Signed in: the account strip ═══ -->
         <section id="play-account" hidden aria-label="Your games account">
-            <!-- "Tickets" is the VISIBLE word (operator, C0); the API, the ledger and the admin pages
+            <!-- "Tickets" is the VISIBLE word (the operator's choice); the API, the ledger and the admin pages
                  keep the internal name `plays`. -->
             <div class="placard figures">
                 <span class="tone-ok"><i>Tickets</i><b id="acct-plays">—</b></span>
@@ -301,7 +301,7 @@
                     </div>
                 </section>
 
-                <!-- ═══ Play a person ═══ (design §19.8, Part 10) Correspondence pace: days per move,
+                <!-- ═══ Play a person ═══ (design §19.8) Correspondence pace: days per move,
                      no need to be online together. play-lobby.js drives it; names are masks. -->
                 <section class="panel" id="lobby-panel">
                     <span class="screws"></span>
@@ -423,7 +423,7 @@
             </div>
         </section>
 
-        <!-- ═══ Chat ═══ (design §19.10, Part 9) Public to read while the games are open and the
+        <!-- ═══ Chat ═══ (design §19.10) Public to read while the games are open and the
              pool's chat switch is on; posting needs a chat-capable session. play-chat.js drives
              it. Every message is written with textContent — a body is plain text, a link in it
              is inert text, and the only badges (Operator, Mod) come from the server's role. -->

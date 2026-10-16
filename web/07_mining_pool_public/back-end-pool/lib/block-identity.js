@@ -7,9 +7,9 @@
 //   · orphan-detector.js  — the maturity/orphan decision (fails DESTRUCTIVE: orphans the
 //                           block and reverses every miner's credit for it)
 //
-// They used to carry two different comparisons — `String(a) !== String(b)` in one and a bare
-// `===` in the other — and only one of them was destructive on a false mismatch. Audit §J5-3.
-// Never re-implement this inline; add to it here.
+// Two inline copies drift apart (`String(a) !== String(b)` in one, a bare `===` in the other)
+// while only one reader is destructive on a false mismatch — audit §J5-3. Never re-implement
+// this inline; add to it here.
 //
 // ── Why the nonce cannot be compared exactly ───────────────────────────────────────────
 // grin-node.js reads the node's reply with `response.json()`, i.e. JSON.parse, which rounds

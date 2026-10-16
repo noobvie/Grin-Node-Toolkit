@@ -1,8 +1,7 @@
-// login.js — the login page's own script. Until 2026-10 (pool code-layout refactor,
-// part F2) this was login.html's inline <script> block; it moved out byte-for-byte so
-// a strict script-src can drop 'unsafe-inline'. The block's indent is kept.
+// login.js — the login page's own script, external (not inline) so a strict script-src needs no 'unsafe-inline'.
+// The original indent is kept.
 //
-// The page loads it as a CLASSIC script at the block's old position. Never add defer / async /
+// The page loads it as a CLASSIC script at its original position. Never add defer / async /
 // type="module": the order and the shared global scope are what this code was written against.
     function showError(msg) {
       const el = document.getElementById('error-msg');
@@ -245,9 +244,9 @@
     checkIfLoggedIn();
     loadCaptcha('login');
 
-// ==== F2: event wiring — replaces the inline on*= attributes this page used to carry (strict
-// script-src blocks them). One delegated listener per event type, keyed on data-action; each
-// action calls the SAME function with the SAME arguments the old attribute did (`event` → e).
+// ==== Event wiring — delegated listeners stand in for inline on*= attributes (strict
+// script-src blocks them). One listener per event type, keyed on data-action; each
+// action calls the page function with the arguments the attribute would have passed (`event` → e).
 document.addEventListener('click', function (e) {
   var el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
   if (!el) return;

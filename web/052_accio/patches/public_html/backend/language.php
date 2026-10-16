@@ -46,7 +46,7 @@
 	//
 	// This map is deliberately PHRASES, never the bare token "MWC" — that
 	// token is the MWC ticker and a protocol discriminator, and rewriting it
-	// is the exact hazard docs/generated/script052_design.md §"Naming policy"
+	// is the exact hazard docs/reference/script052_design.md §"Naming policy"
 	// layer 3 forbids. Layer 3 is deleted in S9+, never renamed.
 	const BRAND_SUBSTITUTIONS = [
 		"MWC Wallet" => "Accio",

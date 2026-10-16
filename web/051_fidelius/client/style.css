@@ -779,8 +779,8 @@ html[data-theme="light"] .logo-breathe {
 .send-method-status.error   { color: var(--error); }
 /* Greying only. The controls inside are disabled in JS (setPanelEnabled), NOT
    by pointer-events here: pointer-events:none also kills :hover, which is why
-   this used to carry a `:hover { pointer-events: auto }` escape hatch — and that
-   handed the whole form, Send button included, back to the user. Do not
+   a `:hover { pointer-events: auto }` escape hatch here would
+   hand the whole form, Send button included, back to the user. Do not
    reintroduce pointer-events on this class. */
 .send-method-disabled {
     opacity: 0.55;

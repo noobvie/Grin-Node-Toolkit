@@ -1,6 +1,6 @@
 'use strict';
 
-// Part 4 (design §19.3, §19.5, §19.6): the pool-link client, the limiters, the plays/points
+// Login and plays (design §19.3, §19.5, §19.6): the pool-link client, the limiters, the plays/points
 // ledger, the activity sync, login + sessions + /me, the CSRF layers and the mode gate.
 //
 // The pool is a STUB: an http server on 127.0.0.1:0 for the real pool-link client ([a]), and
@@ -553,7 +553,7 @@ async function main() {
     && res.json.plays === 0 && res.json.points === 0 && res.json.sessions === 1, res.text);
   ok('e. /me mask = the pool\'s 9…4', maskAddr(U) === `${U.slice(0, 9)}…${U.slice(-4)}`);
   modeState.chat_enabled = true;
-  // These tests isolate the PROOF gate (D9); the recent-mining gate (§19.10, Part 8) has its
+  // These tests isolate the PROOF gate (D9); the recent-mining gate (§19.10) has its
   // own tests in test-chat.js.
   app.services.settings.set('chat_min_minutes', 0, 'test');
   res = await get('/play/api/me', { cookie: c1 });

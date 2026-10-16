@@ -2,7 +2,7 @@
 # lib/nostr_relay_deploy.sh — shared "Nostr relay behind nginx over wss://" lib
 # =============================================================================
 #
-# PURPOSE (design: docs/generated/script09_design.md PART C.1)
+# PURPOSE (design: docs/reference/script09_design.md PART C.1)
 #   ONE primitive for the only genuinely fiddly piece both the Floonet relay
 #   (091) and GoblinPay's bundled relay need:
 #

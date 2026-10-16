@@ -15,8 +15,8 @@
 // not being able to check while the button sits directly below the sentence.
 // Nobody would catch it by eye.
 //
-// Since the probe became ON by default for a new install (2026-09-10) that
-// failure got MORE likely, not less: the swap now has to fire on most boxes,
+// With the probe ON by default for a new install that
+// failure is MORE likely, not less: the swap now has to fire on most boxes,
 // and the people best placed to notice it silently not firing are the ones with
 // the probe off, whose page is correct either way. So the baseline copy is now
 // held to a two-sided rule — it may not promise the probe (the no-script state

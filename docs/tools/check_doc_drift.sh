@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# check_doc_drift.sh — find repo file paths named in docs/generated/*.md that no
+# check_doc_drift.sh — find repo file paths named in docs/reference/*.md that no
 # longer exist (or never existed).
 #
 # The failure mode this catches: a doc names scripts/lib/07_lib_satellite.sh in a
@@ -9,7 +9,7 @@
 # reads as verified fact.
 #
 # Not in scripts/ — that namespace is the numbered VPS toolkit and every file
-# there maps to a script number. Not in docs/generated/ — that is the reference
+# there maps to a script number. Not in docs/reference/ — that is the reference
 # library, prose only. This is a repo tool, so it lives in docs/tools/.
 #
 # Usage:
@@ -40,7 +40,7 @@ done
 FULL_RUN=0
 if [[ ${#DOCS[@]} -eq 0 ]]; then
   FULL_RUN=1
-  while IFS= read -r d; do DOCS+=("$d"); done < <(ls docs/generated/*.md 2>/dev/null | sort)
+  while IFS= read -r d; do DOCS+=("$d"); done < <(ls docs/reference/*.md 2>/dev/null | sort)
 fi
 [[ ${#DOCS[@]} -gt 0 ]] || { echo "no docs to check" >&2; exit 2; }
 
@@ -348,8 +348,8 @@ done
 [[ $stale -eq 0 ]] || printf '\n'
 
 if [[ $n_miss -gt 0 ]]; then
-  printf 'FAIL — %s path(s) named in docs/generated/ do not exist.\n' "$n_miss"
+  printf 'FAIL — %s path(s) named in docs/reference/ do not exist.\n' "$n_miss"
   exit 1
 fi
-printf 'OK — every path named in docs/generated/ resolves or is explained.\n'
+printf 'OK — every path named in docs/reference/ resolves or is explained.\n'
 exit 0

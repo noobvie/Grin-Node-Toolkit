@@ -1,7 +1,7 @@
 # =============================================================================
 # lib/grin_node_events.sh — node event recorder (READ-ONLY observer)
 # =============================================================================
-# Design: docs/generated/script086_design.md §8. Operator UI: 086 Diagnostics
+# Design: docs/reference/script086_design.md §8. Operator UI: 086 Diagnostics
 # (hub 08 key 6). Records each down/up transition per network, keeps planned
 # stops, boots and node starts out of the outage count, and keeps a ledger and
 # a status file that the pool (as grinpool) can read.
@@ -10,7 +10,7 @@
 #   gne_remove             worker + units + logrotate; keeps state and conf
 #   gne_status             timer state + per-net summary + last ledger lines
 #   gne_decide             THE state machine — pure, no I/O (§8.4)
-#   gne_classify           evidence → failure class refinement (§8.6, Part 3)
+#   gne_classify           evidence → failure class refinement (§8.6)
 #   gne_import_alert_channels  copy 082's channel keys into recorder.conf (§8.10)
 #   gne_set_channel / gne_set_num  validated recorder.conf writes (086's menu)
 #
@@ -18,7 +18,7 @@
 #   (generated from a QUOTED heredoc; sources only the /opt/grin/lib/ copies)
 #   `capture <net> watchdog_restart <reason>` is the watchdog's one hook (§8.9):
 #   it records restart_by_watchdog and saves the pane BEFORE the restart kills it.
-#   Alerts (§8.10, Part 4): `check` decides and claims them under the lock and
+#   Alerts (§8.10): `check` decides and claims them under the lock and
 #   delivers them AFTER it, through lib/grin_alert_send.sh (shared with 082), so a
 #   slow channel never makes the watchdog's capture give up on the lock.
 #
@@ -49,11 +49,11 @@ GNE_SIG_LIB="${GNE_SIG_LIB:-$_GNE_LIB_DIR/grin_log_signatures.sh}"
 GNE_ALERT_LIB="${GNE_ALERT_LIB:-$_GNE_LIB_DIR/grin_alert_send.sh}"
 # shellcheck source=grin_node_control.sh
 source "$GNE_CONTROL_LIB"
-# 086's signature table (data only). Optional: an install from before Part 3
+# 086's signature table (data only). Optional: an older install
 # has no copy, and the bundle then just lacks its signature-count section.
 # shellcheck source=grin_log_signatures.sh
 if [[ -r "$GNE_SIG_LIB" ]]; then source "$GNE_SIG_LIB"; fi
-# Alert delivery (Part 4). Optional the same way: without it, alerts are off
+# Alert delivery. Optional the same way: without it, alerts are off
 # and `check` says so once per conf edit; recording is unaffected.
 # shellcheck source=grin_alert_send.sh
 if [[ -r "$GNE_ALERT_LIB" ]]; then source "$GNE_ALERT_LIB"; fi
@@ -89,7 +89,7 @@ GNE_LOG_MAX_BACK=21600    # never read more than 6 h of node log for one bundle
 # CONFIG — KEY=VALUE, allow-listed, range-checked, never sourced (§8.11)
 # =============================================================================
 # "KEY default min max" — numeric keys. ENABLED_NETS and the alert channel keys
-# (_GNE_CHAN_KEYS, 082's names, Part 4) are handled separately.
+# (_GNE_CHAN_KEYS, 082's names) are handled separately.
 _GNE_NUM_KEYS=(
     "DOWN_STRIKES 2 1 10"
     "START_TIMEOUT_MIN 30 5 240"
@@ -1021,12 +1021,12 @@ _gne_write_status() { # <file> <json>
 }
 
 # =============================================================================
-# EVIDENCE BUNDLES + CLASSIFICATION (Part 3 — §8.6 refinement, §8.9 bundles)
+# EVIDENCE BUNDLES + CLASSIFICATION (§8.6 refinement, §8.9 bundles)
 # =============================================================================
 # A bundle is <net>/evidence/<YYYYmmddTHHMMSSZ>_<class>/ (0700 root, files 0600).
-# It is RAW: only root reads it, and masking happens at export (Part 5), never
+# It is RAW: only root reads it, and masking happens at export, never
 # in place. Nothing from it reaches the ledger or status.json except its dir
-# NAME. The one matched signature line is kept in match.txt for Part 4's alert.
+# NAME. The one matched signature line is kept in match.txt for the alert.
 
 _GNE_BUNDLE_RE='^[0-9]{8}T[0-9]{6}Z_[a-z_]+(-[0-9])?$'
 
@@ -1571,7 +1571,7 @@ _gne_refine_events() {
 }
 
 # =============================================================================
-# ALERTS (Part 4 — §8.10)
+# ALERTS (§8.10)
 # =============================================================================
 # gne_check_net DECIDES each alert and CLAIMS its debounce key in status.json's
 # alerted_for, under the lock; gne_worker_check DELIVERS after releasing it.
@@ -1857,7 +1857,7 @@ gne_check_net() {
         gv_key="${vk%%$'\t'*}"; gv="${vk#*$'\t'}"
     fi
 
-    # ── evidence for a NEW outage (Part 3, §8.9) ──
+    # ── evidence for a NEW outage (§8.9) ──
     # Captured BEFORE the ledger lines are written, so the `down` line carries
     # the refined class (class_initial keeps the observation-only one) and the
     # bundle name. The check is not under the watchdog's 20 s budget.
@@ -1920,7 +1920,7 @@ gne_check_net() {
         if [[ "${mnow:0:512}" == "$mline" ]]; then rm -f "$mfile" 2>/dev/null || true; fi
     fi
 
-    # ── alerts (Part 4, §8.10): decide and claim here; delivered after the lock ──
+    # ── alerts (§8.10): decide and claim here; delivered after the lock ──
     local alerted='[]' re='"alerted_for":(\[[^]]*\])'
     [[ "$prev" =~ $re ]] && alerted="${BASH_REMATCH[1]}"
     if (( _GNE_ALERTS_ON )); then

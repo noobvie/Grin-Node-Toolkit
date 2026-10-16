@@ -42,7 +42,7 @@ Free Grin Coin Portal: https://drop.grin.money/
 
 Solo Grin Mining Pool: https://solo.grin.money (user/pass disabled for easy viewing)
 
-Public Grin Mining Pool: https://grinium.com/ (in development)
+Public Grin Mining Pool: https://grinium.com/ 
 
 Grin Nostr Relay (Floonet) for Goblin wallet: https://relay.grin.money/
 
@@ -138,7 +138,7 @@ Grin Node Toolkit
 > Two levels on purpose. Each hub prints its own sub-menu with live status, and
 > **the menu key is not the script number** — keys get reassigned as products are
 > added, so a full key-by-key tree here would go stale the moment one moves. What
-> the numbers mean is stable; see **Features** below and `docs/generated/`.
+> the numbers mean is stable; see **Features** below and `docs/reference/`.
 
 ---
 
@@ -171,7 +171,7 @@ A **hub launcher** showing live status of each self-contained wallet service:
 - **059 Grin Drop** — GRIN giveaway + donation portal (**Node/Express + `node:sqlite`**); rate-limited 3-step slatepack claims and/or a donation address + QR, modes independently toggleable.
 - **05C CMD Wallet Quick Setup** — built into the hub: downloads the `grin-wallet` binary, runs `init`/recover, patches the toml and starts a listener (CLI / testing).
 
-- **052 Accio** — the public web wallet: **self-custodial**, keys generated and kept in the visitor's **browser tab**, so the server holds no seed (the opposite of 051). **Built 2026-08-09 → 2026-08-10 but never yet run on a server** — `scripts/052_grin_accio.sh` is complete (build, gateway, nginx/SSL/onion, offline standalone artefact) and hub key `2` opens it, but no deployment, send or receive has been performed on a VPS yet. Design in [script052_design.md](docs/generated/script052_design.md).
+- **052 Accio** — the public web wallet: **self-custodial**, keys generated and kept in the visitor's **browser tab**, so the server holds no seed (the opposite of 051). **Built 2026-08-09 → 2026-08-10 but never yet run on a server** — `scripts/052_grin_accio.sh` is complete (build, gateway, nginx/SSL/onion, offline standalone artefact) and hub key `2` opens it, but no deployment, send or receive has been performed on a VPS yet. Design in [script052_design.md](docs/reference/script052_design.md).
 
 > *Planned — each owns a menu key (which prints what the slot is for and installs nothing), and has no script file yet.* **Payment Pro** (Shopify / custom-API processor) and **GoblinPay** (receive-only merchant till) have **no number** — they get the next free one from `054–058` on the day their build starts. Freeing 052 for a wallet next to 051 is what the Grin Drop `052 → 059` migration bought; Accio took it when its build started, which is the numbering rule working as designed.
 
@@ -200,7 +200,7 @@ Menu keys mirror the sub-script numbers — 081→`1`, 082→`2`, 084→`4`, 085
 
 Deploys the privacy / transport layer shared by wallets and the pool:
 - **091 Floonet Relay** — deploys the community Grin-native Nostr relay (`floonet-rs` by [github.com/2ro](https://github.com/2ro)) the toolkit way: hardened systemd + nginx/certbot over `wss` + firewall + encrypted backups. Optional NIP-05 usernames, NIP-42 access control, and GoblinPay monetisation. We deploy upstream's software (not a fork).
-- **092 mwixnet CoinSwap Mixer** *(reserved — not built yet)* — run one **mixer hop** in a Grin CoinSwap route ([`mimblewimble/mwixnet`](https://github.com/mimblewimble/mwixnet)). Tor hides *who sent* a transaction while it is in flight; a CoinSwap breaks the **permanent on-chain link** between the coin you spent and the coin that comes out — the one privacy gap Tor cannot close. Non-custodial: a mixer never holds anyone's funds. Only meaningful as an *independent* hop in someone else's route. Design → `docs/generated/script09_design.md` PART D.
+- **092 mwixnet CoinSwap Mixer** *(reserved — not built yet)* — run one **mixer hop** in a Grin CoinSwap route ([`mimblewimble/mwixnet`](https://github.com/mimblewimble/mwixnet)). Tor hides *who sent* a transaction while it is in flight; a CoinSwap breaks the **permanent on-chain link** between the coin you spent and the coin that comes out — the one privacy gap Tor cannot close. Non-custodial: a mixer never holds anyone's funds. Only meaningful as an *independent* hop in someone else's route. Design → `docs/reference/script09_design.md` PART D.
 - **093 Grin Transporter** — self-hosted **store-and-forward slate queue** (Node + SQLite): the sender enqueues an encrypted slate and the receiver polls later, so the two are never online together — the only transport that's automated *and* offline-tolerant. Optional Tor `.onion` front. Standalone (Phase 1); wallet wiring pending. *(Was 092 until 2026-08-04.)*
 
 ---

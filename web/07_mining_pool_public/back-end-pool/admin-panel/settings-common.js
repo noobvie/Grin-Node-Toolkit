@@ -1,5 +1,5 @@
-/* settings-common.js — shared logic for the split settings pages (2026-06).
-   Extracted verbatim from the old settings.html <script>; init is driven by
+/* settings-common.js — shared logic for the split settings pages.
+   Init is driven by
    window.SETTINGS_SECTION (set by the prelude below, from this script tag's data-section
    attribute on each page). Builder calls are guarded so
    a section absent from the current page never throws.
@@ -12,7 +12,7 @@
    step earlier, by settings.html's redirect stub. */
 // Each settings page names its section on this script's own tag:
 // <script src="/admin/settings-common.js" data-section="access">. It replaces the per-page inline
-// <script>window.SETTINGS_SECTION = "…";</script> (code-layout F4 — an inline block is what a strict
+// <script>window.SETTINGS_SECTION = "…";</script> (an inline block is what a strict
 // script-src forbids). Read it now, at evaluation time: document.currentScript is null afterwards.
 if (document.currentScript && document.currentScript.getAttribute('data-section')) {
   window.SETTINGS_SECTION = document.currentScript.getAttribute('data-section');
@@ -105,7 +105,7 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
             // default_theme accepts more keys than this select offers: THEME_KEYS in
             // lib/pool-settings.js also holds 'custom', the retired 'dark', and the
             // accept-only legacy keys (cyber, gradient, matrix, naruto, japan) that have
-            // had no stylesheet anywhere since js/theme.js was deleted. A stored value the
+            // no stylesheet anywhere. A stored value the
             // <select> has no <option> for leaves it blank, and a blank select is dropped
             // by the save harvester — so the operator sees an empty control they cannot
             // correct, while the public site quietly falls back to Reactor (public-theme.js
@@ -193,8 +193,8 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
 
         // Read the server's reason. Every rejection this route can emit is specific and
         // actionable — an unknown key names the offending element id, a validator names the
-        // setting, and a step-up refusal says re-authentication is required — and all of it
-        // used to be replaced by the word "failed". Audit §J14.
+        // setting, and a step-up refusal says re-authentication is required — and replacing
+        // all of it with the word "failed" hides that. Audit §J14.
         if (!response.ok) {
           const body = await response.json().catch(() => ({}));
           throw new Error(body.error || ('HTTP ' + response.status));
@@ -216,8 +216,8 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
       const seoGa = document.getElementById('seo_ga_tracking_id');
       if (!seoGa) return;
       const v = (seoGa.value || '').trim();
-      // SEO and Analytics are now SEPARATE pages, so the old DOM-mirror (writing #ga_tracking_id
-      // / #provider then saving the analytics form) no longer works — those fields aren't on the
+      // SEO and Analytics are SEPARATE pages, so mirroring through the DOM (writing #ga_tracking_id
+      // / #provider then saving the analytics form) cannot work — those fields aren't on the
       // SEO page. Instead fetch the canonical analytics config, override only the GA4 fields, and
       // save the full section via the API so Plausible/Umami/Matomo are preserved (one source of truth).
       try {
@@ -308,7 +308,7 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
           'port ' + (d.games_port == null ? 'invalid in pool config' : d.games_port),
           'link secret: ' + (d.link_configured ? 'configured' : 'NOT configured'),
           'last check: ' + checked,
-          // §19.17.2: the games' own switch, read from the health answer (null until healthy).
+          // script07_design_games.md §19.17.2: the games' own switch, read from the health answer (null until healthy).
           'launch state: ' + (d.launch === 'on' ? 'live' : d.launch === 'preview' ? 'preview' : 'unknown'),
           'public menu sees: ' + (d.public_mode || 'off')
         ];
@@ -379,8 +379,8 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
       }
     }
 
-    // updatePoolVisibilityUI() + its change listener were REMOVED 2026-09-02 (audit §J9-1)
-    // along with the pool_visibility / address_whitelist fields they showed and hid.
+    // No pool_visibility / address_whitelist fields exist (audit §J9-1), so there is no
+    // visibility UI to update.
 
     function updateColorPreview(el) {
       // Prefer a per-input preview span (e.g. theme_color-preview); fall back to accent.
@@ -1270,7 +1270,7 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
     async function drawLotteryNow(type) {
       // Draws are commit-reveal: this freezes the entry set and commits to a seed block that
       // has not been mined yet. Winners are picked (and paid) when the chain reaches it, on a
-      // later scheduler tick — so the button no longer produces an immediate result, and the
+      // later scheduler tick — so the button does not produce an immediate result, and the
       // confirm must not promise one.
       if (!confirm('Commit a lottery draw now?\n\nThe entry list and pot are frozen immediately and locked to a future block. '
                  + 'Winners are drawn from that block once it is mined (~10 min) and real prize-pool GRIN is paid then. '
@@ -1335,7 +1335,7 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
       document.getElementById('theme_color')?.addEventListener('input', (e) => updateColorPreview(e.target));
     });
 
-// ==== F4: event wiring — replaces the on*= attributes (inline handlers are blocked by a strict script-src) ====
+// ==== event wiring — replaces the on*= attributes (inline handlers are blocked by a strict script-src) ====
 document.addEventListener('click', function (e) {
   var el = e.target.closest && e.target.closest('[data-action]');
   if (!el) return;

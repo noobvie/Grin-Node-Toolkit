@@ -1,6 +1,6 @@
 'use strict';
 
-// Stratum pause — admin API + public surface regression tests (design §21.8–§21.10, Part 2).
+// Stratum pause — admin API + public surface regression tests (design §21.8–§21.10, script07_design.md).
 //
 // What this pins:
 //   [1] request parsing: window times are zone-qualified ISO-8601 ONLY (a zone-less string is a

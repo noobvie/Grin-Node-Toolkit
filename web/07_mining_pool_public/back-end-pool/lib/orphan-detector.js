@@ -49,10 +49,10 @@ class OrphanDetector {
       // both set by lib/grin-node.js). A 401, ECONNREFUSED or timeout means we do not KNOW;
       // rethrow so the caller aborts and retries on the next tick, leaving the block immature.
       //
-      // This used to read `err.message.includes('height')` — which every message
-      // grin-node.js builds for getHeader() satisfies, including the transport failures.
-      // The effect was that any node outage silently orphaned every immature block past
-      // confirm depth and reversed the payouts, and they stayed orphaned once it came back.
+      // Never match on `err.message.includes('height')`: every message grin-node.js builds
+      // for getHeader() satisfies it, including the transport failures, so any node outage
+      // would silently orphan every immature block past confirm depth and reverse the
+      // payouts, and they would stay orphaned once it came back.
       if (err && err.nodeReplied === true && err.notFound === true) {
         return {
           onChain: false,
@@ -143,9 +143,9 @@ class OrphanDetector {
   }
 
   // CAS on 'immature', and RETURN whether the claim succeeded. Both callers follow the
-  // transition with a money move (jackpot on confirm, reversal on orphan) and used to make it
-  // unconditionally: a swallowed UPDATE failure left the row 'immature', so the very next tick
-  // re-ran the same transition and paid/clawed a second time. The status flip is the claim —
+  // transition with a money move (jackpot on confirm, reversal on orphan); made unconditionally,
+  // a swallowed UPDATE failure leaves the row 'immature', so the very next tick re-runs the
+  // same transition and pays/claws a second time. The status flip is the claim —
   // if it did not land, nothing downstream of it may run. See audit §J5-6.
   confirmBlock(blockId) {
     try {
@@ -217,8 +217,7 @@ class OrphanDetector {
       // Note: blocks are only distributed AFTER on-chain maturity verification, and orphan
       // detection only targets still-immature (never-distributed) blocks, so in normal
       // operation there are zero credit rows here and this is a safe no-op — we never deduct
-      // a balance that was never credited (the previous equal-split logic did, and used the
-      // wrong amount and miner set).
+      // a balance that was never credited.
       const credits = this.db.prepare(`
         SELECT grin_address, COALESCE(SUM(amount), 0) AS amount
         FROM balance_log
@@ -250,12 +249,12 @@ class OrphanDetector {
 
             // Claw back from SPENDABLE first, then from LOCKED for the remainder.
             //
-            // Reading `balance` alone (as this did) silently under-clawed exactly the miner
-            // most likely to be mid-payout: their credited GRIN sits in balance_locked, so
-            // `balance` is near zero and the clamp returned ~0 — the orphaned reward then
-            // went out on the wire. Worse, the reversal row logged the clamped amount, so the
-            // reconciliation integrity invariant stayed at 0 by construction and only the
-            // aggregate coverage gap ever noticed. Audit §J5-11.
+            // Reading `balance` alone silently under-claws exactly the miner most likely to
+            // be mid-payout: their credited GRIN sits in balance_locked, so `balance` is near
+            // zero and the clamp returns ~0 — the orphaned reward then goes out on the wire.
+            // Worse, the reversal row would log the clamped amount, so the reconciliation
+            // integrity invariant stays at 0 by construction and only the aggregate coverage
+            // gap notices. Audit §J5-11.
             //
             // Still clamped at the total the account actually holds: a reversal must never
             // drive a balance negative. A residual shortfall means the GRIN has already left

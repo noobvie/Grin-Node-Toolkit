@@ -5,10 +5,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <!-- noindex (audit §J11-3, 2026-09-02). This page is address-addressable with no login, so
+  <!-- noindex (script07_security_audit.md §J11-3). This page is address-addressable with no login, so
        every ?addr= URL is one miner's identity, and behind it sit their balance, pending payout,
-       rig names and payout history. It was `index, follow` while miners-stats.html — which IS in
-       sitemap.xml — emitted up to 1500 `?addr=<full address>` links, so a crawl walked the whole
+       rig names and payout history. miners-stats.html IS in
+       sitemap.xml and emitted up to 1500 `?addr=<full address>` links, so a crawl walked the whole
        pool into third-party indexes: Google mostly consolidates on the canonical below, but a
        canonical is a hint, it does not stop the crawl, and Bing / Common Crawl / AI training
        crawlers are not bound by it. Once a miner's address is in someone else's corpus it cannot
@@ -111,6 +111,8 @@
     }
     /* P-08 Proof column: the truncated Tx ID (kernel) link. */
     a.xplink.tx-id { font-family: var(--mono, monospace); font-size: 12px; white-space: nowrap; }
+    /* P-08 Method · Status column: the rail name leads, its status follows. */
+    .wd-rail { font-weight: 600; }
 
     /* ── worker status LED (replaces a Status text column) ──────────────── */
     .wled {
@@ -145,7 +147,7 @@
     .net-preview b { color: var(--text); font-weight: 700; }
     .net-preview.is-short b { color: var(--danger, #f85149); }
 
-    /* single withdraw column (per-account threshold retired 2026-07-17) */
+    /* single withdraw column (there is no per-account threshold) */
     .withdraw-col { max-width: 560px; }
     /* h4 = one destination card inside the "Payout destinations" h3. Needs an explicit rule:
        an unstyled h4 renders bolder and LARGER than the 11px dim-mono h3 above it, which
@@ -513,11 +515,9 @@
                                          owner did not add is harmless to their coins: anyone can point a miner at any
                                          address, a stranger's value sits BESIDE the owner's (it never replaces one),
                                          and it can still only pay this address.
-                                         Placement history: the proof-set work (design §17 Part 2, 2026-09-22) moved
-                                         this paragraph into a "Why does my rig password matter?" fold here; the
-                                         operator removed that fold on 2026-09-23 (payout-rails fix Part 3, "less
-                                         text"), so the reasoning now lives only in this comment and in the withdraw
-                                         route's comment in back-end-pool/index.js. -->
+                                         There is deliberately no visible "Why does my rig password matter?" fold (it
+                                         repeated the homepage setup guide), so this reasoning lives only in this
+                                         comment and in the withdraw route's comment in back-end-pool/routes/. -->
                                     <label for="acct-ip-proof">A recent mining IP <b>or</b> your rig's stratum password
                                         <span style="color:var(--text-mute);font-weight:400">(8&ndash;128 characters)</span></label>
                                     <!-- maxlength matches owner-proof PASS_MAX (128) — stop an over-long
@@ -540,9 +540,8 @@
                                     <small style="color:var(--text-mute);">Accepted: any IP your rigs have recently submitted shares from
                                         (check yours at <a href="https://tools.grin.money/tools/my-ip/" target="_blank" rel="noopener noreferrer">tools.grin.money/tools/my-ip</a>),
                                         or any password your rigs send in their pool config &mdash; the pool keeps up to 10 of each.</small>
-                                    <!-- The "Why does my rig password matter?" fold that stood here was removed
-                                         at the operator's request (2026-09-23): it repeated the homepage setup guide.
-                                         Where each of its facts lives now:
+                                    <!-- No "Why does my rig password matter?" fold here (it repeated the homepage
+                                         setup guide). Where each of its facts lives:
                                          · can't steal / what the gate stops / a stranger's proof → the comment above
                                            the label (reasoning only — no miner-visible home when Goblin is off)
                                          · 10 IPs + 10 passwords kept → the "Accepted:" hint above + homepage step 3
@@ -581,8 +580,8 @@
                                              rate that covers the chain fee, and the payments page publishes the
                                              REAL per-payout chain fee. Naming it after the chain would read as a
                                              contradiction the moment a miner compares the two. The title carries
-                                             the plain-language "blockchain" explanation instead (it was a visible
-                                             closing note until 2026-09-23). -->
+                                             the plain-language "blockchain" explanation instead (there is no visible
+                                             closing note). -->
                                         <span title="A flat fee on every payout method. It covers the Grin blockchain transaction fee, which is charged by transaction size, not by amount — so fewer, larger withdrawals cost less in total. The real fee paid on each payout is published on the payments page." style="border-bottom:1px dotted currentColor;cursor:help">Withdrawal fee</span>
                                         <b><span id="acct-fee-val">—</span> ツ</b>
                                         &middot; you receive <b><span id="acct-net-val">—</span> ツ</b>
@@ -598,8 +597,7 @@
                                 </div>
 
                                 <!-- Tor method -->
-                                <!-- Two buttons, no prose (operator, 2026-09-23). What the removed paragraph
-                                     said, for the record: the amount goes straight to this address's own wallet
+                                <!-- Two buttons, no prose. What a visible paragraph would say: the amount goes straight to this address's own wallet
                                      over Tor, so the miner needs a wallet listener running; the pool probes the
                                      wallet before sending and a confident "no answer" declines the payout (HTTP
                                      409, nothing locked) — Slatepack is the fallback that needs no listener.
@@ -636,9 +634,9 @@
                                 <!-- Slatepack method -->
                                 <!-- The slatepack is ENCRYPTED to this address, so only the owner's wallet can
                                      open it — no listener needed, which is why this is the fallback when the Tor
-                                     check says no. (Cut from the visible note 2026-09-23.) -->
+                                     check says no. (Not repeated in the visible note.) -->
                                 <div id="acct-pay-slatepack-pane" style="display:none;">
-                                    <!-- The -m hint (2026-09-27): without it, `grin-wallet receive` first tries to
+                                    <!-- The -m hint: without it, `grin-wallet receive` first tries to
                                          return its reply over Tor to the pool wallet's address inside the slatepack.
                                          The pool wallet publishes no onion (owner_api only), so that attempt can only
                                          time out before the reply prints. -m / --manual skips it (grin-wallet v5.5.0
@@ -696,14 +694,14 @@
                                 <span id="acct-pending-text"></span>
                             </div>
 
-                            <!-- Closing note cut to two sentences (2026-09-23). Moved out of sight:
+                            <!-- Closing note is two sentences. What it leaves out:
                                  · the fee economics → the title on the "Withdrawal fee" label (the live
                                    fee → you-receive preview under the amount field stays VISIBLE; it is a
                                    number, and hiding what a payout costs is the one cut not to make). The
                                    #acct-fee-note span that carried it is gone with its JS.
                                  · "while one is in flight it shows above" → the pending strip says so itself.
                                  · no manual cancel, because a payout that looks failed can still land
-                                   (memory project_pool_account_page, Round 3).
+                                   (memory project_pool_account_page).
                                  · after a payout is returned, a short cooldown applies before the next
                                    request on ANY rail — the server says so when it refuses one. -->
                             <p class="note" style="margin:16px 0 0;font-size:12.5px;color:var(--text-mute);">
@@ -798,7 +796,7 @@
                                      has donated before; hidden otherwise and while donations are
                                      off. The donor NAME moved to P-09 (§18 pre-moderation). -->
                                 <li id="acct-donate-row" style="display:none"><span class="k" id="acct-donate-k">Donating to prize pool</span><span class="v" style="text-align:right"><span id="acct-donate">—</span><span id="acct-donate-rigs" style="display:none;font-size:12px;color:var(--text-dim);margin-top:2px"></span><a id="acct-donate-profile" href="#acct-donor" style="display:none;font-size:12px;margin-top:2px">Donor profile ↓</a></span></li>
-                                <!-- No "Withdrawal fee" row (cut 2026-09-25): P-04's net preview
+                                <!-- No "Withdrawal fee" row: P-04's net preview
                                      under the amount field already discloses it where it matters. -->
                             </ul>
 
@@ -874,16 +872,29 @@
                     <div class="panel"><span class="screws"></span>
                         <h2 class="panel-title"><span class="tag">P-08</span> Withdrawal history <span class="right"><span class="dim">every payout, kept forever · </span><span id="wd-count"></span></span></h2>
                         <div class="panel-body">
-                            <p class="note">Your payout requests only — no donations or clawbacks. Unlike the ledgers above (row detail kept 60 days), this list goes back to your first payout. Export the full history as CSV for your records.</p>
-                            <p class="note" id="wd-proof-note">Proofs are hidden by default. A payout's <b>Tx ID</b> (its <b>kernel</b>) identifies its transaction in the Grin chain forever. Recent payouts are listed on the public <a href="/payment-history.html">Payments</a> page with a <b>masked</b> address beside their Tx ID; this list is your <b>complete</b> history under your <b>full</b> address, so it stays behind your ownership proof. Enter that proof at the top of this page and press <b>Reveal proofs</b>: every mined payout shows its Tx ID as an explorer link (proves the transaction was mined; hover it for the full kernel), and every Tor payout also gets a <b>⬇ file</b> — the <b>signed payment proof</b>. That file carries your own wallet's signature over the amount, the kernel and the sender, so it proves to anyone, with no trust in this pool, that your wallet received exactly this payment. Compare the kernel with <code>grin-wallet txs</code> on your side, or check the file with <code>grin-wallet verify_proof</code>. Slatepack payouts carry no signed proof — you finalised those yourself, and their kernel is the evidence.</p>
+                            <!-- Kept short on purpose; the detail behind it:
+                                 · Payouts only (no donations or clawbacks), from the withdrawals table, which is
+                                   never pruned — unlike the P-06/P-07 ledgers (row detail kept 60 days).
+                                 · Why proofs are hidden: a Tx ID (kernel) names its transaction in the Grin chain
+                                   forever. The public Payments page shows recent Tx IDs beside a MASKED address;
+                                   this list is the complete history under the FULL address, so it stays behind the
+                                   ownership proof (audit §J11-2).
+                                 · Tx ID = proves the tx was MINED (explorer link; full kernel in the tooltip; the
+                                   miner can match it against `grin-wallet txs`).
+                                 · ⬇ file = grin-wallet's signed PaymentProof: the miner's OWN wallet signature over
+                                   amount + kernel + sender, so it proves receipt to anyone with no trust in the pool.
+                                   Tor and Slatepack payouts only; Goblin payouts, and Slatepack payouts from before
+                                   that rail requested proofs, have the kernel only. -->
+                            <p class="note">Every payout you have requested, back to the first one. Download it all as CSV for your records.</p>
+                            <p class="note" id="wd-proof-note">Proofs are hidden for privacy. Enter your ownership proof at the top of this page and press <b>Reveal proofs</b>: each paid payout then shows its <b>Tx ID</b> (proof it was mined), and Tor and Slatepack payouts also get a <b>⬇ file</b>, a payment proof signed by your own wallet. Check it with <code>grin-wallet verify_proof</code>.</p>
                             <div class="pager-row" style="margin-bottom:10px;">
                                 <button class="btn sm" id="wd-reveal-proofs">Reveal proofs</button>
                                 <span class="msg" id="wd-proof-msg"></span>
                             </div>
                             <div class="table-scroll">
                                 <table class="data-table" aria-label="Withdrawal history">
-                                    <thead><tr><th>Requested</th><th>Method</th><th>Status</th><th class="num">Amount</th><th class="num" title="The flat withdrawal fee charged on this payout. It covers the Grin network fee, which the pool wallet pays.">Withdrawal fee</th><th class="num" title="What reached your wallet: the amount minus the withdrawal fee">You received</th><th>Confirmed</th><th>Proof</th></tr></thead>
-                                    <tbody id="log-wd"><tr><td colspan="8">—</td></tr></tbody>
+                                    <thead><tr><th>Requested</th><th>Confirmed</th><th>Method · Status</th><th class="num">Amount</th><th class="num" title="The flat withdrawal fee charged on this payout. It covers the Grin network fee, which the pool wallet pays.">Withdrawal fee</th><th class="num" title="What reached your wallet: the amount minus the withdrawal fee">You received</th><th>Proof</th></tr></thead>
+                                    <tbody id="log-wd"><tr><td colspan="7">—</td></tr></tbody>
                                 </table>
                             </div>
                             <div class="pager-row">
@@ -900,14 +911,14 @@
 
                 <!-- ═══ P-09 · DONOR PROFILE (design §18.8) ═══════════════════════════════════
                      The donor's nickname + banner on the donor wall, set here and nowhere else.
-                     A NAME is checked automatically and goes live at once (design §19.17.6, Part
-                     C4); a BANNER is pre-moderated: invisible to the public until the operator
+                     A NAME is checked automatically and goes live at once (script07_design_games.md §19.17.6);
+                     a BANNER is pre-moderated: invisible to the public until the operator
                      approves it. Rendered by renderDonor() from `donor_profile` on the
                      summary, which never carries the pending name or image (anyone holding the
                      address can open this page) — a pending item is shown from THIS tab's own
                      submit response only (dpMine), and after a reload by its submit time alone.
                      Hidden while donations are off, unless there is something here to withdraw
-                     or remove: removing your own data is always allowed (§18.11 Part 2 #3). -->
+                     or remove: removing your own data is always allowed (script07_implementation.md §18.11). -->
                 <div class="deck-row" id="acct-donor" style="display:none">
                     <div class="panel"><span class="screws"></span>
                         <h2 class="panel-title"><span class="tag">P-09</span> Donor profile <span class="right">names checked at once · banners reviewed</span></h2>

@@ -2,13 +2,13 @@
 
 // Unit tests for the stratum attack-surface guards.
 //
-// 2026-07-17 hardening:
+// Dedup and flood hardening:
 //   · share dedup keyed on the job's pre_pow (the actual work), NOT the pool's
 //     incrementing job_id, so one solved (nonce,pow) can't be credited once per wrapping job.
 //   · per-connection message token bucket that throttles submit / login /
 //     pre-login floods without disconnecting a legitimate miner.
 //
-// Audit §J6 resolution (2026-09-01) — every one of these ASSERTS A DENIAL, which is what the
+// Audit §J6 resolution — every one of these ASSERTS A DENIAL, which is what the
 // original six could not do: they all held the worker name constant, so the multiplier below
 // passed straight through them:
 //   · §J6-1  the worker name is NOT in the dedup key
@@ -137,8 +137,8 @@ const shareHash = (addr, workId, worker, nonce) =>
 // ── §J6-6: bech32 CHECKSUM, not just the charset ────────────────────────────────────────
 // A Grin Slatepack address is bech32(hrp, ed25519_pubkey) — classic bech32, checksum constant 1
 // (grin-wallet pins the bech32 0.7 crate, which predates the bech32m split). validateUsername
-// used to check the charset and the length and stop, so any 58 charset-valid characters were a
-// working login: an unbounded supply of distinct addresses for an anonymous client (each taking
+// must verify the checksum, not just the charset and the length — else any 58 charset-valid
+// characters is a working login: an unbounded supply of distinct addresses for an anonymous client (each taking
 // a miner_accounts row + 3 synchronous statements on the shared DB), and a miner who mistyped one
 // character of their own address mined to a key nobody holds.
 {
@@ -211,7 +211,7 @@ const shareHash = (addr, workId, worker, nonce) =>
     (validateUsername(main + '.rig01-donate10') || {}).donation_percent === 10);
 
   // The worker label is what the miner TYPED — the donate token is read, never stripped
-  // (2026-09-21: `.donate10` used to come back as worker "default" and read as a bug).
+  // (`.donate10` must come back as that worker, not "default").
   const wn = (u) => (validateUsername(main + '.' + u) || {}).worker_name;
   const dp = (u) => (validateUsername(main + '.' + u) || {}).donation_percent;
   check('donate tag: whole-name token keeps its name AND donates',
@@ -220,7 +220,7 @@ const shareHash = (addr, workId, worker, nonce) =>
     wn('rig01-donate10') === 'rig01-donate10' && wn('rig01_donate5') === 'rig01_donate5' && dp('rig01_donate5') === 5);
   check('donate tag: out-of-range / mistyped is a plain name, donates nothing',
     wn('donate101') === 'donate101' && dp('donate101') === null && dp('donatexx') === null);
-  // 2026-09-21 (design §16.2): the cut label loses its trailing separator, so the join is
+  // Design §16.2: the cut label loses its trailing separator, so the join is
   // `…long-donate100`, never `…long--donate100` (the label is 28 chars, the token 10, cap 32 → 22
   // of the label survive and the 22nd is the '-' after "long").
   check('donate tag: a long name is cut on the LABEL so the token stays visible',
@@ -245,7 +245,7 @@ const shareHash = (addr, workId, worker, nonce) =>
     validateUsername(main + '.' + 'a'.repeat(49)) === null);
 
   // §16.2 case-fold: the WORKER part folds to lowercase before the grammar (`MyBrand-donate10`
-  // used to be refused at login); the ADDRESS never folds — uppercase bech32 is not grin's.
+  // must not be refused at login); the ADDRESS never folds — uppercase bech32 is not grin's.
   check('case-fold: an uppercase worker logs in lowercase with its donation intact',
     wn('MyBrand-donate10') === 'mybrand-donate10' && dp('MyBrand-donate10') === 10 &&
     wn('RIG01') === 'rig01' && wn('Donate5') === 'donate5' && dp('Donate5') === 5);
@@ -257,7 +257,7 @@ const shareHash = (addr, workId, worker, nonce) =>
     !!validateUsername(main + '.RIG01'));
 
   // design §18.1 #3: the label in front of the token is only a rig name again — v1 returned it
-  // as `donor_label` for a donor-name capture that no longer exists. donation_percent stays
+  // as `donor_label` (there is no donor-name capture). donation_percent stays
   // (the login log line reads it); nothing stores it.
   check('validateUsername returns exactly grin_address, worker_name, donation_percent (no donor_label)',
     JSON.stringify(Object.keys(validateUsername(main + '.rig01-donate10'))) ===
@@ -321,8 +321,8 @@ const shareHash = (addr, workId, worker, nonce) =>
 }
 
 // ── §J6-5: consecutive-reject ceiling ───────────────────────────────────────────────────
-// Nothing used to penalise a session that produced only rejects: session.rejected was counted
-// and then only ever DISPLAYED. Every rejected submit costs the node a full Cuckatoo
+// A session that produces only rejects must be penalised: session.rejected is counted
+// and must not only be DISPLAYED. Every rejected submit costs the node a full Cuckatoo
 // verification and writes a log line, so one address inside the documented message budget could
 // force ~8,000 verifications/s and ~1 MB/s of journal.
 {
@@ -368,10 +368,9 @@ const shareHash = (addr, workId, worker, nonce) =>
 }
 
 // ── §J6-11: the node payload cannot be steered by a miner-chosen key ────────────────────
-// The send-side quote-stripping used to be a NON-GLOBAL regex over the whole serialised blob
-// while handleSubmit forwarded `{ ...params }` verbatim — so a nested object keyed `nonce`
-// holding a quoted number won the first match, and the miner's real u64 stayed quoted on the
-// node's wire. All shares from all miners share ONE upstream socket, which is what makes a
+// The send-side quote-stripping must not be a NON-GLOBAL regex over the whole serialised blob:
+// with `{ ...params }` forwarded verbatim, a nested object keyed `nonce` holding a quoted number
+// would win the first match and the miner's real u64 would stay quoted on the node's wire. All shares from all miners share ONE upstream socket, which is what makes a
 // malformed frame a pool-wide concern rather than self-harm.
 {
   const client = new NodeStratumClient({}, null);
@@ -385,7 +384,7 @@ const shareHash = (addr, workId, worker, nonce) =>
   check('§J6-11 ...and the u64 survives the round trip exactly',
     String(JSON.parse(wire.replace(`"nonce":${nonce}`, `"nonce":"${nonce}"`)).params.nonce) === nonce);
 
-  // The decoy that used to win. handleSubmit's whitelist means it can no longer reach send()
+  // The decoy that would win a first-match regex. handleSubmit's whitelist means it can no longer reach send()
   // at all; _serialize is nonetheless proof against it, because the substitution now targets a
   // placeholder this module injected rather than pattern-matching miner data.
   const decoy = ser({ id: 2, jsonrpc: '2.0', method: 'submit',

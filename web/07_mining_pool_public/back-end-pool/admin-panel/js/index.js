@@ -1,5 +1,5 @@
-// index.html page script — moved BYTE-verbatim out of the page's inline script block (code-layout F5).
-// Classic script (no defer/module) loaded at the same position as the old block, after the <script src> tags before it, whose globals it uses (H14).
+// index.html page script.
+// Classic script (no defer/module) loaded after the <script src> tags before it, whose globals it uses.
 // Auth gate (httpOnly-cookie aware): redirects to /login.html if not an admin, else wires
 // up the topbar username + Logout. Pool name + testnet banner are handled by admin-shell.js.
 API.guardAdminPage();
@@ -26,12 +26,12 @@ function shortAddr(a) {
 // (waiting_finalize / finalized / completed / failed / expired), so EVERY row fell through
 // to the grey badge-dim fallback — the same colour the panel uses for CANCELLED. A failed
 // payout read as a finished one on the operator's landing page (audit §J14, same class as
-// §H4, which was fixed on payments.html only).
+// script07_security_audit_archive.md §H4, which was fixed on payments.html only).
 const STATUS_BADGE = {
   tor_checking:      '<span class="badge badge-warn">Checking (Tor)</span>',
   tor_sending:       '<span class="badge badge-warn">Sending</span>',
   tor_held:          '<span class="badge badge-warn">Held</span>',
-  // LEGACY since 2026-09-26 (no new row; migrated on the scheduler's first pass).
+  // LEGACY: no new row is written; the scheduler migrates old ones on its first pass.
   retry_scheduled:   '<span class="badge badge-warn">Legacy retry</span>',
   slatepack_pending: '<span class="badge badge-warn">Awaiting slate</span>',
   finalizing:        '<span class="badge badge-warn">Settling</span>',
@@ -71,8 +71,8 @@ async function loadAdminDashboard() {
       const slate = w.slate_id
         ? `<span class="truncate mono" title="${escHtml(w.slate_id)}">${escHtml(String(w.slate_id).slice(0,16))}…</span>`
         : '—';
-      // withdrawals are keyed by grin_address — there is no username/user_id column, so this
-      // cell used to render the literal string "undefined" on every row (audit §J14).
+      // withdrawals are keyed by grin_address — there is no username/user_id column, so reading a
+      // username/user_id off a row renders the literal string "undefined" (audit §J14).
       return `<tr>
         <td>${escHtml(fmtTs(w.created_at))}</td>
         <td><span class="mono" title="${escHtml(w.grin_address)}">${escHtml(shortAddr(w.grin_address))}</span></td>

@@ -1,7 +1,7 @@
 'use strict';
 
 // Node availability — the pool's own record of its node, beside the node box's recorder.
-// Design: docs/generated/script07_design.md §20 (pool side) + script086_design.md §8 (recorder).
+// Design: docs/reference/script07_design.md §20 (pool side) + script086_design.md §8 (recorder).
 //
 // Two observers, two sources, never merged (§20.4):
 //   source 'pool'     — this module's own 30 s getStatus() probe. It answers "could the POOL get a
@@ -28,7 +28,7 @@ const path = require('path');
 const PROBE_MS = 30000;
 const INGEST_MS = 60000;              // also the heartbeat cadence
 const DOWN_STRIKES = 2;               // one failed probe is not an outage (same rule as the recorder)
-const STATUS_FRESH_S = 120;           // recorder status.json older than this is stale (086 §8.8)
+const STATUS_FRESH_S = 120;           // recorder status.json older than this is stale (script086_design.md §8.8)
 const PROBE_FRESH_MS = 2 * PROBE_MS + 15000;  // how old a probe result may be and still count as "now"
 const UNOBSERVED_MIN_S = 120;         // pool heartbeat gap above this is recorded as unobserved
 const GAP_RESET_S = 900;              // …and above this it also resets the pool's "reachable since"
@@ -42,7 +42,7 @@ const LOG_EVERY_MS = 3600000;         // malformed-line / unreadable logging: on
 
 const RANGES = { '7d': 7 * 86400, '30d': 30 * 86400, '90d': 90 * 86400, '1y': 365 * 86400 };
 
-// Recorder vocabulary (086 design §8.8, v:1). Anything else is dropped (required fields) or nulled.
+// Recorder vocabulary (script086_design.md §8.8, v:1). Anything else is dropped (required fields) or nulled.
 const REC_EVENTS = new Set(['recorder_start', 'boot', 'start', 'stop', 'down', 'up', 'reclass',
   'restart_by_watchdog', 'auth_fail', 'auth_ok', 'probe_error', 'gap', 'stale_marker', 'unregistered']);
 const REC_STATES = new Set(['up', 'starting', 'stopped', 'down', 'auth_fail', 'unregistered', 'unknown']);
@@ -347,7 +347,7 @@ class NodeAvailability {
   // A pool restart: whatever was open was last confirmed at the last heartbeat, and the time
   // the pool was not running is UNOBSERVED (nobody watched the node), not up and not down.
   // A SHORT restart (heartbeat ≤ UNOBSERVED_MIN_S old) re-adopts the open outage / auth fault
-  // instead: closing it there counted the restart as up and split one outage in two (R2). The
+  // instead: closing it there counted the restart as up and split one outage in two. The
   // first probe then closes or continues it as usual. A degraded row is never re-adopted — the
   // stratum client may reconnect before index.js wires onLinkChange, and nothing would close it.
   _recoverOnBoot() {
@@ -705,7 +705,7 @@ class NodeAvailability {
     if (prevLast === null || ev.ts > prevLast) this._setMeta('rec_last_ts', ev.ts);
 
     // 1. A line that closes the open outage (`up`, `boot`, `stop`, `auth_fail`, `unregistered`,
-    //    … — 086 §8.15) carries its outage_id and, usually, duration_s.
+    //    … — script086_implementation.md §8.15) carries its outage_id and, usually, duration_s.
     if (ev.outage_id && !['down', 'reclass', 'restart_by_watchdog', 'start'].includes(ev.event)) {
       const o = this.q.byRid.get(this.net, ev.outage_id);
       if (o && o.ended_at === null) {
@@ -740,7 +740,7 @@ class NodeAvailability {
         break;
       case 'recorder_start':
         // The recorder (re)started without its status: whatever was open was last seen at the
-        // previous line, and the span since is unobserved (086 §8.18).
+        // previous line, and the span since is unobserved (script086_implementation.md §8.18).
         this._closeOpenRec(['down', 'planned', 'fault'], prevLast !== null ? Math.min(prevLast, ev.ts) : ev.ts,
           'recorder restarted; closed at its last line', own);
         break;

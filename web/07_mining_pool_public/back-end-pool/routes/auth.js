@@ -1,7 +1,7 @@
 // /api/auth/* plus /api/admin/reauth and /api/admin/2fa/* — login, session and 2FA live together regardless of prefix.
-// Moved verbatim out of routes/index.js (code-layout refactor P3); registrations stay at 2-space
+// Registrations stay at 2-space
 // indent and write FULL paths. Instances/state come from ctx; the guard chains are the ONE
-// instance routes/index.js built with createGuards (I7), handed in as `guards`.
+// instance routes/index.js built with createGuards, handed in as `guards`.
 
 const express = require('express');
 const { requireAdmin } = require('../lib/auth-middleware');
@@ -81,8 +81,8 @@ module.exports = function createAuthRoutes(ctx, guards) {
   router.get('/api/auth/captcha', rateLimiter.middleware('public'), (req, res) => {
     // Pass the client IP so the challenge store caps THIS source's outstanding challenges
     // instead of letting it evict everyone else's. This endpoint is unauthenticated and free
-    // at 1200/min, and the store used to be one global 5000-entry Map evicting oldest-first —
-    // so an anonymous flood locked the operator out of their own login form with no failed
+    // at 1200/min, and one global 5000-entry store evicting oldest-first would be a lever —
+    // an anonymous flood would lock the operator out of their own login form with no failed
     // login, no auto-ban and no audit row. See lib/captcha.js and audit §J2-4.
     res.json(loginCaptcha.issue(req.ip));
   });
@@ -122,7 +122,7 @@ module.exports = function createAuthRoutes(ctx, guards) {
         // This is NOT the gate — it cannot be, because the authoritative check has to happen
         // on the far side of the ~300 ms password hash below, and that await yields the event
         // loop. registerAdmin({ firstAdminOnly: true }) re-checks and inserts atomically; two
-        // concurrent registrations used to sail past this line and BOTH become admins
+        // concurrent registrations would sail past this line and BOTH become admins
         // (audit §J2-2, demonstrated). Keep both: this one for the common case, that one for
         // correctness.
         const adminCount = db.prepare('SELECT COUNT(*) as cnt FROM users WHERE is_admin=1').get();
@@ -366,7 +366,7 @@ module.exports = function createAuthRoutes(ctx, guards) {
   // This route IS the freshAdmin tier. Everything behind requireFreshAuth — withdrawal
   // retry/cancel, payout freeze, dormancy send-payout, prize-pool topup, wallet
   // adopt-identity — opens the moment it returns, so it is defended like the login route and
-  // not like an admin read (audit §J2-1). Three things were missing and are now here:
+  // not like an admin read (audit §J2-1). Three things it must have:
   //
   //   1. `stepup` rate bucket, not `admin`. 10/min instead of 2400/min. This is the control
   //      that bounds the CPU as well as the guessing: the bcrypt runs before any counter can
@@ -538,9 +538,9 @@ module.exports = function createAuthRoutes(ctx, guards) {
   });
 
 
-  // The second place in this file that verifies a password, and it used to be the quieter one:
+  // The second place in this file that verifies a password, and it must not be the quieter one, left on the
   // `auth` bucket (200/min), the non-admin `requireAuth` guard, no ipFilter, no lockout and no
-  // audit row at all — 288 k guesses/day for a hijacked session, leaving no trace. It now runs
+  // audit row at all — 288 k guesses/day for a hijacked session, leaving no trace. It runs
   // the same three-layer policy as the other two: the `stepup` bucket (10/min), the admin IP
   // filter, the (username, IP) lockout inside changePassword, and the per-IP auto-ban. Audit
   // §J2-1.

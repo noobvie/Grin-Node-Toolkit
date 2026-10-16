@@ -94,11 +94,22 @@ const Auth = {
   // So: public reads use this, admin writes keep Auth.fetch. null here means "no answer" and is
   // distinguishable from an empty answer ([] / {}), which is what lets a page say "unavailable"
   // instead of "none yet". No 401 redirect: a public page has no session to lose.
+  //
+  // no-store + a 20 s abort: a phone waking a tab that was frozen for an hour first retries the
+  // connection it held before sleeping, which is usually dead, and without a timeout that fetch
+  // hangs while the panel keeps its old value — the visitor reloads two or three times before
+  // Safari opens a fresh connection. Aborting returns null fast so the next refresh retries.
+  // 20 s stays under nginx's 30 s proxy_read_timeout on /api/, so a slow-but-alive answer
+  // (/api/pool/status waits on the node AND the wallet) is not cut short.
   async read(url) {
+    const ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+    const timer = ctl ? setTimeout(() => ctl.abort(), 20000) : null;
     try {
       const response = await fetch(url, {
         credentials: 'same-origin',
-        headers: { 'Accept': 'application/json' }
+        cache: 'no-store',
+        headers: { 'Accept': 'application/json' },
+        signal: ctl ? ctl.signal : undefined
       });
       if (!response.ok) return null;
       const contentType = response.headers.get('content-type');
@@ -107,7 +118,26 @@ const Auth = {
       return (data !== null && typeof data === 'object') ? data : null;
     } catch (error) {
       return null;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
+  },
+
+  // A public page's live-data timer: fn every `ms`, AND at once when the visitor comes back.
+  // A plain setInterval is not enough on a phone — a backgrounded tab is frozen (iOS Safari
+  // suspends it outright) and a bfcache restore runs no script, so a returning visitor saw the
+  // snapshot from when they left until the next tick. The 10 s floor stops a quick tab flip
+  // from re-firing every request. The page still does its own first load; registering counts
+  // as a run, so the floor does not double it.
+  poll(fn, ms) {
+    let lastAt = Date.now();
+    const run = () => { lastAt = Date.now(); fn(); };
+    const runIfStale = () => { if (Date.now() - lastAt > 10000) run(); };
+    setInterval(run, ms);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') runIfStale();
+    });
+    window.addEventListener('pageshow', (e) => { if (e.persisted) runIfStale(); });
   },
 
   // Login - tokens now returned as httpOnly cookies

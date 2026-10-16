@@ -15,7 +15,7 @@
 const path = require('node:path');
 
 const SUITES = [
-  'test-payment-proof.js',   // R4's real-wallet fixture + its 8 negative controls
+  'test-payment-proof.js',   // real-wallet fixture + its 8 negative controls
   'test-node-check.js',      // the SSRF blocklist + parseTarget
   'test-wallet-check.js',    // browser Keccak at the rate boundary + onion derivation
   'test-probe-copy.js',      // the probe-on/probe-off copy contract across 5 files

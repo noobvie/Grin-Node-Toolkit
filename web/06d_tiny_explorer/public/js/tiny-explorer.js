@@ -137,8 +137,8 @@ function initChrome() {
   initTools();
 }
 
-// Group labels for the Tools dropdown, in render order. The hub is going from
-// two tools to six; six flat rows is a list, not a menu, so the rows are grouped
+// Group labels for the Tools dropdown, in render order. The hub has six tools;
+// six flat rows is a list, not a menu, so the rows are grouped
 // under the pair table in script06_design.md ("Option D addendum — Tools hub
 // expansion to six"): Verify what you were handed / Operate your own side.
 //
@@ -163,7 +163,7 @@ const TOOLS_MENU_GROUPS = [
 // nor the menu's accessible child list gains anything focusable.
 // The Wallet Checker's one-line description is written for the tier-1-only page
 // (checksum, network, .onion) because that is what a visitor gets if this script
-// never runs — not because it is the common case, which it no longer is: a
+// never runs — not because it is the common case: a
 // freshly installed box has the Tor liveness probe ON. Where it is on, the tool
 // genuinely does more than the static line claims — and
 // "can I see whether this wallet is online before I send to it" is the reason
@@ -1027,9 +1027,9 @@ function initMining() {
     setText('mine-day',   fmtGrinAmt(r.grinDay));
     setText('mine-week',  fmtGrinAmt(r.grinWeek));
     setText('mine-month', fmtGrinAmt(r.grinMonth));
-    // WHY a figure is —, named in the order the reader can act on it. Every
-    // unknown used to print 'enter your hashrate' or 'price unavailable', so a
-    // dead /api/stats told a miner who HAD entered a hashrate to enter one —
+    // WHY a figure is —, named in the order the reader can act on it.
+    // Printing 'enter your hashrate' or 'price unavailable' for every unknown made a
+    // dead /api/stats tell a miner who HAD entered a hashrate to enter one —
     // copy that blames the operator for the server's own outage. The missing
     // input in that case is the NETWORK figure, which no field on this page can
     // supply. Order matters: without the network basis nothing downstream is
@@ -1087,7 +1087,7 @@ function initMining() {
     // Watts are a RATE, and the field was read as a daily total. Spelling the
     // conversion out beside the box is the only place it can't be missed: the
     // "Power cost / day" card shows the money, not the energy, so nothing on
-    // screen previously said that 120 W means 2.9 kWh a day.
+    // screen said that 120 W means 2.9 kWh a day.
     // fmtWatts, not fmtGrinAmt: that formatter picks its decimals by magnitude
     // for a GRIN balance, which reads a wattage back as "120.00 W" beside
     // "2,800 W". The one line on the page whose entire job is to make a unit

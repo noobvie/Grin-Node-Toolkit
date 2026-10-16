@@ -1,8 +1,7 @@
-// account-settings.js — the account page's own script. Until 2026-10 (pool code-layout refactor,
-// part F1) this was account-settings.html's inline <script> block; it moved out byte-for-byte so
-// a strict script-src can drop 'unsafe-inline'. The 8-space indent is the inline block's, kept.
+// account-settings.js — the account page's own script, external (not inline) so a strict script-src needs no 'unsafe-inline'.
+// The 8-space indent is the original block's, kept.
 //
-// The page loads it as a CLASSIC script at the block's old position: after num-format.js,
+// The page loads it as a CLASSIC script at its original position: after num-format.js,
 // payout-methods.js and payout-goblin.js (the rail registry must be filled first — see the
 // comment above the script tags in the HTML) and before public-shell.js, public-theme.js and
 // branding.js. Never add defer / async / type="module": the order and the shared global scope
@@ -95,6 +94,17 @@
                 d.getUTCDate() === now.getUTCDate()) return hm;
             return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }) + ' ' + hm;
         }
+        // Relative form for P-03's Last share: "42 seconds ago" … "3 days ago". Computed at
+        // render, so it is as fresh as the last lookup; the absolute time rides in a title.
+        function fmtAgo(unixSeconds) {
+            if (!unixSeconds) return 'never';
+            const s = Math.max(0, Math.floor(Date.now() / 1000 - Number(unixSeconds)));
+            const unit = (n, w) => n + ' ' + w + (n === 1 ? '' : 's') + ' ago';
+            if (s < 60) return unit(s, 'second');
+            if (s < 3600) return unit(Math.floor(s / 60), 'min');
+            if (s < 86400) return unit(Math.floor(s / 3600), 'hour');
+            return unit(Math.floor(s / 86400), 'day');
+        }
 
         // "Member for" — coarse elapsed duration since first seen, plus a 🎉 on the
         // yearly anniversary (same UTC month+day, ≥1 year old). Purely cosmetic.
@@ -169,10 +179,10 @@
                 loadLedger('in');
                 loadLedger('out');
                 loadWithdrawals();
-                // NO automatic Tor check here (removed 2026-09-23). It used to run torCheck(addr)
-                // on every lookup, so every page view built a Tor circuit to the miner's onion and
-                // POSTed check_version — up to ~30 s of outbound work nobody asked for. The check
-                // is on demand now ("Check Tor wallet"), and the pay path probes fresh anyway (the
+                // NO automatic Tor check here: running torCheck(addr) on every lookup would
+                // build a Tor circuit to the miner's onion and POST check_version on every page
+                // view — up to ~30 s of outbound work nobody asked for. The check
+                // is on demand ("Check Tor wallet"), and the pay path probes fresh anyway (the
                 // withdraw pre-flight gate). resetTorStatus drops the previous address's answer.
                 resetTorStatus();
             } catch (e) {
@@ -201,7 +211,7 @@
             if (reveal) { reveal.textContent = 'Show'; reveal.setAttribute('aria-pressed', 'false'); }
             $id('acct-amount').value = '';
             renderNetPreview();
-            PayoutMethods.addressChanged();              // each rail's own inputs (Goblin)
+            PayoutMethods.addressChanged();              // the inputs of each rail (Goblin)
         }
 
         function renderSummary(a) {
@@ -233,9 +243,8 @@
 
             $id('acct-pool-min').textContent = Number(a.min_withdrawal || 0).toFixed(1);
             acctWithdrawalFee = Number(a.withdrawal_fee || 0);
-            // The fee is disclosed by the net preview (shown whenever fee > 0); the prose note
-            // that repeated it (#acct-fee-note) was cut 2026-09-23 — its explanation is the
-            // preview label's title now.
+            // The fee is disclosed by the net preview (shown whenever fee > 0); there is no
+            // separate prose note — the explanation is the preview label's title.
             renderNetPreview();
             // min/max autofill chips: min = pool minimum, max = current spendable balance
             $id('acct-amt-min').dataset.v = Number(a.min_withdrawal || 0).toFixed(1);
@@ -387,8 +396,7 @@
                 } else if (max > 0 && live.distinct > max) {
                     // The only failure mode left: more distinct passwords in flight than the
                     // pool stores. Below the cap they all coexist, so there is nothing to warn
-                    // about — this branch used to fire at TWO, which is why the page told
-                    // everyone to run one password everywhere.
+                    // about — firing at TWO would tell everyone to run one password everywhere.
                     lines.push('<div class="pd-line pd-warn"><b>Too many passwords</b>' + escHtml(rigs) +
                         ', using <b style="text-transform:none;letter-spacing:0;margin:0">' + live.distinct +
                         '</b> different passwords — more distinct passwords than the pool keeps (' + max +
@@ -414,15 +422,13 @@
                 }
             }
 
-            // The "Evidence changed" warning that stood here is GONE (design §17.2 #8). It
-            // fired whenever a capture displaced a stored value — which, with two slots, was
-            // ordinary churn: an ISP re-lease or a second site rotating the window lit a
-            // seven-day alarm about a theft that had not happened. A new value now sits BESIDE
-            // the old ones instead of pushing one out, so there is no displacement to report.
-            // Both facts it carried survive: "last added" is in the on-record hint above, and
-            // the "someone else mined to this address" explanation moved into the "Why does my
-            // rig password matter?" fold — which was itself removed 2026-09-23 at the operator's
-            // request, so that explanation is now only the HTML comment above the P-04 gate label.
+            // No "Evidence changed" warning (design §17.2 #8). A warning on every displaced
+            // stored value would be ordinary churn (an ISP re-lease or a second site rotating the
+            // window lights a seven-day alarm about a theft that has not happened). A new value sits
+            // BESIDE the old ones instead of pushing one out, so there is no displacement to
+            // report. Both facts such a warning would carry still have a home: "last added" is in the on-record hint above, and
+            // the "someone else mined to this address" explanation is not shown on the
+            // page; it lives only in the HTML comment above the P-04 gate label.
 
             if (!lines.length) return;
             el.innerHTML = lines.join('');
@@ -637,8 +643,9 @@
             const nl = [];
             if (n.state === 'shown') nl.push(dpLine('ok', 'Showing', 'on the donor wall as “' + String(n.live || '') + '”.'));
             else if (n.state === 'expired') nl.push(dpLine('warn', 'Expired', 'Your approved name is off the wall because you have not donated for a while. It shows again after your next donation.'));
-            // Since C4 a name is never pending; a pre-C4 request still waiting is decided at the
-            // pool's next start, so this line can only show between an upgrade and that start.
+            // A name is never pending (the check is automatic); a request still waiting from an
+            // older version is decided at the pool's next start, so this line can only show between
+            // an upgrade and that start.
             if (n.pending_at) {
                 nl.push(dpLine('warn', 'Being checked', 'A name submitted ' + fmtWhen(n.pending_at) + ' is waiting for the pool\'s automatic check.'));
             }
@@ -850,7 +857,7 @@
                 const json = await r.json().catch(() => null);
                 if (addr !== currentAddr) return;
                 if (r.ok && json && json.success) {
-                    // C4: a name that passes is live at once — the summary re-read shows it.
+                    // A name that passes is live at once — the summary re-read shows it.
                     dpClearProofs();
                     $id('dp-name').value = '';
                     dpNameHint();
@@ -1007,7 +1014,7 @@
         // slatepack_pending waits on the miner, so polling it would only spend requests.
         const PENDING_IN_FLIGHT = ['tor_checking', 'tor_sending', 'finalizing'];
         const PENDING_SLOW = ['tor_held', 'retry_scheduled'];
-        // One word for the placard tile. The tile used to print "#10 · tor", which reads as a
+        // One word for the placard tile. The tile does not print "#10 · tor", which reads as a
         // queue position ("10th in line"), not as the payout's id. The id stays on the strip,
         // labelled, because it is what the operator asks for.
         const PENDING_TILE = {
@@ -1025,8 +1032,8 @@
             // Rail-specific wording comes from the registry — this page holds no method names.
             let label = PayoutMethods.pendingLabel(p);
             const railName = PayoutMethods.methodLabel(p.method || 'tor');
-            // (No "next attempt" any more: nothing re-sends a Tor payout since 2026-09-26, so a
-            // legacy retry_scheduled row's next_retry_at is a time at which nothing happens.)
+            // (No "next attempt": nothing re-sends a Tor payout, so a legacy
+            // retry_scheduled row's next_retry_at is a time at which nothing happens.)
             let text = 'Pending payout · ' + fmtGrin(p.amount) + ' via ' + railName + ' — ' + label;
             // The time a miner is actually waiting for: the next scheduler pass (≤ 60 s) plus the
             // send itself (the CLI is killed at wallet_send_timeout_ms, 120 s by default).
@@ -1294,9 +1301,9 @@
         // ── P-01 hashrate chart (Day/Week/Month; retention caps at 100 days) ──
         // No per-range `bucket`: /hashrate/history returns RAW 5-min samples thinned to ≤288
         // points, so the real spacing is ~5 min (day) / ~35 min (week) / ~2.5 h (month) — never
-        // the daily bucket this table used to declare. Declaring 86400 made the week/month axes
-        // print "MMM D" on sub-hour points, repeating the same date across every tick. The chart
-        // now derives the label format from the timestamps themselves (charts-init.js).
+        // a daily bucket: declaring 86400 would make the week/month axes print "MMM D" on
+        // sub-hour points, repeating the same date across every tick. The chart derives the
+        // label format from the timestamps themselves (charts-init.js).
         const RANGES = {
             day:   { hours: 24,  note: 'last 24h' },
             week:  { hours: 168, note: 'last 7 days' },
@@ -1391,7 +1398,8 @@
                 '<td class="num">' + Number(w.shares || 0).toLocaleString('en-US') + '</td>' +
                 '<td class="num">' + pct(w.stale_pct) + '</td>' +
                 '<td class="num">' + pct(w.reject_pct) + '</td>' +
-                '<td>' + escHtml(fmtShort(w.last_share_at)) + '</td>' +
+                '<td' + (w.last_share_at ? ' title="' + escHtml(fmtWhen(w.last_share_at)) + '"' : '') + '>' +
+                    escHtml(fmtAgo(w.last_share_at)) + '</td>' +
                 '</tr>').join('');
         }
         async function loadWorkers() {
@@ -1587,14 +1595,14 @@
             tbody.textContent = '';
             if (!rows.length) {
                 const tr = document.createElement('tr'), td = document.createElement('td');
-                td.colSpan = 8; td.textContent = wd.page > 0 ? 'No more entries' : 'No payouts yet';
+                td.colSpan = 7; td.textContent = wd.page > 0 ? 'No more entries' : 'No payouts yet';
                 tr.appendChild(td); tbody.appendChild(tr);
             }
             rows.forEach(row => {
                 const tr = document.createElement('tr');
                 // The fee shown is the FLAT withdrawal fee the miner was charged (fee_charged),
                 // never row.fee — that is the real chain fee the POOL wallet paid (~0.02), and
-                // showing it here contradicted the 0.04 the request form quoted (2026-10-05).
+                // showing it here contradicted the 0.04 the request form quoted.
                 // The fee is taken only when a payout is paid: a pending one shows the fee it
                 // WILL take (received follows once it lands), a failed / cancelled / expired one
                 // returned the whole amount, so it shows neither. Payouts from before the flat
@@ -1605,18 +1613,26 @@
                                 PENDING_SLOW.indexOf(row.status) !== -1 || row.status === 'slatepack_pending';
                 const cells = [
                     fmtShort(row.created_at),
-                    PayoutMethods.methodLabel(row.method),
-                    PayoutMethods.statusLabel(row),
+                    row.confirmed_at ? fmtShort(row.confirmed_at) : '—',
+                    null,   // Method · Status, built below
                     '−' + Number(row.amount || 0).toFixed(4),
                     (paid || pending) ? fee.toFixed(4) : '—',
-                    paid ? (Number(row.amount || 0) - fee).toFixed(4) : '—',
-                    row.confirmed_at ? fmtShort(row.confirmed_at) : '—'
+                    paid ? (Number(row.amount || 0) - fee).toFixed(4) : '—'
                 ];
                 cells.forEach((text, i) => {
                     const td = document.createElement('td');
-                    if (i === 3) td.className = 'num amt-out';
-                    else if (i === 4 || i === 5) td.className = 'num';
-                    td.textContent = text;
+                    if (i === 2) {
+                        // One column for both: the rail name, then its status (text-only DOM).
+                        const rail = document.createElement('span');
+                        rail.className = 'wd-rail';
+                        rail.textContent = PayoutMethods.methodLabel(row.method);
+                        td.appendChild(rail);
+                        td.appendChild(document.createTextNode(' · ' + PayoutMethods.statusLabel(row)));
+                    } else {
+                        if (i === 3) td.className = 'num amt-out';
+                        else if (i === 4 || i === 5) td.className = 'num';
+                        td.textContent = text;
+                    }
                     tr.appendChild(td);
                 });
                 // Proof: the payout tx's on-chain kernel excess (Grin's payment-proof primitive),
@@ -1691,13 +1707,13 @@
                 return;
             }
             const tbody = $id('log-wd');
-            tbody.innerHTML = '<tr><td colspan="8">Loading…</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7">Loading…</td></tr>';
             try {
                 const data = await getJson('/api/account/' + encodeURIComponent(currentAddr) +
                     '/withdrawals?limit=' + PAGE_SIZE + '&offset=' + (wd.page * PAGE_SIZE));
                 renderWithdrawals((data && data.withdrawals) || [], (data && data.total) || 0);
             } catch (e) {
-                tbody.innerHTML = '<tr><td colspan="8">History unavailable</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7">History unavailable</td></tr>';
             }
         }
 
@@ -1706,7 +1722,7 @@
         // (audit §J11-2). It names a specific transaction in the Grin chain, permanently, so
         // serving it beside an address to anyone who asks would be a public
         // address-to-chain index on a coin whose whole point is that no such index exists.
-        // Since 2026-09-25 the public /api/pool/payments feed carries the kernel too (operator
+        // The public /api/pool/payments feed carries the kernel too (operator
         // decision, payment-history.html P-05 Tx ID) — but beside a MASKED address and only the
         // last ≤500 payouts. This route is all-time and keyed by the FULL address, so it keeps
         // the gate: removing it would complete the table the mask is there to prevent.
@@ -1770,7 +1786,7 @@
 
         // ── Tor wallet check (on demand — the "Check Tor wallet" button) ───
         // GET /tor-check is TRI-STATE and only `online` picks the wording; the raw reason goes in
-        // the title for whoever is debugging. Reasons (index.js API_DOC_META, payout-rails Part 2):
+        // the title for whoever is debugging. Reasons (API_DOC_META in routes/public.js):
         //   true  → reachable · reachable_auth           (a grin-wallet answered, or asked for auth)
         //   false → onion_unreachable · onion_timeout · no_answer · not_wallet · invalid_format
         //   null  → tor_unavailable · derivation_failed · probe_failed   (OUR tor could not look —
@@ -2060,10 +2076,10 @@
         }
 
         // ── Pending slatepack payout ⇄ pane (called from the rail's onSummary) ──
-        // The create response used to be the ONLY thing that filled this pane, so a reload, a
-        // closed tab or a second device lost the withdrawal id — and Finalize then refused a
+        // The create response must NOT be the only thing that fills this pane: a reload, a
+        // closed tab or a second device would lose the withdrawal id — and Finalize would refuse a
         // perfectly good response ("Generate a slatepack first") until the payout expired. Every
-        // lookup now re-derives the pane from the summary's pending payout: the response box comes
+        // lookup re-derives the pane from the summary's pending payout: the response box comes
         // back at once, and the S1 via slatepackReshow(). Manual rail only — a Goblin payout also
         // parks in slatepack_pending, but its response arrives over Nostr, never by paste.
         function spSyncPending(p) {
@@ -2335,7 +2351,7 @@
             }
 
             // Wires every registered rail's radio ⇄ pane and lets each rail attach its own
-            // listeners. Replaces the per-rail listener lines that used to live here.
+            // listeners.
             PayoutMethods.init(PAYOUT_HOST);
 
             // Hashrate range toggle
@@ -2389,7 +2405,7 @@
             // Deep-link support: ?addr=grin1… takes priority over the last-viewed address
             // stashed in localStorage. Kept because a miner may legitimately bookmark or share
             // their OWN link — but no page on this site emits one any more: the leaderboards,
-            // the payouts table and the donor wall stopped linking here on 2026-09-02 (audit
+            // the payouts table and the donor wall do not link here (audit
             // §J11-1/§J11-3), because those links were the pool's full-address source and the
             // crawl path into third-party indexes. This page is `noindex` for the same reason.
             let saved = '';

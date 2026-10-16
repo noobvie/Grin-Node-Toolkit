@@ -1,6 +1,6 @@
-// regions.html page script — moved out of the page's inline script block (code-layout F5): byte-verbatim, then a second commit
-// turned the on*= attributes inside its markup STRINGS into data-action (the delegated wiring is at the end).
-// Classic script (no defer/module) loaded at the same position as the old block, after the <script src> tags before it, whose globals it uses (H14).
+// regions.html page script.
+// Event wiring is delegated (data-action) and sits at the end of the file.
+// Classic script (no defer/module) loaded after the <script src> tags before it, whose globals it uses.
 API.guardAdminPage();
 
 let _regions = [];          // last-loaded pool_locations rows, looked up by id
@@ -87,8 +87,8 @@ function fmtBytes(b) {
 
 // ── Multi-region readiness (the STEP 1 prerequisite) ─────────────────────────
 // The hub's own WireGuard tunnel has to exist before ANY gateway can peer with it.
-// It used to be reachable only over SSH (Script 07 → W → 1), so the first time an
-// operator learned about it was a 502 halfway through saving a region. Read the
+// Without a check up front, the first an operator would learn of it is a 502 halfway
+// through saving a region (the tunnel is also set up over SSH: Script 07 → W → 1). Read the
 // state up front and either offer the button or confirm the tunnel is up.
 // _mrReady: null = unknown (never answered), true/false = the last known state.
 // Only `false` is actionable — `null` must never be treated as "not enabled".
@@ -328,7 +328,10 @@ async function loadRegions(silent) {
       const pin = (r.lat != null && r.lng != null)
         ? ` <span class="dim" title="Network map pin: ${escHtml(String(r.lat))}, ${escHtml(String(r.lng))} (edit to change)">📍</span>`
         : ` <span class="dim" title="No map position set — the network map puts this marker on the country centre. Edit → Map latitude/longitude to pin it on its city.">○</span>`;
-      const url = r.stratum_url ? `stratum+tcp://${escHtml(r.stratum_url)}` : '<span class="dim">—</span>';
+      // Bare host:port, as the public patch bay shows it — the
+      // scheme only lengthened the widest cell in the table. One line: break-all let the auto
+      // layout squeeze it to a few characters per line (a four-line, 100px-tall row).
+      const url = r.stratum_url ? escHtml(r.stratum_url) : '<span class="dim">—</span>';
       const minersShares = hb
         ? `${(hb.miners || 0).toLocaleString()} <span class="dim">/ ${(hb.shares_window || 0).toLocaleString()} sh</span>`
         : '—';
@@ -358,7 +361,7 @@ async function loadRegions(silent) {
         <tr>
           <td><strong>${escHtml(r.label || r.region)}</strong>${hiddenTag}<br><span class="dim mono">${escHtml(r.region)}</span></td>
           <td>${country}${pin}</td>
-          <td class="mono" style="word-break:break-all;">${url}</td>
+          <td class="mono" style="white-space:nowrap;">${url}</td>
           <td>${portCheck}</td>
           <td>${tunnelChip(r.region)}</td>
           <td>${statusBadge(r.region)}</td>
@@ -488,9 +491,9 @@ async function submitRegion() {
       // so it has to be said here rather than left to look like a pairing fault.
       if (r.sync_warning) warn = (warn ? warn + ' ' : '') + '⚠ ' + r.sync_warning;
       // The stratum listener for this region can fail to bind even when everything else
-      // succeeded (port already in use, tunnel IP not up yet). The success line below used to
-      // say "listener live" unconditionally, because the backend reported an unconditional
-      // success for an asynchronous bind it never waited on (audit §J6-12). If that happened,
+      // succeeded (port already in use, tunnel IP not up yet). The success line below must not
+      // claim "listener live" unconditionally: the backend reports success for an asynchronous
+      // bind it never waits on (audit §J6-12). If that happened,
       // the region is saved and the peer is configured but NO MINER IN IT CAN CONNECT, and the
       // symptom appears on the gateway box — so it has to be said here.
       if (r.stratum_bind_error) {
@@ -577,7 +580,7 @@ document.addEventListener('DOMContentLoaded', () => { syncFlag(); loadPort(); lo
 // that user actions (e.g. Delete) draw from.
 setInterval(() => { if (!document.hidden) loadRegions(true); }, 60000);
 
-// ==== F5: event wiring — replaces the inline on*= attributes (strict script-src, no inline handlers).
+// ==== event wiring — replaces the inline on*= attributes (strict script-src, no inline handlers).
 // One delegated listener per event type; data-action names the handler. Every old handler ignored
 // the Event and `this` except where noted, so the wrappers pass exactly the arguments the attribute did.
 document.addEventListener('click', (e) => {

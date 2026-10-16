@@ -1,4 +1,4 @@
-// Credential-page sink test — audit §J1-1, plus design §19.17 D22 (Option B, Part C1).
+// Credential-page sink test — audit script07_security_audit.md §J1-1, plus script07_design_games.md §19.17 D22.
 //
 // public_html/js/branding.js injects operator-authored content into every public page.
 // Until Part C1, applyAnalytics() re-created <script> nodes out of custom_head_html /
@@ -104,7 +104,7 @@ const CFG = {
   analytics: {
     provider: 'ga4',
     ga_tracking_id: 'G-PWNED',
-    // LEGACY keys (design §19.17 D22): the server no longer sends them, but a stale payload
+    // LEGACY keys (design §19.17 (script07_design_games.md) D22): the server no longer sends them, but a stale payload
     // might. branding.js must ignore them on every page — [6] asserts it.
     custom_head_html: '<script>window.__PWNED_HEAD=1;</script><img src=x onerror="window.__PWNED_IMG=1">',
     custom_body_html: '<script>window.__PWNED_BODY=1;</script>',
@@ -184,7 +184,7 @@ async function runFor(pageKey, attrExempt, cfgOverride, nav) {
     cssVars: Object.assign({}, documentElement._vars, body._vars),
     // Raw innerHTML of everything under <body>, for the maintenance-overlay assertion.
     bodyHtml: body.children.map((c) => c.innerHTML || '').join('~'),
-    // GA4's init (F6: direct JS, no inline script) — what gtag.js reads once it loads.
+    // GA4's init (direct JS, no inline script) — what gtag.js reads once it loads.
     dataLayer: sandbox.dataLayer, gtag: sandbox.gtag,
   };
 }
@@ -227,7 +227,7 @@ async function main() {
     !/attacker\.example/.test(login.headText), login.headText);
   ok('login: NO font_family style injection', !/content:"pwned"/.test(login.headText));
   ok('login: no analytics provider script (G-PWNED)', !/G-PWNED/.test(login.headText + login.bodyText));
-  // audit J15-5 / J9-3's handed-over half. The custom_theme loop used to sit ABOVE the guard,
+  // audit J15-5 / J9-3's handed-over half. The custom_theme loop must sit BELOW the guard,
   // so this was the one operator-authored CSS sink still reaching the credential page.
   ok('login: NO custom_theme CSS custom properties (audit J15-5)',
     login.cssVars['--pwned-marker'] === undefined, JSON.stringify(login.cssVars));
@@ -301,7 +301,7 @@ async function main() {
     const r = await runFor(page);
     ok(`${page}: no node carries the legacy head/body HTML markers`,
       !/__PWNED_HEAD|__PWNED_BODY|__PWNED_IMG/.test(r.deep), r.deep.slice(0, 300));
-    // Exactly ONE GA4 node (the gtag.js loader) and nothing else may be a SCRIPT — since F6 the
+    // Exactly ONE GA4 node (the gtag.js loader) and nothing else may be a SCRIPT — the
     // init runs as direct JS, not an injected inline script. Counting is what catches a
     // half-revert that re-adds the head sink but keeps the markers out of text.
     const scripts = r.deep.split('~').filter((n) => n.startsWith('SCRIPT|'));
@@ -359,10 +359,10 @@ async function main() {
 
   console.log('');
   console.log('[8] F6 - GA4 init is direct JS: dataLayer gets the same pushes the inline snippet made');
-  // The init used to be an injected inline <script> (blocked by a strict script-src). The
+  // The init is direct JS, not an injected inline <script> (a strict script-src blocks one). The
   // shim above never EXECUTES an inline script, so these pushes can only come from direct JS.
   // A SECOND addr on each URL (and a percent-encoded `%61ddr` on the referrer): a scrub that
-  // removed only the first occurrence would ship the second one (R3 L9 G6).
+  // removed only the first occurrence would ship the second one.
   const ga = await runFor('account-settings', false,
     withAnalytics({ provider: 'ga4', ga_tracking_id: 'G-ABC123' }),
     { href: 'https://pool.example/account-settings.html?addr=grin1secretaddr&utm_source=x&addr=grin1dupaddr',

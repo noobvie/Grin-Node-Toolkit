@@ -232,8 +232,8 @@ function classifyProbeError(err) {
 // needs a parsed result*) — hence a real check_version POST rather than a bare
 // SOCKS connect. The one exception is 401: a wallet that demands credentials
 // has still identified itself as a wallet that is running, and whether the
-// foreign API over Tor asks for basic auth is an open question the Part 9 VPS
-// session settles. Treating 401 as online means that answer does not gate this.
+// foreign API over Tor asks for basic auth is an open question the VPS
+// acceptance run settles. Treating 401 as online means that answer does not gate this.
 function readProbeAnswer(status, bodyText) {
   if (status === 401) return verdict('reachable_auth', { http_status: status });
   if (status < 200 || status >= 300) return verdict('not_wallet', { http_status: status });

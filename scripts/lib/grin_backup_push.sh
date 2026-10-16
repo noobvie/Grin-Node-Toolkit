@@ -175,11 +175,23 @@ GBP_ENABLED=0; GBP_HOST=""; GBP_PORT=22; GBP_USER=""; GBP_DIR=""; GBP_KEEP_DAYS=
 [[ "\$GBP_PORT" =~ ^[0-9]+\$ ]] || GBP_PORT=22
 [[ -f "\$KEY" ]] || exit 0
 OPTS=( -i "\$KEY" -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new )
-for f in \\
-    "\$(ls -t /opt/grin/backups/grin_toolkit_backup_*.tar.gz.enc /opt/grin/temp/temp_dir_*.tar.gz.enc 2>/dev/null | head -1)" \\
-    "\$(ls -t /opt/grin/backups/grin_solo_backup_*.tar.gz.enc 2>/dev/null | head -1)" \\
-    "\$(ls -t /opt/grin/backups/grin_drop_backup_*.tar.gz.enc 2>/dev/null | head -1)"; do
+# Newest archive per product, product parsed from grin_<product>_backup_* (same
+# loop as _gbp_newest_per_product in the lib — no hard-coded product list).
+# Collected first, pushed after: ssh/scp inside a read-loop would eat its stdin.
+seen=" "; newest=()
+while IFS= read -r f; do
     [[ -n "\$f" && -f "\$f" ]] || continue
+    base="\$(basename "\$f")"
+    case "\$base" in
+        temp_dir_*)      prod="toolkit" ;;
+        grin_*_backup_*) prod="\${base#grin_}"; prod="\${prod%%_backup_*}" ;;
+        *)               continue ;;
+    esac
+    [[ "\$seen" == *" \$prod "* ]] && continue
+    seen+="\$prod "
+    newest+=("\$f")
+done < <(ls -t /opt/grin/backups/grin_*_backup_*.tar.gz.enc /opt/grin/temp/temp_dir_*.tar.gz.enc 2>/dev/null)
+for f in "\${newest[@]}"; do
     base="\$(basename "\$f")"
     # Already offsite → skip; else delegate to the CLI (it logs success/failure).
     if ssh "\${OPTS[@]}" -p "\$GBP_PORT" "\$GBP_USER@\$GBP_HOST" "test -f '\$GBP_DIR/\$base'" 2>/dev/null; then
@@ -402,18 +414,40 @@ _gbp_set_retention() {
     return 0
 }
 
+# Newest local archive of each product, one path per line. The product is
+# parsed from the engine's grin_<product>_backup_<DDMMYYYY>.tar.gz.enc name, so
+# a new product (pubpool, pubpooltestnet, …) is picked up without editing this
+# file — a hard-coded list here is how the public pool was silently skipped.
+# Legacy Script-08 temp_dir_* archives count as product "toolkit". Unencrypted
+# files (e.g. Script 04's grin_tor_onion_<net>.tar.gz) never match the glob.
+# ⚠ _gbp_write_retry_cli carries a standalone copy of this loop — keep in step.
+_gbp_newest_per_product() {
+    local f base prod seen=" "
+    # Callers consume this via < <(…) and run scp only AFTER it returns — keep it
+    # free of network calls, or they would read this loop's stdin.
+    while IFS= read -r f; do
+        base="${f##*/}"
+        case "$base" in
+            temp_dir_*)      prod="toolkit" ;;
+            grin_*_backup_*) prod="${base#grin_}"; prod="${prod%%_backup_*}" ;;
+            *)               continue ;;
+        esac
+        [[ "$seen" == *" $prod "* ]] && continue
+        seen+="$prod "
+        echo "$f"
+    done < <(ls -t /opt/grin/backups/grin_*_backup_*.tar.gz.enc /opt/grin/temp/temp_dir_*.tar.gz.enc 2>/dev/null)
+    return 0
+}
+
 # Convenience: push the newest local archive of each product right now.
 _gbp_push_now() {
     gbp_configured || { warn "Offsite push is not configured/enabled."; return 1; }
     [[ -x "$GBP_BIN" ]] || _gbp_write_cli
     local -a cands=()
     local f
-    for f in \
-        "$(ls -t /opt/grin/backups/grin_toolkit_backup_*.tar.gz.enc /opt/grin/temp/temp_dir_*.tar.gz.enc 2>/dev/null | head -1)" \
-        "$(ls -t /opt/grin/backups/grin_solo_backup_*.tar.gz.enc 2>/dev/null | head -1)" \
-        "$(ls -t /opt/grin/backups/grin_drop_backup_*.tar.gz.enc 2>/dev/null | head -1)"; do
+    while IFS= read -r f; do
         [[ -n "$f" && -f "$f" ]] && cands+=("$f")
-    done
+    done < <(_gbp_newest_per_product)
     if [[ "${#cands[@]}" -eq 0 ]]; then
         warn "No local archives found (run a Backup now first)."
         return 1

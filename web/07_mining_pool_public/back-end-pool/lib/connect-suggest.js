@@ -25,7 +25,7 @@
 const geoip = require('./geoip');
 
 // RTT milliseconds per great-circle km. Calibrated against Globalping measurements to OVH
-// Gravelines on 2026-09-23 (one probe set, same day):
+// Gravelines, one probe set taken 2026-09-23 (evidence):
 //   Frankfurt  ~470 km    →   9 ms (est  7, −21%)   Ashburn   ~6,100 km → 84 ms (est 91, +9%)
 //   Singapore  ~10,700 km → 148–162 ms (est 161)    Hong Kong ~9,500 km → 159–182 ms on good
 //                                                   routes (est 143, −10…−22%)

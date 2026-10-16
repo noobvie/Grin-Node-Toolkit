@@ -411,8 +411,8 @@ class AlertMonitor {
   }
 
   /**
-   * The flat withdrawal fee vs what payouts really cost. Miners pay a FLAT fee (operator decision
-   * 2026-10-05: never tracked to the chain automatically), and the pool wallet pays the real,
+   * The flat withdrawal fee vs what payouts really cost. Miners pay a FLAT fee (operator decision:
+   * never tracked to the chain automatically), and the pool wallet pays the real,
    * weight-based network fee. If Grin's fees rise, every payout starts costing the operator money
    * — silently, because nothing else compares the two. This compares the average real fee of the
    * last NETWORK_FEE_SAMPLE miner payouts with the current flat fee and warns when it has reached
@@ -626,7 +626,7 @@ class AlertMonitor {
    */
   async checkPayoutHealth() {
     try {
-      // Pool-side Tor failures only (2026-09-26). A Tor payout is now tried ONCE, so every miner
+      // Pool-side Tor failures only. A Tor payout is tried ONCE, so every miner
       // whose wallet was offline leaves a tor_failed row — counting those would keep this alert
       // permanently on and train the operator to ignore it. Counted: pool_send_path (the miner's
       // wallet answers but our send could not deliver), pool_busy (pool wallet short) and unknown
@@ -956,22 +956,22 @@ class AlertMonitor {
   }
 
   // The rolling payout alerts the withdrawal scheduler raises, folded into the admin health page's
-  // Grin Wallet card (/api/admin/health) — until 2026-09-26 only payout_unmined was, and the other
-  // two lived in the alerts table where no admin page showed them. All but the last are resolved
+  // Grin Wallet card (/api/admin/health), because a row in the alerts table alone is shown on no
+  // admin page. All but the last are resolved
   // by the scheduler itself, so there is no time window here:
   //   payout_held   (critical) — a Tor payout held > 24 h with an unknown outcome
   //   payout_unmined (warning | critical) — paid but not seen mined after 1 h
   //   tor_send_path (warning) — the miner's wallet answers our probe, grin-wallet could not deliver
   //   slate_finalized_elsewhere (critical | warning) — the slatepack expiry gate found a pool slate
   //     finalized outside the backend: critical while a payout is held, warning for a day after one
-  //     settled as paid (2026-09-27)
+  //     settled as paid
   //   slate_expiry_unverified (warning) — an expired slatepack was refunded without that check,
   //     because the grin-wallet build does not record the slate state
   //   slate_refunded_but_mined (critical) — an expired slatepack was refunded AND its slate is
   //     confirmed on chain: the miner may have been paid twice (retryExpiredSlateCancels). Raised
   //     once per payout and resolved by NOTHING automatic — only the operator knows when it has
   //     been reconciled — so it is a MANUAL_RESOLVE_TYPES alert: the card carries its id in
-  //     `manual_alerts`, and the page's "Mark reconciled" closes it (resolveManual). Added 2026-09-27.
+  //     `manual_alerts`, and the page's "Mark reconciled" closes it (resolveManual).
   // 'critical' = up but wrong: it outranks a degraded card, but never masks a wallet that is
   // actually down ('error'). Admin-only surface — never call this for a public route.
   static foldPayoutAlerts(db, card) {

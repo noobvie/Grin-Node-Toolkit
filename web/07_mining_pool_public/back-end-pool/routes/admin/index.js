@@ -1,7 +1,7 @@
-// The ORDERED list of admin route files (code-layout refactor P9). Order is the order Express
-// matches them in — it is the order the routes had in the former single file, and the T2 manifest
+// The ORDERED list of admin route files (layout: script07_implementation.md §12.1). Order is the order Express
+// matches them in — the same order the single-file router used, and the route-manifest test
 // (scripts/test-route-manifest.js) fails if two overlapping routes ever swap. Each file writes
-// FULL paths and is mounted without a prefix; nothing here adds a guard (plan I8) — every route
+// FULL paths and is mounted without a prefix; nothing here adds a guard — every route
 // keeps its own secureAdmin / freshAdmin chain. noAutoOptions: see routes/_shared/no-auto-options.js.
 
 const createAdminNodeRoutes = require('./node');

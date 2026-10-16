@@ -14,7 +14,7 @@
 #  encrypted slatepacks as Nostr events and never touches chain state), so
 #  there are no mainnet/testnet instances — upstream runs a single service too.
 #
-#  Design    : docs/generated/script09_design.md  (PART A — 091)
+#  Design    : docs/reference/script09_design.md  (PART A — 091)
 #  Helpers   : scripts/lib/091_lib_floonet.sh (flr_*)
 #              scripts/lib/nostr_relay_deploy.sh (nrd_* — shared wss primitive)
 #  Upstream  : https://github.com/2ro/floonet-rs  •  https://docs.floonet.dev
@@ -401,7 +401,7 @@ main() {
             [rR]) _flr_need_install && flr_menu_retention || true ;;
             [bB]) flr_backup_menu      || true ;;
             [uU]) _flr_need_install && flr_update   || true ;;
-            # M) Nym mixnet exit was removed 2026-08-07: upstream ARCHIVED
+            # There is no M) key (Nym mixnet exit): upstream ARCHIVED
             # 2ro/floonet-mixexit and the Goblin stack moved off Nym to Tor/arti,
             # so the option could only ever build a dead add-on. No alias is kept
             # — a retired key that still dispatched would install nothing useful.

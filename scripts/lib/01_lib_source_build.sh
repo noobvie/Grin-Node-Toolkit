@@ -1,7 +1,7 @@
 # =============================================================================
 # lib/01_lib_source_build.sh — compile the grin node binary from git source
 # =============================================================================
-# Sourced by 01_build_new_grin_node.sh. Reached from the Step-1 menus with key G.
+# Sourced by 01_build_new_grin_node.sh. Reached from the Script 01 menu with key G.
 #
 #   WHY THIS EXISTS
 #     Script 01 normally installs the newest *release* asset from the GitHub API
@@ -478,7 +478,7 @@ EOF
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# _gsb_list_artifacts — print previously built binaries, newest first.
+# _gsb_list_artifacts — print binaries built earlier, newest first.
 # Echoes paths one per line (callers read into an array); prints nothing if none.
 # -----------------------------------------------------------------------------
 _gsb_list_artifacts() {
@@ -488,7 +488,7 @@ _gsb_list_artifacts() {
 }
 
 # -----------------------------------------------------------------------------
-# _gsb_pick_artifact — set GSB_ARTIFACT from the stash. Returns 1 on cancel/none.
+# _gsb_pick_artifact — set GSB_ARTIFACT from the stash. Returns 1 when there is none, S01_RC_BACK on 0 / cancel.
 # -----------------------------------------------------------------------------
 _gsb_pick_artifact() {
     local -a arts=()
@@ -516,15 +516,17 @@ _gsb_pick_artifact() {
     done
     echo -e "    ${DIM}0${RESET}) Cancel"
     echo ""
-    echo -ne "${BOLD}Choose: ${RESET}"
     local pick=""
-    read -r pick || true
-    if [[ "$pick" =~ ^[1-9][0-9]*$ ]] && (( pick >= 1 && pick <= ${#arts[@]} )); then
-        GSB_ARTIFACT="${arts[$((pick - 1))]}"
-        return 0
-    fi
-    info "Cancelled."
-    return 1
+    while true; do
+        echo -ne "${BOLD}Choose [1-${#arts[@]} / 0]: ${RESET}"
+        read -r pick || return "${S01_RC_BACK:-1}"
+        if [[ "$pick" == "0" ]]; then return "${S01_RC_BACK:-1}"; fi
+        if [[ "$pick" =~ ^[1-9][0-9]*$ ]] && (( pick >= 1 && pick <= ${#arts[@]} )); then
+            GSB_ARTIFACT="${arts[$((pick - 1))]}"
+            return 0
+        fi
+        warn "Invalid choice '${pick}'."
+    done
 }
 
 # -----------------------------------------------------------------------------
@@ -691,7 +693,7 @@ _gsb_install_to_instances() {
 
     if ! _gsb_collect_instances; then
         warn "No installed Grin node found — nothing to install into."
-        info "Build a node first (Step-1 menu), or use option 3 to have this"
+        info "Build a node first (menu key 5, Install a node), or use option 3 to have this"
         info "binary picked up by the node build you are about to run."
         return 1
     fi
@@ -819,7 +821,7 @@ _gsb_restore_previous() {
         info "Two other ways back:"
         info "  · option 2 — reinstall an older binary from $GSB_BIN_DIR"
         info "    (archived 'grin-<ver>-replaced-<id>' entries are previous binaries)"
-        info "  · Step-1 menu 'update binary only' — re-download the latest release"
+        info "  · menu key 3 (Update Grin binary) — re-download the latest release"
         return 1
     fi
 
@@ -901,9 +903,11 @@ _gsb_build() {
         echo -e "  ${DIM}listed in $GSB_PATCH_DIR/README.md.${RESET}"
     fi
     echo ""
-    echo -ne "${BOLD}Ref [${GSB_DEFAULT_REF}]: ${RESET}"
+    echo -ne "${BOLD}Ref [${GSB_DEFAULT_REF}] (0 = back): ${RESET}"
     local ref=""
-    read -r ref || true
+    read -r ref || return "${S01_RC_BACK:-1}"
+    # "0" is a valid git ref by the character check below, so it must be caught first.
+    if [[ "$ref" == "0" ]]; then return "${S01_RC_BACK:-1}"; fi
     [[ -z "$ref" ]] && ref="$GSB_DEFAULT_REF"
 
     # Refs go straight into git commands; keep the character set boring.
@@ -940,15 +944,16 @@ _gsb_build() {
     echo -e "  ${BOLD}Next:${RESET}"
     echo -e "    ${GREEN}2${RESET} — install it into the node(s) already on this box"
     echo -e "    ${GREEN}3${RESET} — install it into the NEXT node you build (not the release download)"
-    echo -e "    ${DIM}Enter${RESET} — leave it in $GSB_BIN_DIR and decide later"
+    echo -e "    ${DIM}0 / Enter${RESET} — leave it in $GSB_BIN_DIR and decide later"
     echo ""
-    echo -ne "${BOLD}Choice [2/3/Enter]: ${RESET}"
+    echo -ne "${BOLD}Choice [2/3 / 0]: ${RESET}"
     local nxt=""
     read -r nxt || true
     case "${nxt}" in
         2) _gsb_install_to_instances || true ;;
         3) _gsb_use_for_session || true ;;
-        *) info "Artifact left in $GSB_BIN_DIR." ;;
+        0|"") info "Artifact left in $GSB_BIN_DIR." ;;
+        *) info "Unknown choice '${nxt}' — artifact left in $GSB_BIN_DIR." ;;
     esac
     return 0
 }
@@ -958,12 +963,12 @@ _gsb_build() {
 # download_grin_binary already reuses $GRIN_BIN_TMP when it is set (that is how
 # the mainnet+testnet double build avoids a second download), so pointing it at
 # the artifact is all that is needed. It is exported as GRIN_PREBUILT_BIN too
-# because several Step-1 branches re-exec the script ("exec \$0"), which would
-# otherwise drop a plain shell variable.
+# because the menu resets the session state after every action (s01_reset_state),
+# which would otherwise drop a plain shell variable.
 # -----------------------------------------------------------------------------
 _gsb_use_for_session() {
     if [[ -z "${GSB_ARTIFACT:-}" || ! -x "${GSB_ARTIFACT:-}" ]]; then
-        _gsb_pick_artifact || return 1
+        _gsb_pick_artifact || return $?
     fi
     export GRIN_PREBUILT_BIN="$GSB_ARTIFACT"
     GRIN_BIN_TMP="$GSB_ARTIFACT"
@@ -979,7 +984,7 @@ _gsb_use_for_session() {
 }
 
 # -----------------------------------------------------------------------------
-# gsb_menu — public entry point (Step-1 menus, key G).
+# gsb_menu — public entry point (Script 01 menu, key G).
 # Always returns 0: it is called from menu loops running under `set -e`.
 # -----------------------------------------------------------------------------
 gsb_menu() {
@@ -1033,10 +1038,16 @@ gsb_menu() {
         local choice=""
         read -r choice || true
 
+        # A sub-step that returns S01_RC_BACK was cancelled at a prompt: redraw at once, no "Press Enter".
+        local rc
         case "${choice}" in
-            1) _gsb_build || true; _gsb_pause ;;
-            2) if _gsb_pick_artifact; then _gsb_install_to_instances || true; fi; _gsb_pause ;;
-            3) _gsb_use_for_session || true; _gsb_pause ;;
+            1) rc=0; _gsb_build || rc=$?
+               if [[ "$rc" != "${S01_RC_BACK:-x}" ]]; then _gsb_pause; fi ;;
+            2) rc=0; _gsb_pick_artifact || rc=$?
+               if (( rc == 0 )); then _gsb_install_to_instances || true; fi
+               if [[ "$rc" != "${S01_RC_BACK:-x}" ]]; then _gsb_pause; fi ;;
+            3) rc=0; _gsb_use_for_session || rc=$?
+               if [[ "$rc" != "${S01_RC_BACK:-x}" ]]; then _gsb_pause; fi ;;
             4) _gsb_restore_previous || true; _gsb_pause ;;
             5) _gsb_purge_cache || true; _gsb_pause ;;
             0|"") return 0 ;;

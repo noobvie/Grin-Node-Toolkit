@@ -1,5 +1,4 @@
-// /api/admin/donors*. Moved verbatim out of routes/index.js (code-layout refactor P9);
-// registrations stay at 2-space indent and write FULL paths.
+// /api/admin/donors*. Registrations stay at 2-space indent and write FULL paths.
 
 const express = require('express');
 const { getHorizon: getLedgerRollupHorizon } = require('../../lib/ledger-rollup');
@@ -16,7 +15,7 @@ module.exports = function createAdminDonorsRoutes(ctx, guards) {
   const { secureAdmin, freshAdmin } = guards;
   const router = express.Router();
 
-  // ─── DONORS (Admin only) — design §18.6 (§18 Part 3, 2026-09-24) ─────────────────────────
+  // ─── DONORS (Admin only) — design §18.6 ─────────────────────────
   // The operator's review surface for donor profiles. Every donor nickname and banner is
   // PRE-moderated: a submission is a pending donor_requests row (lib/donor-profiles.js) that
   // nothing public reads until an approve here. FULL addresses on purpose — this is the admin
@@ -27,7 +26,7 @@ module.exports = function createAdminDonorsRoutes(ctx, guards) {
   // its admin_audit_log row are ONE transaction inside the lib (fail-closed: no decision lands
   // without its audit row), so these routes only validate input and map result codes to status.
   //
-  // v1's censor/uncensor routes and the rescan-on-settings-save hook were REMOVED in this part
+  // There are no censor/uncensor routes or rescan-on-settings-save hook
   // (§18.6): with pre-moderation there is nothing published to censor after the fact.
   const DONOR_ADMIN_CODES = {
     bad_id:        [400, 'Not a valid request id'],
@@ -43,7 +42,7 @@ module.exports = function createAdminDonorsRoutes(ctx, guards) {
     nothing_live:  [404, 'There is no live item of that kind to remove'],
     already:       [409, 'This address is already blocked'],
     not_blocked:   [409, 'This address is not blocked'],
-    // Part C4 — donor names
+    // donor names
     bad_state:      [400, 'state must be "live" or "removed"'],
     bad_name:       [400, 'Give a name that folds to 1–32 letters and digits (spaces and - _ . & \' are ignored)'],
     already_banned: [409, 'That name (in some spelling) is already banned'],
@@ -168,7 +167,7 @@ module.exports = function createAdminDonorsRoutes(ctx, guards) {
 
   // The review queue (§18.6). ?status= is a closed enum (default pending — oldest first);
   // the decided statuses are the history. ?kind= (name | banner, optional) narrows it: since
-  // Part C4 names are auto-checked, so the admin page asks for banners. Each row carries the
+  // names are auto-checked, so the admin page asks for banners. Each row carries the
   // address's current approved item of that kind and the donor's league rank + lifetime so the
   // reviewer knows who is asking. Never the bytes.
   router.get('/api/admin/donors/requests', secureAdmin, (req, res) => {
@@ -296,7 +295,7 @@ module.exports = function createAdminDonorsRoutes(ctx, guards) {
     }
   });
 
-  // ─── Donor NAMES (design §19.17.6, Part C4) ─────────────────────────────────────────────────
+  // ─── Donor NAMES (script07_design_games.md §19.17.6) ─────────────────────────────────────────────────
   // Names are checked automatically and live at once, so the operator's surface is a LIST with
   // post-moderation, not a queue: remove (POST /api/admin/donors/:addr/remove {kind:'name'},
   // above), ban a name (every spelling, every holder), block a donor (above). Same tiers as the
@@ -305,7 +304,7 @@ module.exports = function createAdminDonorsRoutes(ctx, guards) {
 
   // ?state=live (default) | removed, ?q= an address start or a name fragment (matched on the
   // matching form, so `sh1t` finds "Shit"). Live rows carry `hit` — what the rule says TODAY, so
-  // a word added after a name went live shows as a hint — `banned`, `same_as` (pre-C4 approved
+  // a word added after a name went live shows as a hint — `banned`, `same_as` (names approved before auto-checking
   // names may collide) and `blocked`.
   router.get('/api/admin/donors/names', secureAdmin, (req, res) => {
     try {

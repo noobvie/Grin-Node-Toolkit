@@ -1,4 +1,4 @@
-/* play-boards.js — the Leaderboards & events panel on /play/ (design §19.9, Part 7).
+/* play-boards.js — the Leaderboards & events panel on /play/ (design §19.9).
  *
  * Public while the games are open: shown signed in OR out (play-shell.js announces the page
  * state with a `play:view` event and on <body data-play-view>). Signed in, the server also

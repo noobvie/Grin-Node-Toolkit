@@ -1,5 +1,5 @@
-// blocks.html page script — moved BYTE-verbatim out of the page's inline script block (code-layout F5).
-// Classic script (no defer/module) loaded at the same position as the old block, after the <script src> tags before it, whose globals it uses (H14).
+// blocks.html page script.
+// Classic script (no defer/module) loaded after the <script src> tags before it, whose globals it uses.
 let _filter = '';
 
 // Auth gate (httpOnly-cookie aware): redirects to /login.html if not an admin, else wires
@@ -100,7 +100,7 @@ function setFilter(f, btn) {
 document.addEventListener('DOMContentLoaded', () => loadBlocks());
 setInterval(loadBlocks, 60000);
 
-// ==== F5: event wiring — replaces the inline on*= attributes (strict script-src, no inline handlers).
+// ==== event wiring — replaces the inline on*= attributes (strict script-src, no inline handlers).
 // One delegated listener per event type; data-action names the handler. Every old handler ignored
 // the Event and `this` except where noted, so the wrappers pass exactly the arguments the attribute did.
 document.addEventListener('click', (e) => {

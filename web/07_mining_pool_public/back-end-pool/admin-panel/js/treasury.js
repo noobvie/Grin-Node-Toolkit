@@ -1,9 +1,8 @@
-// treasury.html page script — moved BYTE-verbatim out of the page's inline <script> (code-layout F3).
-// Classic script (no defer/module) loaded at the same position as the old block, after auth.js,
-// api.js, admin-shell.js, stepup.js and payouts-common.js, whose globals it uses (H14).
-// Treasury: is the pool solvent, and is it paying from the right wallet? Moved off payments.html
-// (2026-10), which kept the payout queue. Every action below keeps its endpoint, step-up and
-// confirm text from there.
+// treasury.html page script.
+// Classic script (no defer/module) loaded after auth.js,
+// api.js, admin-shell.js, stepup.js and payouts-common.js, whose globals it uses.
+// Treasury: is the pool solvent, and is it paying from the right wallet? Separate from payments.html,
+// which keeps the payout queue.
 // Auth gate (httpOnly-cookie aware): redirects to /login.html if not an admin, else wires
 // up the topbar username + Logout. Pool name + testnet banner are handled by admin-shell.js.
 // stepup.js provides adminFetch() for the step-up-gated wizard actions and the freeze toggle.
@@ -332,7 +331,7 @@ setInterval(loadReconciliation, 180000);
 setInterval(loadWalletAudit, 180000);
 setInterval(loadWalletIdentity, 180000);
 
-// ==== F3: event wiring — replaces the inline on*= attributes (strict script-src, no inline handlers).
+// ==== event wiring — replaces the inline on*= attributes (strict script-src, no inline handlers).
 // One delegated listener per event type; data-action names the handler. Every old handler ignored
 // the Event and `this` except where noted, so the wrappers pass exactly the arguments the attribute did.
 document.addEventListener('click', (e) => {

@@ -49,6 +49,9 @@ source "$_PW_LIB_DIR/grin_node_control.sh"
 # (mainnet|testnet). Testnet uses the grin-wallet testnet owner port (13420), the
 # `--testnet` CLI flag, the testnet node dir, and a `_testnet`-suffixed tmux/watchdog
 # name so a testnet wallet never collides with a mainnet one on the same box.
+# ⚠ The mainnet session name is a PREFIX of the testnet one, and tmux falls back
+# to a prefix match when no exact name exists — so every `-t` on it uses the
+# exact form `-t "=$name"`, or a mainnet stop/status can act on the testnet session.
 # PW_FOREIGN_PORT is kept only to pin grin-wallet.toml api_listen_port (the canonical
 # Foreign port if `grin-wallet listen` is ever run standalone) and for the parent
 # menu's display — at runtime the Foreign API rides PW_OWNER_PORT via include_foreign.
@@ -205,7 +208,7 @@ _pw_pid_is_ours() {
 _pw_port_collision_check() {
     local port="$1" tmux_name="$2" pid dir n
     pid=$(gnc_get_pid_on_port "$port") || return 0   # free → OK
-    if tmux has-session -t "$tmux_name" 2>/dev/null; then
+    if tmux has-session -t "=$tmux_name" 2>/dev/null; then
         info "Port $port already served by our session '$tmux_name'."
         return 0
     fi
@@ -330,7 +333,7 @@ NODE_BIN="$node_bin"
 EOF
     cat >> "$boot" <<'EOF'
 port_up(){ (exec 3<>"/dev/tcp/127.0.0.1/$OWNER_PORT") 2>/dev/null; }
-if ! tmux has-session -t "$TMUX_NAME" 2>/dev/null; then
+if ! tmux has-session -t "=$TMUX_NAME" 2>/dev/null; then
     SHELL=/bin/bash tmux new-session -d -s "$TMUX_NAME" "$LAUNCHER"
 fi
 for _ in $(seq 1 30); do port_up && break; sleep 1; done
@@ -388,7 +391,7 @@ pw_binary_menu() {
 # Every slatepack payout carries the pool wallet's address, and `grin-wallet
 # receive` on the miner's side sends its reply back to that address over Tor —
 # into the pool wallet's Foreign API finalize_tx, which finalizes AND posts
-# behind the pool backend's back (grin-wallet v5.5.0 source, 2026-09-27). The
+# behind the pool backend's back (grin-wallet v5.5.0 source). The
 # toolkit never opens that door: `owner_api` publishes no onion, only `listen`
 # does. This warns if something else has: a torrc onion aimed at the owner port
 # (which serves /v2/foreign too, via owner_api_include_foreign), or a `listen`
@@ -440,7 +443,7 @@ pw_listener_start() {
     pw_write_launchers
 
     _pw_port_collision_check "$PW_OWNER_PORT" "$PW_TMUX_WALLET" || return 1
-    if tmux has-session -t "$PW_TMUX_WALLET" 2>/dev/null && gnc_get_pid_on_port "$PW_OWNER_PORT" >/dev/null 2>&1; then
+    if tmux has-session -t "=$PW_TMUX_WALLET" 2>/dev/null && gnc_get_pid_on_port "$PW_OWNER_PORT" >/dev/null 2>&1; then
         info "Pool wallet listener already running (session '$PW_TMUX_WALLET')."
     else
         info "Starting combined pool wallet listener (Owner+Foreign) on $PW_OWNER_PORT..."
@@ -470,8 +473,8 @@ pw_listener_stop() {
     for t in "$PW_TMUX_WALLET" \
              grin_pubpoolwallet_foreign grin_pubpoolwallet_owner \
              grin_pubpoolwallet_testnet_foreign grin_pubpoolwallet_testnet_owner; do
-        if tmux has-session -t "$t" 2>/dev/null; then
-            tmux kill-session -t "$t" 2>/dev/null || true
+        if tmux has-session -t "=$t" 2>/dev/null; then
+            tmux kill-session -t "=$t" 2>/dev/null || true
             success "Stopped listener (session '$t')."
             stopped=1
         fi
@@ -491,7 +494,7 @@ pw_listener_stop() {
 
 pw_listener_status() {
     local up_sess="no" up_port="no" open="?" tag prc
-    tmux has-session -t "$PW_TMUX_WALLET" 2>/dev/null && up_sess="yes"
+    tmux has-session -t "=$PW_TMUX_WALLET" 2>/dev/null && up_sess="yes"
     gnc_get_pid_on_port "$PW_OWNER_PORT" >/dev/null 2>&1 && up_port="yes"
     if [[ "$up_sess" == "yes" && "$up_port" == "yes" ]]; then
         prc=0; pw_coinbase_probe || prc=$?     # || form: tested → set -e won't abort the menu

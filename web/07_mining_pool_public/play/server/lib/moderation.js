@@ -339,7 +339,7 @@ function createModeration({ db, chat, sessions, settings, auth, admin, ledger, l
     return { ok: true, ...playerView(a) };
   }
 
-  // A ban revokes every session of the address at once (§19.5, closing §19.15 Part 4 #14),
+  // A ban revokes every session of the address at once (§19.5),
   // blocks login, games and chat, and ends a moderator appointment and a nickname (§19.16).
   function adminBan(ctx) {
     const a = playerParamOf(ctx);
@@ -464,7 +464,7 @@ function createModeration({ db, chat, sessions, settings, auth, admin, ledger, l
     chat_ip_posts_per_hour: IP_PER_HOUR,
     mod_mute_max_minutes: MOD_MUTE_MAX_MIN,
     operator_mute_max_minutes: OPERATOR_MUTE_MAX_MIN,
-    // §19.17.3 guests (Part C5)
+    // §19.17.3 guests
     signup_pow_bits: POW_BITS_FLOOR,
     guest_chat_min_age: CHAT_MIN_AGE_FLOOR,
     guest_chat_pace: { min_interval_s: GUEST_MIN_INTERVAL_S, posts_per_hour: GUEST_POSTS_PER_HOUR },

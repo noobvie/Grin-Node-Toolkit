@@ -7,7 +7,7 @@ const SECONDS_PER_DAY = 86400;
 const WEEK_SECONDS = 7 * SECONDS_PER_DAY;
 
 // How far ahead of the current tip a draw commits its seed block. Must be > 0 or the seed is
-// knowable at commit time and the whole commit-reveal property collapses (audit §I8). ~10 min
+// knowable at commit time and the whole commit-reveal property collapses (audit archive §I8). ~10 min
 // at Grin's 60s target — long enough that the committing party cannot influence which block
 // lands there, short enough that the hourly scheduler reveals on its next tick.
 const SEED_DELAY_BLOCKS = 10;
@@ -123,15 +123,15 @@ class LotteryManager {
   // that DOES NOT EXIST YET. No winner is picked and no money moves here — that is
   // resolveCommittedDraws(), once the chain reaches seed_height.
   //
-  // Why two phases (audit §I8): this used to seed from `getTip()` at draw time and salt with
-  // the caller's own `eventName`. Both are known to the drawer at the moment of drawing, and
-  // the entry set is readable from the DB, so the winner for the current tip was computable
+  // Why two phases (audit archive §I8): a draw seeded from `getTip()` at draw time and salted
+  // with the caller's own `eventName` uses two inputs the drawer knows at the moment of drawing,
+  // and the entry set is readable from the DB, so the winner for the current tip is computable
   // offline — wait for a favourable tip, then press the button. Committing to a FUTURE height
   // removes the lever entirely: at commit nobody can know the hash, and by reveal the entries,
   // the pot and the salt are already fixed and public.
   //
   // The salt is the draw_id (assigned by the INSERT, before the seed exists), not eventName —
-  // a free-text field on the request was a second grinding input.
+  // a free-text field on the request is a second grinding input.
   //
   // opts (all optional; NULL/undefined overrides inherit the global lottery_* settings):
   //   eventName, potGrinOverride, periodStart, periodEnd, campaignId,
@@ -288,8 +288,8 @@ class LotteryManager {
       const award = (winner, pot, amount) => {
         if (!winner || amount <= 0) return;
         // Clamp to what the bucket can actually cover: the pot was fixed at commit, and the
-        // prize pool may legitimately have shrunk since. Paying what is there beats the old
-        // all-or-nothing behaviour, where a shortfall silently paid the winner nothing.
+        // prize pool may legitimately have shrunk since. Paying what is there beats
+        // all-or-nothing, where a shortfall silently pays the winner nothing.
         const payable = Math.min(amount, this.incentives.prizePoolBalance());
         if (!(payable > 0)) return;
         if (!this.incentives.debitPrizePool(payable, 'lottery', draw.id)) return;
@@ -388,7 +388,7 @@ class LotteryManager {
       maxTicketSharePercent: c.max_ticket_share_percent,
     });
     if (res && res.success) {
-      // Commit-reveal (audit §I8): at this point the draw is COMMITTED, not drawn — there is
+      // Commit-reveal (audit archive §I8): at this point the draw is COMMITTED, not drawn — there is
       // no seed hash and no winner yet. Park the campaign in 'drawing' and record the height
       // it is committed to; resolveDraw() stamps the final status + seed_hash when the chain
       // reaches it. An entry-less draw has nothing to reveal, so it closes out as 'empty' now.

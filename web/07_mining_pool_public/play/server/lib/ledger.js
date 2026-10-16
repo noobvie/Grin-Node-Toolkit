@@ -25,7 +25,7 @@ const KINDS = new Set(['plays', 'points']);
 // category that reports and the admin pages would never show.
 const REASONS = new Set([
   'mining_minutes', 'match_cost', 'match_refund', 'match_result', 'event', 'admin_adjust', 'admin_void',
-  // §19.17.4 (C5): a guest's balance SET to guest_daily_plays at the first spend or /me of a
+  // §19.17.4: a guest's balance SET to guest_daily_plays at the first spend or /me of a
   // UTC day — either sign, ref 'gd:<day>' (lib/tickets.js).
   'guest_daily',
 ]);

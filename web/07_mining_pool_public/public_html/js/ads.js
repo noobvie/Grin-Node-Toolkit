@@ -6,8 +6,8 @@
      · banner — <img> (optionally wrapped in a sponsored link)
      · text   — a native card composed from headline + body_text + cta_label, no image
    There is NO third kind. The `code` type (an ad-network HTML/JS snippet this file
-   re-created as executing <script> nodes) was deleted in design §19.17 D22 (Option B,
-   Part C1): one origin is one trust zone, and a sign-in form is on every page. The
+   re-created as executing <script> nodes) is deliberately absent (script07_design_games.md §19.17 D22, Option B):
+   one origin is one trust zone, and a sign-in form is on every page. The
    server no longer serves a stored code ad; renderAd() below would draw nothing for one
    anyway. Every value that reaches the markup is attribute-escaped, and a URL must be a
    site path or http(s) — so nothing an ad carries can become a script, a handler or a
@@ -86,7 +86,7 @@
       return '<div class="ad-unit ad-unit--banner"' + idAttr + '>' + inner + '</div>';
     }
     // Any other ad_type — including a legacy `code` row, should one ever be served — draws
-    // nothing (design §19.17 D22).
+    // nothing (script07_design_games.md §19.17 D22).
     return '';
   }
 

@@ -1,0 +1,81 @@
+# file-glob:regex   CLASS|*   reason (mandatory)   — matched against the comment text
+# Entries are added only after a hit is confirmed legitimate; one line per pattern, no spaces in the regex (use \s).
+docs/tools/check_doc_drift.sh:07_lib_satellite  DEAD_PATH  worked example of a deleted file the drift checker was built from
+docs/tools/check_doc_drift.sh:(2026-06-22|f2ebade)  DIARY_DATE  same worked example: the deletion date is the point of the example
+scripts/lib/02_lib_landing.sh:web/grin-money-2026/grin_black_white.svg  DEAD_PATH  file lives in the sibling repo Grin-Landing-Pages (verified present), not this one
+scripts/051_grin_fidelius.sh:web/03_web_wallet  DEAD_PATH  path inside the sibling GrinSuite repo (noobvie/GrinSuite), named as the port's source
+scripts/051x_grin_xp_wallet.sh:TODO:\ssecurity\srecommendations  TODO  deliberate checklist of optional hardening for a future integration, not a stale marker
+scripts/lib/059_lib_nginx.sh:Grin\sDrop\smoved\s052  STALE_TERM  live migration code: deletes the pre-move zone file; the move is the reason it exists
+scripts/lib/059_lib_wallet.sh:Grin\sDrop\smoved\s052  STALE_TERM  live legacy-tag cleanup: boxes deployed under 052_watchdog_* must be reached
+scripts/lib/06_price_collector.py:nonlogs.io  STALE_TERM  records WHY GRIN/BTC comes from CoinGecko and that the old source is dead; dated line is evidence
+scripts/lib/06_collector.py:Grin\smainnet\sgenesis  DIARY_DATE  chain fact (genesis timestamp), not history
+scripts/lib/06_price_collector.py:00:00\sUTC  DIARY_DATE  chain fact (genesis timestamp), not history
+scripts/lib/06_ecosystem_checker.py:previously\sgood  DIARY_DATE  false positive — describes keeping the last good DB row
+scripts/06_global_grin_health.sh:previously\sconfigured  DIARY_DATE  false positive — describes preserving operator config on re-install
+scripts/lib/grin_wallet_install.sh:v5\.4\.1  STALE_TERM  example tag format / the version Fidelius still pins, not a claim about the shared pin
+scripts/051_grin_fidelius.sh:only\sFidelius\sstays  STALE_TERM  statement is current: shared pin v5.5.0, Fidelius alone on v5.4.1
+scripts/051_grin_fidelius.sh:directive\swere\sremoved  DIARY_DATE  false positive — hypothetical, not history
+scripts/05_grin_wallet_service.sh:Drop(.s\smove\sfrom|\s052\s→\s059|\soff\s052)  STALE_TERM  durable rationale for the fixed-slot rule; 052 is Accio now and the text says so
+scripts/lib/052_lib_build.sh:scripts/(x|service)\.js  DEAD_PATH  false positive — example worker filenames inside the vendored upstream tree, not repo paths
+scripts/lib/07_lib_gateway.sh:SATELLITE  STALE_TERM  states there is no satellite role (a trap guard against reintroducing one)
+scripts/lib/07_lib_hub.sh:satellite  STALE_TERM  states there is NO satellite ingestion API (a trap guard)
+scripts/lib/07_lib_pool_migrate.sh:never\s/v1/  STALE_TERM  correct rule: the comment forbids /v1/
+scripts/07_grin_mining_public_pool.sh:panel/CLI  DEAD_PATH  false positive — "panel or CLI", not a path
+scripts/lib/07_lib_hub.sh:web/nginx/admin/status/backup  DEAD_PATH  false positive — list of menu steps, not a path
+scripts/07_grin_mining_public_pool.sh:§13.(12p|10[bcd])  DEAD_SECTION  lettered sub-items inside design §13.12 / §13.10 (bold paragraphs, not headings)
+scripts/lib/07_lib_gwctl.sh:§13.10d  DEAD_SECTION  lettered sub-item inside design §13.10 (bold paragraph, not a heading)
+scripts/lib/07_lib_pool_backup.sh:§13.10c  DEAD_SECTION  lettered sub-item inside design §13.10 (bold paragraph, not a heading)
+scripts/lib/07_lib_pool_wallet.sh:§13.10e  DEAD_SECTION  lettered sub-item inside design §13.10 (bold paragraph, not a heading)
+scripts/07_grin_mining_public_pool.sh:[Ss]atellite  STALE_TERM  Z) Cleanup and the exclusivity guard must still find a pre-Model-C satellite install; the name is a live detection target
+scripts/07_grin_mining_public_pool.sh:Legacy\sSATELLITE  STALE_TERM  cleanup target for a pre-Model-C install
+scripts/085_ssh_hardening.sh:Returns.0.if.something  DIARY_DATE  false positive: "changed" is the return contract, not a diary date
+scripts/08_grin_node_admin.sh:legacy.satellite.log  STALE_TERM  grin-satellite.log is still in the logrotate list so a pre-Model-C install's log stays bounded
+scripts/08_grin_node_admin.sh:Key.6.changed.hands  DIARY_DATE  regression guard: a reassigned hub key gets no alias arm (CLAUDE.md retired-vs-reassigned rule)
+scripts/08del_clean_all_grin_things.sh:web/data  DEAD_PATH  Grin web data dir globbed on the VPS, not a repo path
+scripts/lib/grin_node_events.sh:SEEN.2026-10-03  DIARY_DATE  evidence date: when grin's clean-shutdown pair was observed
+scripts/09_grin_comms_hub.sh:Transporter.moved.092 STALE_TERM  explains why 092 is a reservation for the unbuilt mixer (the band's one sanctioned exception)
+scripts/lib/07_mining_block_collector.py:nonlogs\.io STALE_TERM  WHY nonlogs.io is not used as a price source (dead endpoint), so nobody re-adds it
+scripts/lib/nostr_relay_deploy.sh:reverse-proxy\.md DEAD_PATH  upstream floonet-rs repo doc, not a path in this repo
+web/07_mining_pool_public/back-end-pool/lib/socks5.js:connect\(\{\ssocksHost  COMMENTED_CODE  call-signature doc for connect(), not dead code
+web/07_mining_pool_public/back-end-pool/lib/wallet-tor.js:v5\.4\.1  STALE_TERM  upstream source citations at the version read (send/output_slatepack also checked at v5.5.0); not a claim about the shared pin
+web/07_mining_pool_public/back-end-pool/lib/wallet-tor.js:payout\s#10,\s2026-09-25  DIARY_DATE  evidence: the observed mainnet failure behind the walletBin rule
+web/07_mining_pool_public/back-end-pool/lib/wallet-tor.js:isolation\stag,\sso\stor\sbuilds  STALE_TERM  probe attempts on a fresh circuit, not a payout re-send
+web/07_mining_pool_public/back-end-pool/lib/wallet.js:v5\.4\.1\sand\sv5\.5\.0  STALE_TERM  evidence: the named params were checked identical in both versions
+web/07_mining_pool_public/back-end-pool/lib/wallet.js:previously\sissued\stoken  DIARY_DATE  false positive — describes token rotation, not history
+web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js:grin-wallet\sv5\.4\.1\swrites  STALE_TERM  upstream source citation (where kernel_excess is written) at the version read; not a claim about the shared pin
+web/07_mining_pool_public/back-end-pool/lib/ads.js:legacy\scode\sad\snever\sreaches  STALE_TERM  correct statement of the D22 rule (a stored legacy code row is never served), not a stale reference
+web/07_mining_pool_public/back-end-pool/lib/auth.js:previously\sissued\s\(or\sstolen\)  DIARY_DATE  false positive — describes refresh-token rotation, not history
+web/07_mining_pool_public/back-end-pool/lib/auth.js:previously\sissued\srefresh\stoken  DIARY_DATE  false positive — describes refresh-token rotation, not history
+web/07_mining_pool_public/back-end-pool/lib/db.js:one\sTor\sattempt,\sno\sretry\sladder  STALE_TERM  correct: names the legacy retry_reason column kept so old rows load
+web/07_mining_pool_public/back-end-pool/lib/db.js:written\sbefore\s2026-09-20  DIARY_DATE  evidence: identifies which stored rows the one-shot unit migration rescaled
+web/07_mining_pool_public/back-end-pool/lib/miners.js:deleted\sten$  DIARY_DATE  false positive — "ten minutes", the session sweeper timeout, not a date
+web/07_mining_pool_public/back-end-pool/lib/pool-settings.js:no\sretry\sladder\sto  STALE_TERM  correct: explains why withdrawal_retry_delays is absent
+web/07_mining_pool_public/back-end-pool/lib/pool-settings.js:js/theme\.js  STALE_TERM  correct: records why legacy theme keys are accept-only (their stylesheet source is deleted)
+web/07_mining_pool_public/back-end-pool/lib/alert-monitor.js:fine\snow"  DIARY_DATE  false positive — "fine now", not a date
+web/07_mining_pool_public/back-end-pool/lib/connect-suggest.js:one\sprobe\sset\staken\s2026-09-23  DIARY_DATE  evidence date of the RTT calibration measurement
+web/07_mining_pool_public/back-end-pool/lib/node-availability.js:mainnet\sgenesis\s\(2019-01-15\)  DIARY_DATE  chain fact (genesis date), not a diary entry
+web/07_mining_pool_public/back-end-pool/lib/stratum-pause.js:calendar-impossible\sdate\s\(2026-02-30  DIARY_DATE  example input for the date parser, not a diary entry
+web/07_mining_pool_public/back-end-pool/routes/admin/cms.js:code\sad,\sor\sto\sedit\sa\slegacy  STALE_TERM	describes the live 400 refusal of ad_type code (lib/ads.js REMOVED_MSG); not a claim code ads exist
+web/07_mining_pool_public/back-end-pool/routes/index.js:NO\ssatellite\sshare/block  STALE_TERM  states there is NO satellite ingestion API (trap guard against reintroducing one)
+web/07_mining_pool_public/back-end-pool/admin-panel/admin-shell.js:Absent\sstamp\s=\sthis\ssession\swas\sjust\sminted  DIARY_DATE  false positive: "just minted" describes a session with no stamp, not a dated entry
+web/07_mining_pool_public/back-end-pool/admin-panel/js/ads.js:A\slegacy\scode\sad\sis\snever\sserved  STALE_TERM  describes the live guard that refuses to serve a stored code ad (design D22); not a claim code ads exist
+web/07_mining_pool_public/back-end-pool/admin-panel/js/node-availability.js:e\.g\.\s'2026-10-03  DIARY_DATE  example of the timestamp format the function emits, not a diary entry
+web/07_mining_pool_public/back-end-pool/admin-panel/js/regions.js:\(§13\.12r\)  DEAD_SECTION  §13.12r is a lettered bold sub-item of design §13.12 that the heading scan cannot see
+web/07_mining_pool_public/back-end-pool/admin-panel/miners.html:design\s§13\.12r  DEAD_SECTION  §13.12r is a lettered bold sub-item of design §13.12 that the heading scan cannot see
+web/07_mining_pool_public/public_html/js/stepup.js:design\s§13\.12r  DEAD_SECTION  §13.12r is a lettered bold sub-item of design §13.12 that the heading scan cannot see
+web/07_mining_pool_public/public_html/js/ads.js:server\sno\slonger\sserves\sa\sstored\scode\sad  STALE_TERM  describes the live guard (renderAd draws nothing for a code ad; design D22); not a claim code ads exist
+web/07_mining_pool_public/play/server/lib/guests.js:Re-read:\sthe\saccount\smay\shave\sbeen\sdeleted  DIARY_DATE  'Re-read' is a code instruction (fetch the row again after the await), not a was/now narrative
+web/07_mining_pool_public/play/shell/js/play-guest.js:account\swas\sdeleted|account\sdeleted  DIARY_DATE  describes the signed-out event's payload, not history
+web/06_stats_map/stats/stats.html:2019-01-15\s00:00\sUTC  DIARY_DATE  mainnet genesis timestamp — a fact about the chain, not history
+web/06b_grinscan/public/js/info.js:2019-01-15\s00:00:00\sUTC  DIARY_DATE  mainnet genesis timestamp — a fact about the chain, not history
+web/06b_grinscan/server.js:2019-01-15\sUTC  DIARY_DATE  mainnet genesis timestamp — a fact about the chain, not history
+web/06d_tiny_explorer/lib/payment-proof.js:v5\.4\.1\sand\sre-checked  STALE_TERM  evidence of what the wire layout was read from, not a claim about the current pin
+web/051_fidelius/client/app.js:showModal\(\{\stitle  COMMENTED_CODE  call signature documentation for the helper below, not disabled code
+web/051_fidelius/server.js:web/03_web_wallet/server\.js  DEAD_PATH  upstream GrinSuite path (noobvie/GrinSuite), not a path in this repo
+web/051_fidelius/server.js:NO\sv1\sREST\sAPI|perfectly\shealthy\snode|Never\sadd\sa\s/v1/  STALE_TERM  states the v1 removal as a trap; matches the rule it is quoting
+web/051_fidelius/server.js:mainnet\snode,\s2026-08-09  DIARY_DATE  evidence date for the live /v1/status probe
+web/051_fidelius/server.js:\(2026-08-12\)\spins\srpassword  DIARY_DATE  evidence date of the grin-wallet v5.5.0 tag
+web/051_fidelius/server.js:shared\spin\sis\sv5\.5\.0  STALE_TERM  states the current pin split (shared v5.5.0, Fidelius v5.4.1)
+web/052_accio/gateway/test/store.test.js:release\(\)  COMMENTED_CODE  names the method under test in a section label
+web/07_mining_pool_solo/index.html:panel/chart  DEAD_PATH  prose "panel/chart", not a path
+web/07_mining_pool_solo/index.html:2026-06-27\s14:30\sUTC  DIARY_DATE  format example for the dual-zone stamp, not history

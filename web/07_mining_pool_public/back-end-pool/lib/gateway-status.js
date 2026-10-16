@@ -49,9 +49,9 @@ function gwctl(args, timeoutMs) {
 // below so an old install (no helper/sudoers yet) or a gateway-only box
 // degrades to share-recency status exactly as before (§13.9 step 5).
 // Returns { available, regions } — `available` says whether we could READ WireGuard at all,
-// which is NOT the same as "there are peers". An empty `regions` used to be returned for both
-// "wg unreadable" and "wg readable, zero peers configured", so a pool with no gateway paired
-// yet judged every declared region live and painted the whole patch bay blue/idle. Keep the
+// which is NOT the same as "there are peers". Returning an empty `regions` for both
+// "wg unreadable" and "wg readable, zero peers configured" would make a pool with no gateway paired
+// yet judge every declared region live and paint the whole patch bay blue/idle. Keep the
 // two apart: available=true + no entry for a region means that region has NO tunnel.
 async function readGatewayStatus() {
   try {
@@ -109,7 +109,7 @@ function readWgHandshakes() {
 // per-request subprocess. SYNCHRONOUS stale-while-revalidate: the caller always gets the
 // cached snapshot immediately and a stale one is refreshed in the background — a liveness
 // read must NEVER sit in front of the region list (gwctl carries a 10s exec timeout, which
-// on a cold cache used to stall the whole patch bay before it could paint). The admin
+// on a cold cache would stall the whole patch bay before it could paint). The admin
 // endpoint keeps its own uncached await (low call volume, wants ground truth).
 const GW_STATUS_TTL_MS = 15000;
 let _gwStatusCache = { ts: 0, running: false, data: { available: false, regions: {} } };
@@ -131,7 +131,7 @@ function cachedGatewayStatus() {
 // The clock restarts on 'lookup' (DNS done) and on each 'connectionAttempt' (Node's
 // happy-eyeballs tries each address in turn), so the figure is the connecting attempt's SYN →
 // SYN-ACK alone — about one RTT, which hub_rtt_ms publishes (lib/region-rtt.js). Uncached DNS
-// and a dead IPv6 attempt used to be counted in it.
+// and a dead IPv6 attempt are therefore not counted in it.
 function probeStratumTcp(host, port, timeoutMs = 2500) {
   return new Promise((resolve) => {
     let t0 = Date.now();
@@ -217,8 +217,8 @@ function publicRegionStatus(region, hasShares, shareAge, hasTarget, ctx) {
     const wg = wgByRegion[region];
     up = !!(wg.handshake && (nowS - wg.handshake) < offlineS) && verdict !== false;
   } else if (verdict === null) {
-    // Nothing to dial and no tunnel to read → liveness is genuinely unknowable; keep the
-    // old lenient behaviour rather than stranding the region on 'checking' forever.
+    // Nothing to dial and no tunnel to read → liveness is genuinely unknowable; stay
+    // lenient rather than stranding the region on 'checking' forever.
     if (!hasTarget) return hasShares ? 'online' : 'idle';
     return 'checking';
   } else {

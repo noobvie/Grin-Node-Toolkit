@@ -1,4 +1,4 @@
-/* chat-bubble.js — the floating chat on the pool's public pages (design §19.17.7, D23; Part C7).
+/* chat-bubble.js — the floating chat on the pool's public pages (design §19.17.7, D23).
  *
  * Owned by the games tree, deployed and stamped with the /play/ shell; the POOL carries only
  * a tiny loader (public_html/js/branding.js loadChatBubble) that inserts this file when the

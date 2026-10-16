@@ -128,9 +128,8 @@ class PoolstatsReporter {
     return {
       pool_name: this.config.pool_name || 'Grin Pool',
       url: this.config.subdomain ? `https://${this.config.subdomain}` : '',
-      // Same derivation as the pull feed in index.js. This was hardcoded to 'mainnet' until
-      // 2026-08-22, so a testnet pool would have listed itself as a mainnet pool the moment
-      // the pusher was enabled.
+      // Same derivation as the pull feed in index.js. Never hardcode 'mainnet': a testnet pool
+      // would list itself as a mainnet pool the moment the pusher was enabled.
       network: this.config.network === 'testnet' ? 'testnet' : 'mainnet',
       pool_fee: this.config.pool_fee_percent || 0,
       miners: minerCount,
@@ -249,8 +248,8 @@ class PoolstatsReporter {
   /**
    * Rotate API key (for admin panel security). Called by POST /api/admin/poolstats/update-key.
    *
-   * Writes through to pool.json as well as memory. It was in-memory only until 2026-08-22,
-   * which meant a rotation silently reverted to the old key on the next service restart —
+   * Writes through to pool.json as well as memory. In-memory only, a rotation
+   * would silently revert to the old key on the next service restart —
    * the worst shape for a credential rotation, because the panel reported success.
    *
    * The file write is best-effort and deliberately does NOT throw: the in-memory key is

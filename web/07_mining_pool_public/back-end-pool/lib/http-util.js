@@ -1,7 +1,6 @@
 'use strict';
 
-// Small request/address helpers shared by route files (code-layout refactor P10; moved out of
-// index.js verbatim). Stateless — safe to require from anywhere.
+// Small request/address helpers shared by route files. Stateless — safe to require from anywhere.
 
 // True when a request arrived DIRECTLY on loopback (the trusted operator on the box —
 // e.g. Script 07's guided installer hitting 127.0.0.1:8080), NOT proxied in from nginx.
@@ -32,10 +31,10 @@ function isLocalRequest(req) {
 // ⚠ THIS IS NOT DE-IDENTIFICATION, and it never was (audit §J11-1). Nine leading plus four
 // trailing bech32 characters is a UNIQUE key: given any list of full addresses, every masked
 // row re-attaches to its own by a plain table join. It only works as a control while NO public
-// route publishes a full address — which is why, as of 2026-09-02, every public list endpoint
-// that carries an address masks it, and the account-page deep-link was removed from the three
-// leaderboards, the payouts table and the donor wall (those links were the full-address source
-// that inverted the mask everywhere else). The invariant to keep:
+// route publishes a full address — which is why every public list endpoint that carries an
+// address masks it, and the three leaderboards, the payouts table and the donor wall carry no
+// account-page deep-link (such a link is a full-address source that inverts the mask everywhere
+// else). The invariant to keep:
 //
 //     NO public route may emit an unmasked grin_address in a LIST.
 //

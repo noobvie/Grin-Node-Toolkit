@@ -24,7 +24,7 @@ const DEFAULTS = {
 	// ─── Identity ────────────────────────────────────────────────────────────
 	network: 'testnet',              // testnet | mainnet — labelling only
 	domain: '',                      // our own clearnet host, e.g. wallet.grin.money
-	onion: '',                       // our own .onion, once S7 mints one
+	onion: '',                       // our own .onion, once one is minted
 
 	// ─── Listeners (both loopback; nginx and tor are the only reachable fronts)
 	port: 7490,                      // nginx front   — mainnet 7480 / testnet 7490
@@ -42,10 +42,10 @@ const DEFAULTS = {
 	// reuse theirs instead of paying a fresh circuit build every time.
 	socks_isolate_per_destination: true,
 
-	// ─── Destination policy (this is the SSRF guard; S8 tests it hard) ───────
+	// ─── Destination policy (this is the SSRF guard) ───────
 	allow_clearnet_destinations: false,  // .onion only. Leave this false.
 	destination_path_pattern: '^(?:/.+)?/v2/foreign$',  // upstream's `unblock`
-	// ⚠ R6. Which destination PORTS may be dialled. Upstream allows any, which
+	// ⚠ Which destination PORTS may be dialled. Upstream allows any, which
 	// makes this gateway a port-scanner for hidden services: the caller learns
 	// open-vs-closed from connect-success-vs-timeout, and the scan runs from our
 	// box and our circuits. A Grin wallet address never carries a port — the
@@ -68,7 +68,7 @@ const DEFAULTS = {
 	onion_rate_per_second: 10,       // onion front only (nginx owns the clearnet
 	onion_burst: 40,                 //  front's limit_req zone=accio_tor)
 
-	// ─── The listen rail (S4b): /listen + /wallet/<suffix>/v2/foreign ────────
+	// ─── The listen rail: /listen + /wallet/<suffix>/v2/foreign ────────
 	listen_enabled: true,
 
 	// Where the suffix ↔ session table is kept. EMPTY means in-memory only,
@@ -84,7 +84,7 @@ const DEFAULTS = {
 	// a new one, so a session expiring IS the user's receiving address changing.
 	// Rolling: every handshake refreshes it.
 	session_ttl_days: 90,
-	// ⚠ S8. Both of these bound a table that used to have no bound at all. A
+	// ⚠ Both of these bound a table that would otherwise have no bound at all. A
 	// session is minted by ANY completed /listen handshake, before the client
 	// has asked for a single address, so without a cap a handshake flood grows
 	// the table — and the snapshot writer rewrites the WHOLE table on a 2 s
@@ -126,7 +126,7 @@ const DEFAULTS = {
 	ws_message_burst: 60,
 
 	// ─── Inbound payments ────────────────────────────────────────────────────
-	// ⚠ R7. NOT nginx's 1 MB, and not upstream's either (upstream sets none here
+	// ⚠ NOT nginx's 1 MB, and not upstream's either (upstream sets none here
 	// and silently inherits it). listen_route.deliver() base64-encodes an inbound
 	// body into ONE WebSocket text frame bounded by ws_max_message_bytes, and
 	// base64 costs 4 bytes per 3 — so at a 256 KB frame the real ceiling is about
@@ -158,7 +158,7 @@ const DEFAULTS = {
 	log_destinations: false,
 };
 
-// ⚠ R6. Keys whose TYPE is the control. Before this list existed, `listen_enabled`
+// ⚠ Keys whose TYPE is the control. Before this list existed, `listen_enabled`
 // was the only boolean anyone checked, and every other one was assigned raw and
 // later read for truthiness — so `"allow_clearnet_destinations": "false"`, the
 // commonest hand-edit slip there is, loaded happily and turned the SSRF guard
@@ -183,7 +183,7 @@ const POSITIVE_INTS = [
 	'port', 'socks_port', 'max_body_bytes', 'connect_timeout_ms',
 	'send_timeout_ms', 'read_timeout_ms', 'max_concurrent',
 	'onion_rate_per_second', 'onion_burst',
-	// S4b
+	// inbound rail
 	'state_flush_ms', 'state_sweep_ms', 'session_ttl_days',
 	'max_sessions', 'empty_session_ttl_ms',
 	'suffix_length', 'max_suffixes_per_session', 'max_suffixes_total',
@@ -213,7 +213,7 @@ function loadConfig(path) {
 			throw new Error(`config ${path} is not valid JSON: ${err.message}`);
 		}
 		for (const key of Object.keys(parsed)) {
-			// ⚠ R6. `hasOwn`, never `key in DEFAULTS`. `in` walks the prototype
+			// ⚠ `hasOwn`, never `key in DEFAULTS`. `in` walks the prototype
 			// chain, so "toString", "constructor", "valueOf", "hasOwnProperty" and
 			// "__proto__" all satisfied it and were assigned straight onto cfg —
 			// the one guard whose entire job is catching a typo had a hole in it
@@ -266,12 +266,12 @@ function loadConfig(path) {
 		// them would make every onion request look like an nginx request.
 		throw new Error('config keys "port" and "tor_port" must differ — the port IS the trust boundary');
 	}
-	// ⚠ R6. Neither listener may sit on Tor's SOCKS port. Which of the two
+	// ⚠ Neither listener may sit on Tor's SOCKS port. Which of the two
 	// processes loses depends on BOOT ORDER, and both outcomes are bad in a way
 	// nothing reports: either the gateway loses the bind and systemd restart-loops
 	// it, or tor loses its SocksPort and every /tor/ forward SOCKS-handshakes with
-	// this process instead. R4 already paid for one collision that no `nginx -t`,
-	// no reload and no status screen could see; this is the same lesson, one port
+	// this process instead. An earlier collision was invisible to `nginx -t`,
+	// a reload and every status screen; this is the same lesson, one port
 	// over.
 	for (const key of ['port', 'tor_port']) {
 		if (cfg[key] > 0 && cfg[key] === cfg.socks_port) {
@@ -289,7 +289,7 @@ function loadConfig(path) {
 			throw new Error(`config key "allowed_destination_ports" holds a value that is not a port: ${JSON.stringify(p)}`);
 		}
 	}
-	// ─── S4b validation ──────────────────────────────────────────────────────
+	// ─── Listen-rail validation ──────────────────────────────────────────────────────
 	if (cfg.session_cookie_secure !== true && cfg.session_cookie_secure !== false
 		&& cfg.session_cookie_secure !== 'auto') {
 		throw new Error('config key "session_cookie_secure" must be true, false or "auto"');
@@ -311,7 +311,7 @@ function loadConfig(path) {
 		throw new Error('config key "ws_ping_interval_ms" must be well under 60000 (proxies reap idle sockets)');
 	}
 
-	// ⚠ R7. Two limits that only meet at RUNTIME is how an operator raises one and
+	// ⚠ Two limits that only meet at RUNTIME is how an operator raises one and
 	// gets no change at all. listen_route.deliver() base64-encodes an inbound body
 	// into ONE WebSocket text frame and checks that frame against
 	// ws_max_message_bytes; base64 is 4 bytes out per 3 in, so any body past about
@@ -360,7 +360,7 @@ function loadConfig(path) {
  * that — see guard.js checkOrigin().
  *
  * Both schemes of our own domain are listed because the vhost is HTTP-only
- * between S2's first reload and certbot finishing; dropping http:// would make
+ * between the first reload and certbot finishing; dropping http:// would make
  * the wallet unusable in exactly that window, and the destination is a .onion
  * either way, so nothing is protected by refusing it.
  */

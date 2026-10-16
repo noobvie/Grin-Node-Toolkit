@@ -1,5 +1,5 @@
-// settings-branding.html page script — moved BYTE-verbatim out of the page's inline <script> (code-layout F4).
-// Classic script (no defer/module) loaded at the same position as the old block, after settings-common.js (and the scripts before it), whose globals it uses (H14).
+// settings-branding.html page script.
+// Classic script (no defer/module) loaded after settings-common.js (and the scripts before it), whose globals it uses.
     // Testnet pools always link to test.grinscan.org (the only explorer with a usable testnet),
     // so the mainnet choice is greyed out there. Disabling is safe for the Branding save: the
     // harvester still sends the select, but its value is the stored one (already a valid enum),

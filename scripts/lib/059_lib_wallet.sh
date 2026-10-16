@@ -337,7 +337,7 @@ _drop_wallet_reinstall() {
 
 # Update / roll back the binary — the shared screen from grin_wallet_install.sh.
 #
-# The listener no longer has to be stopped BEFORE the swap: the shared applier
+# The listener need not be stopped BEFORE the swap: the shared applier
 # stages the new binary next to the old one and finishes with a rename, so it
 # never writes over a file a running listener is executing (that is the ETXTBSY
 # trap). A running listener keeps the old inode until it restarts, which is what
@@ -450,10 +450,8 @@ _drop_wallet_view_seed() {
 
 # Install the pinned grin-wallet into the Drop wallet dir.
 #
-# This used to be a private downloader that parsed the release JSON with python3
-# and verified NO checksum. It now goes through lib/grin_wallet_install.sh, so
-# Drop gets the sha256 check, the shared version store and — the reason for the
-# move — a rollback target for every future update.
+# Goes through lib/grin_wallet_install.sh, so Drop gets the sha256 check, the
+# shared version store and a rollback target for every future update.
 _drop_download_wallet() {
     mkdir -p "$DROP_WALLET_DIR" \
         || { die "Could not create $DROP_WALLET_DIR."; return 1; }
@@ -593,8 +591,8 @@ _drop_init_wallet() {
     # (visible via `ps aux` / /proc/<pid>/cmdline) for the duration of this call.
     # Exposure is brief (one-time during init) and limited to users with root/ps
     # access.
-    # ⚠ "-p is the only option" is NOT true, despite what this comment used to
-    #   say: grin-wallet reads the passphrase on STDIN whenever stdin is not a
+    # ⚠ "-p is the only option" is NOT true, whatever older comments claim:
+    #   grin-wallet reads the passphrase on STDIN whenever stdin is not a
     #   TTY (rpassword takes an explicit non-TTY branch), which is how Script
     #   05's CMD wallet feeds it. There is no ENV-var input — that part was
     #   right. Here stdin is deliberately left on the terminal so the RECOVER

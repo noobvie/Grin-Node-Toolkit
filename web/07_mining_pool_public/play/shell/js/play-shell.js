@@ -1,4 +1,4 @@
-/* play-shell.js — the /play/ page controller (design §19, Part 6).
+/* play-shell.js — the /play/ page controller (design §19).
  *
  * Owns the page's states (loading · offline/closed · sign-in · signed in), the account
  * strip, the new-game form, "My games", the board (through FrameHost) and its buttons, and
@@ -160,7 +160,7 @@
     new MutationObserver(pushTheme).observe(document.body, { attributes: true, attributeFilter: ['class'] });
   } catch (e) { /* the frame just keeps its first theme */ }
 
-  // ── The bubble's two hints (design §19.17.7, Part C7) ───────────────────────────────
+  // ── The bubble's two hints (design §19.17.7) ───────────────────────────────
   // The floating chat bubble on the pool's other pages (chat-bubble.js) cannot see the session
   // cookie (HttpOnly), so this page leaves it two localStorage hints. Neither holds a token or
   // a name — a stale one costs the bubble one request:
@@ -286,7 +286,7 @@
   document.addEventListener('play:refresh-me', function () { if (S.me) refreshMe(); });
 
   // ── Signed in ───────────────────────────────────────────────────────────────────────
-  // The chat panel (play-chat.js, Part 9) follows the caller's chat + moderator status from
+  // The chat panel (play-chat.js) follows the caller's chat + moderator status from
   // this: every /me that renders is announced, and signing out announces null.
   function announceMe(me) {
     try { document.dispatchEvent(new CustomEvent('play:me', { detail: { me: me } })); } catch (e) { /* no chat panel then */ }

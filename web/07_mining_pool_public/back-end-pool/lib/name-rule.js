@@ -1,16 +1,16 @@
 'use strict';
 
-// The name rule v2 (design §19.17.5, D27/D28) — pure functions, no state, no I/O.
+// The name rule v2 (script07_design_games.md §19.17.5, D27/D28) — pure functions, no state, no I/O.
 //
 // TWO COPIES: this file and play/server/lib/name-rule.js (the games service). D5 forbids the
 // games loading pool code (and the pool never loads theirs), so the rule is copied, and ONE
 // fixture file — play/server/scripts/fixtures/name-rule.json — drives both: scripts/test-name-rule.js
 // here and the games' test-names.js both run every case in it, and test-name-rule.js also
 // compares this file's code, line for line below this header, with the games copy. Change both
-// copies and the fixture together, or a suite goes red (§19.13 #24).
+// copies and the fixture together, or a suite goes red (script07_design_games.md §19.13 #24).
 //
 // Used here by: the `names.blocked_words` validator (pool-settings.js — entries are stored in the
-// matching form) and, since Part C4, donor names (lib/donor-profiles.js, check() with
+// matching form) and donor names (lib/donor-profiles.js, check() with
 // `shape: 'donor'`). The games service applies the full rule to nicknames; this pool only sends
 // it the list and the pool's name (/internal/games/config).
 //
@@ -23,7 +23,7 @@
 // separators removed (only donor names can hold any), the leet digits 0 1 3 4 5 7 folded to
 // o i e a s t. `M0d` → `mod`, `B-o-b` → `bob`.
 //
-// THE SCUNTHORPE RULE (§19.13 #25), for reserved AND blocked words alike — the pool's donor
+// THE SCUNTHORPE RULE (script07_design_games.md §19.13 #25), for reserved AND blocked words alike — the pool's donor
 // flag list was matched as a substring and accepted `classic` ⊃ `ass` because a human read
 // every hit; an automatic verdict cannot:
 //   - an entry of ≤ 4 characters matches only the WHOLE name. "Whole" is tested on two forms:
@@ -37,7 +37,8 @@ const NAME_MIN = 3;
 const NAME_MAX = 20;
 const NAME_RE = /^[A-Za-z0-9]+$/;
 const NAME_RULE = `${NAME_MIN}–${NAME_MAX} characters: letters A–Z and digits 0–9 only (no spaces), with at least one letter`;
-// The donor shape (§18.5, kept by the operator at C0 — §19.17.6): wider than a nickname, because
+// The donor shape (kept by the operator, §19.17.6; the pool-side rules are
+// script07_design.md §18.5): wider than a nickname, because
 // a donor name is often a brand. Only the pool uses it; it lives here so both copies stay one code.
 const DONOR_MIN = 2;
 const DONOR_MAX = 32;
@@ -139,7 +140,7 @@ function compileList(list) {
 // two-letter pool name would refuse nearly every name; same floor as the donor flags).
 // pool_info.pool_name is free text, so accents are stripped and every other character outside
 // a–z 0–9 (`!`, brackets, `#`, `™`, an emoji) is DROPPED — never a reason to reserve nothing:
-// `Night Owl Mining!` reserves `nightowlmining` like `Night Owl Mining` does (R1 review).
+// `Night Owl Mining!` reserves `nightowlmining` like `Night Owl Mining` does.
 function poolNameEntry(poolName) {
   const bare = String(poolName == null ? '' : poolName).normalize('NFD').replace(/[̀-ͯ]/g, '');
   const norm = matchForm(bare).replace(/[^a-z0-9]/g, '');

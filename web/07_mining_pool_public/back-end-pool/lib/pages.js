@@ -1,8 +1,8 @@
 const { getDb } = require('./db');
 
-// Operator-authored standalone content pages (the dynamic CMS that replaced the old
-// fixed 5-slot config section). Each page is rendered at /page.html?p=<slug>; HTML is
-// operator-trusted (rendered as-is, same trust model as ad code snippets). nav_location
+// Operator-authored standalone content pages (the dynamic CMS). Each page is rendered at
+// /page.html?p=<slug>; HTML is operator-trusted (rendered as-is, so only an admin may write
+// one). nav_location
 // decides where the page is auto-linked: footer | header | none.
 const NAV_LOCATIONS = ['footer', 'header', 'none'];
 

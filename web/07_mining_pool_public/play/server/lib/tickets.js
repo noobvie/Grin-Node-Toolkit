@@ -50,7 +50,7 @@ function createTickets({ db, ledger, settings, now = () => Math.floor(Date.now()
   return { topUp };
 }
 
-// The stand-in for modules built without tickets (the Part 4–12 tests construct some directly).
+// The stand-in for modules built without tickets (tests construct some directly).
 const NO_TICKETS = Object.freeze({ topUp: () => 0 });
 
 module.exports = { createTickets, NO_TICKETS };

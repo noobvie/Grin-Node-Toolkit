@@ -1,4 +1,4 @@
-/* chat-bubble.css — the floating chat on the pool's public pages (design §19.17.7; Part C7).
+/* chat-bubble.css — the floating chat on the pool's public pages (design §19.17.7).
  *
  * Loaded by chat-bubble.js onto POOL pages, so every rule is scoped under .gcb (or the two
  * body hooks it sets) and draws only from the pool's own tokens — the bubble follows the

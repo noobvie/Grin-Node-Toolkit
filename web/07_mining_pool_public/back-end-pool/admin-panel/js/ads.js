@@ -1,6 +1,6 @@
-// ads.html page script — moved out of the page's inline <script> (code-layout F4): byte-verbatim, then a second commit
-// turned the on*= attributes inside its markup STRINGS into data-action (the delegated wiring is at the end).
-// Classic script (no defer/module) loaded at the same position as the old block, after auth.js, api.js and admin-shell.js, whose globals it uses (H14).
+// ads.html page script.
+// Event wiring is delegated (data-action) and sits at the end of the file.
+// Classic script (no defer/module) loaded after auth.js, api.js and admin-shell.js, whose globals it uses.
 API.guardAdminPage();
 
 let _ads = [];   // last-loaded ads, looked up by id (avoids inlining objects into onclick attrs)
@@ -258,10 +258,10 @@ function resetForm() {
 }
 
 // Effective status: what the PUBLIC site does with this ad right now — an active ad
-// outside its window doesn't show, and the plain On/Off flag used to hide that.
+// outside its window doesn't show, which the plain On/Off flag would hide.
 function statusOf(a) {
   const now = Math.floor(Date.now() / 1000);
-  // A legacy code ad is never served, whatever its flags say (design §19.17 D22).
+  // A legacy code ad is never served, whatever its flags say (script07_design_games.md §19.17 D22).
   if (a.removed) return ['Unsupported (removed)', 'badge-dim'];
   if (!a.is_active) return ['Off', 'badge-dim'];
   if (a.start_at && a.start_at > now) return ['Scheduled', 'badge-warn'];

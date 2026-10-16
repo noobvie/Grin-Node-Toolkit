@@ -81,11 +81,12 @@ module.exports = function createAdminPayoutsRoutes(ctx, guards) {
       const r = await withdrawalScheduler.fetchAndStorePaymentProof(id);
       if (!r.ok) {
         const why = {
-          none: 'this payout carries no signed proof (only the Tor rail requests one) - the kernel is its evidence',
+          none: 'this payout carries no signed proof (Goblin payouts, and Slatepack payouts made before that rail requested proofs, have none) - the kernel is its evidence',
           not_confirmed: 'proof is only available once the payout is confirmed and its kernel is on record',
           owner_api_unavailable: 'the wallet Owner API is not configured on this pool',
           kernel_mismatch: 'the wallet proof does not match the kernel on this row - check the slate attribution before relying on either',
           malformed: 'the wallet returned an unexpected proof shape',
+          wallet_lost: 'the wallet that sent this payout no longer holds it (swapped or recovered from seed before the proof was saved) - the kernel is its evidence',
           error: r.error || 'the wallet could not be read'
         }[r.reason] || r.reason;
         return res.status(r.reason === 'error' || r.reason === 'owner_api_unavailable' ? 503 : 409)

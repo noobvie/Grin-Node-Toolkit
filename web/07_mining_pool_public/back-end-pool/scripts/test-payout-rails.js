@@ -1139,13 +1139,27 @@ function accountAddressSwitchSection() {
     ok('the other calls keep the default timeout (no opts)', ['tx_lock_outputs', 'finalize_tx', 'post_tx', 'cancel_tx'].every((m) => by(m).opts === null));
   }
   {
-    // No rail requests a payment proof through init (Tor payouts go through the CLI) —
-    // a stray option is ignored, never forwarded.
+    // Payment proof on init: requested only when a recipient is passed, a malformed one throws
+    // before anything goes on the wire, and no recipient → null (the Goblin rail's slate).
     const { w, wire } = harness();
     await w.initSendTx(2, { paymentProofRecipient: TOR_ADDR });
-    const a = (wire[0] && wire[0].params && wire[0].params.args) || {};
-    ok('initSendTx always sends payment_proof_recipient_address null (the stepwise-only option is gone)',
-      Object.prototype.hasOwnProperty.call(a, 'payment_proof_recipient_address') && a.payment_proof_recipient_address === null, JSON.stringify(a));
+    await w.initSendTx(2);
+    let threw = false;
+    try { await w.initSendTx(2, { paymentProofRecipient: 'not-an-address' }); } catch (_) { threw = true; }
+    const a0 = (wire[0] && wire[0].params && wire[0].params.args) || {};
+    const a1 = (wire[1] && wire[1].params && wire[1].params.args) || {};
+    ok('initSendTx forwards paymentProofRecipient as payment_proof_recipient_address',
+      a0.payment_proof_recipient_address === TOR_ADDR, JSON.stringify(a0));
+    ok('initSendTx with no recipient sends payment_proof_recipient_address null',
+      Object.prototype.hasOwnProperty.call(a1, 'payment_proof_recipient_address') && a1.payment_proof_recipient_address === null, JSON.stringify(a1));
+    ok('a malformed proof recipient throws and puts nothing on the wire', threw && wire.length === 2, String(wire.length));
+    // Which rail asks: manual slatepack passes the miner's address, Goblin passes none.
+    const sched = fs.readFileSync(path.join(APP, 'lib/withdrawal-scheduler.js'), 'utf8');
+    const body = (name) => { const i = sched.indexOf('  async ' + name + '('); return i < 0 ? '' : sched.slice(i, sched.indexOf('\n  async ', i + 10)); };
+    ok('createSlatepackWithdrawal requests a proof addressed to the miner',
+      /initSendTx\(netSend, \{ changeOutputs, paymentProofRecipient: grinAddress \}\)/.test(body('createSlatepackWithdrawal')));
+    ok('createNostrWithdrawal requests no proof',
+      /initSendTx\(/.test(body('createNostrWithdrawal')) && !/paymentProofRecipient/.test(body('createNostrWithdrawal')));
   }
   {
     // withSendLock: strictly serial, and a throw releases the lock.

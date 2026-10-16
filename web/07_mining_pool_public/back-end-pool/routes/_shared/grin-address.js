@@ -1,4 +1,5 @@
-// The bech32 Grin address shape, used by the /api/account shape gate (routes/index.js), the operator revenue address check
+// The bech32 Grin address shape, used by the /api/account shape gate (routes/index.js), the payment-proof recipient check
+// (lib/wallet.js initSendTx), the operator revenue address check
 // (routes/admin/payouts.js) and the admin donor :addr routes.
 // No `g`/`y` flag, so .test() keeps no lastIndex state — one shared instance is safe.
 

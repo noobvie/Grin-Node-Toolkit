@@ -15,6 +15,8 @@
 const crypto = require('crypto');
 const fetch  = require('node-fetch');
 const fs     = require('fs');
+// The one Grin address shape check (a dependency-free leaf module, so lib/ may share it).
+const { GRIN_ADDR_RE } = require('../routes/_shared/grin-address');
 
 class WalletAPI {
   constructor(config) {
@@ -73,10 +75,10 @@ class WalletAPI {
   // The signed payment proof for a sent transaction — grin-wallet's PaymentProof
   // { amount, excess, recipient_address, recipient_sig, sender_address, sender_sig }, the same
   // object `grin-wallet export_proof` writes and `verify_proof` reads. Only exists for a tx that
-  // REQUESTED one (the Tor CLI rail does by default for a slatepack destination; the Owner-API
-  // slatepack/nostr rail passes payment_proof_recipient_address: null and so never does) and
-  // only once the tx is confirmed. refresh=false reads the local tx log — the caller is expected
-  // to ask only for rows the kernel backfill has already seen confirmed.
+  // REQUESTED one (the Tor CLI rail does by default for a slatepack destination; the manual
+  // slatepack rail passes paymentProofRecipient to initSendTx; the Goblin rail requests none).
+  // The wallet does not check confirmation, so the caller asks only for rows the kernel backfill
+  // has already seen confirmed. refresh=false reads the local tx log.
   // Params: [keychain_mask, refresh_from_node, tx_id, tx_slate_id].
   async retrievePaymentProof(slateId, refresh = false) {
     return this._call('retrieve_payment_proof', [null, !!refresh, null, String(slateId)]);
@@ -115,9 +117,13 @@ class WalletAPI {
   //     under 2^53 so a JS number is safe). Returns a VersionedSlate. Selects coins and saves the
   //     private context; it writes NO lock and NO tx-log entry (tx_lock_outputs does both).
   //
-  //     payment_proof_recipient_address stays null: the slatepack/Goblin rails request no payment
-  //     proof (their anti-theft control is encryption, design §8). There is no option to request
-  //     one: a stray `paymentProofRecipient` is ignored, never forwarded (test-payout-rails.js).
+  //     `paymentProofRecipient` (a grin1/tgrin1 address) requests a signed payment proof: the
+  //     recipient's wallet signs it on `receive`, and finalize_tx refuses a reply whose signature
+  //     does not verify against that address. The manual slatepack rail passes the miner's own
+  //     address — the key its S1 is encrypted to, so the one wallet able to open the slate is the
+  //     one able to sign. The Goblin rail passes nothing (no proof). Anti-theft on both rails is
+  //     still the encryption / DM layer (design §8); the proof is dispute evidence only. A
+  //     malformed address throws BEFORE any coins are selected — it never falls back to null.
   //
   //     ttl_blocks stays null ON PURPOSE (design §8.1.2): on every refresh the wallet cancels any
   //     unconfirmed tx whose ttl_cutoff_height has passed — posted-but-not-mined ones included
@@ -128,8 +134,12 @@ class WalletAPI {
   //     `changeOutputs` (1–3) splits the change into that many equal outputs — the scheduler asks
   //     for more while the wallet holds few spendable outputs, so concurrent payouts stop
   //     queueing behind one locked coin (WithdrawalScheduler._changeOutputCount).
-  async initSendTx(amountGrin, { minimumConfirmations = 1, changeOutputs = 1 } = {}) {
+  async initSendTx(amountGrin, { minimumConfirmations = 1, changeOutputs = 1, paymentProofRecipient = null } = {}) {
     const n = Number(changeOutputs);
+    if (paymentProofRecipient !== null && paymentProofRecipient !== undefined &&
+        !GRIN_ADDR_RE.test(String(paymentProofRecipient))) {
+      throw new Error('payment proof recipient is not a grin1/tgrin1 address');
+    }
     const args = {
       src_acct_name: null,
       amount: Math.round(Number(amountGrin) * 1e9),
@@ -138,7 +148,7 @@ class WalletAPI {
       num_change_outputs: Number.isInteger(n) && n >= 1 && n <= 3 ? n : 1,
       selection_strategy_is_use_all: false,
       target_slate_version: null,
-      payment_proof_recipient_address: null,
+      payment_proof_recipient_address: paymentProofRecipient ? String(paymentProofRecipient) : null,
       ttl_blocks: null,
       estimate_only: null,
       late_lock: null

@@ -38,7 +38,7 @@ const cleanup = () => {
   }
 };
 
-const ADDR = 'tgrin1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq';
+const ADDR = 'tgrin1' + 'm'.repeat(58);   // well-formed: initSendTx validates a proof recipient
 const config = { network: 'testnet', withdrawal_fee: 0.04, wallet_send_timeout_ms: 120000 };
 
 // ─── Harness ─────────────────────────────────────────────────────────────────
@@ -392,7 +392,7 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
   // is worse than none: it would hand a miner a stranger's transaction as their receipt. The
   // guard is the kernel: the excess the wallet signed over must equal the kernel the backfill
   // attached to the row, or nothing is stored. The rest is lifecycle — '' is terminal, NULL is
-  // "ask again", and non-Tor rails (which never requested a proof) are settled to '' up front.
+  // "ask again", and the Goblin rail (which never requests a proof) is settled to '' up front.
   console.log('\n[6] §H6 signed payment proofs — fetch, store, refuse');
   const PROOF = {
     amount: '99960000000', excess: '08' + 'ab'.repeat(32),
@@ -436,7 +436,21 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
     reset(); timeline = [];
     const id = seedConfirmed({ method: 'slatepack' });
     const r = await proofScheduler(PROOF).fetchAndStorePaymentProof(id);
-    ok('a slatepack row is settled to \'\' (none) without asking the wallet',
+    ok('a confirmed slatepack row whose proof matches its kernel → stored',
+      r.ok && !r.cached && rowOf(id).payment_proof === JSON.stringify(PROOF), JSON.stringify(r));
+  }
+  {
+    reset();
+    const id = seedConfirmed({ method: 'slatepack' });
+    const r = await proofScheduler(new Error('Transaction does not contain a payment proof')).fetchAndStorePaymentProof(id);
+    ok('a slatepack payout from before the rail requested proofs → \'\' (none), asked once',
+      !r.ok && r.reason === 'none' && rowOf(id).payment_proof === '', JSON.stringify(r));
+  }
+  {
+    reset(); timeline = [];
+    const id = seedConfirmed({ method: 'nostr' });
+    const r = await proofScheduler(PROOF).fetchAndStorePaymentProof(id);
+    ok('a Goblin (nostr) row is settled to \'\' (none) without asking the wallet',
       !r.ok && r.reason === 'none' && rowOf(id).payment_proof === '' && !timeline.some((t) => t.startsWith('proof:')),
       JSON.stringify(r));
   }
@@ -444,7 +458,7 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
     reset(); timeline = [];
     const id = seedConfirmed({ kernel_excess: null });
     const r = await proofScheduler(PROOF).fetchAndStorePaymentProof(id);
-    ok('a row with no kernel yet is not asked — the wallet refuses proofs for unconfirmed txs',
+    ok('a row with no kernel yet is not asked — the pool, not the wallet, gates on confirmation',
       !r.ok && r.reason === 'not_confirmed' && !timeline.some((t) => t.startsWith('proof:')), JSON.stringify(r));
   }
   {
@@ -468,10 +482,10 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
     ok('\'\' is terminal — a settled "none" row is never re-asked', !r.ok && r.reason === 'none' && rowOf(id).payment_proof === '');
   }
   {
-    // The backfill's selection: only confirmed Tor rows with a kernel and no answer yet.
+    // The backfill's selection: only confirmed Tor/slatepack rows with a kernel and no answer yet.
     reset(); timeline = [];
     const want = seedConfirmed();
-    seedConfirmed({ method: 'slatepack' });       // wrong rail
+    seedConfirmed({ method: 'nostr' });           // wrong rail: Goblin requests no proof
     seedConfirmed({ kernel_excess: null });        // not yet mined
     seedConfirmed({ payment_proof: '' });          // already settled: none
     const s = proofScheduler(PROOF);
@@ -480,6 +494,59 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
     ok('backfill asks the wallet for exactly the one eligible row',
       asked.length === 1 && asked[0] === 'proof:' + rowOf(want).slate_id && rowOf(want).payment_proof === JSON.stringify(PROOF),
       asked.join(','));
+  }
+
+  // A wallet swapped or recovered before a proof was stored answers "transaction doesn't exist"
+  // forever. That must neither hold a backfill slot every tick nor settle on the first answer.
+  const GONE = new Error('Wallet error: {"PaymentProofRetrieval":"Transaction doesn\'t exist"}');
+  const nowS = () => Math.floor(Date.now() / 1000);
+  const setProofCols = (id, cols) => {
+    for (const [k, v] of Object.entries(cols)) db.prepare(`UPDATE withdrawals SET ${k} = ? WHERE id = ?`).run(v, id);
+  };
+  {
+    reset();
+    const id = seedConfirmed();
+    const r = await proofScheduler(GONE).fetchAndStorePaymentProof(id);
+    const row = rowOf(id);
+    ok('a first "transaction doesn\'t exist" → still NULL, counted once, backed off ~1 h',
+      !r.ok && row.payment_proof === null && row.payment_proof_gone_count === 1 && row.payment_proof_gone_since > 0 &&
+      row.payment_proof_retry_at >= nowS() + 3500, JSON.stringify(row));
+  }
+  {
+    reset();
+    const id = seedConfirmed();
+    setProofCols(id, { payment_proof_gone_count: 9, payment_proof_gone_since: nowS() - 3600 });
+    const r = await proofScheduler(GONE).fetchAndStorePaymentProof(id);
+    ok('many "doesn\'t exist" answers inside one day → still NULL (a wallet mid-restore keeps its proofs)',
+      !r.ok && rowOf(id).payment_proof === null && rowOf(id).payment_proof_gone_count === 10, JSON.stringify(r));
+  }
+  {
+    reset();
+    const id = seedConfirmed();
+    setProofCols(id, { payment_proof_gone_count: 2, payment_proof_gone_since: nowS() - 90000 });
+    const r = await proofScheduler(GONE).fetchAndStorePaymentProof(id);
+    ok('the 3rd answer, a day after the first → \'\' (reason wallet_lost), the backfill stops asking',
+      !r.ok && r.reason === 'wallet_lost' && rowOf(id).payment_proof === '', JSON.stringify(r));
+  }
+  {
+    reset();
+    const id = seedConfirmed();
+    setProofCols(id, { payment_proof_gone_count: 2, payment_proof_gone_since: nowS() - 90000 });
+    const r = await proofScheduler(new Error('HTTP 404: Not Found')).fetchAndStorePaymentProof(id);
+    ok('a transport "Not Found" is never a wallet answer → not counted, never settles',
+      !r.ok && r.reason === 'error' && rowOf(id).payment_proof === null && rowOf(id).payment_proof_gone_count === 2 &&
+      rowOf(id).payment_proof_retry_at >= nowS() + 3500, JSON.stringify(rowOf(id)));
+  }
+  {
+    // 25 rows in backoff, newer than the one eligible row: it is still asked on this tick.
+    reset(); timeline = [];
+    const want = seedConfirmed();
+    for (let i = 0; i < 25; i++) setProofCols(seedConfirmed(), { payment_proof_retry_at: nowS() + 3000 });
+    const s = proofScheduler(PROOF);
+    await s.backfillPaymentProofs();
+    const asked = timeline.filter((t) => t.startsWith('proof:'));
+    ok('rows in their retry backoff are skipped, so they cannot starve an older eligible row',
+      asked.length === 1 && rowOf(want).payment_proof === JSON.stringify(PROOF), asked.join(','));
   }
 
   // ═══ Slatepack response window ═══
@@ -1112,7 +1179,7 @@ async function slatepackRecoverySection() {
 async function sendLockSection() {
   console.log('\n[send-lock] two slatepack creates cannot interleave init → lock');
   const WalletAPI = require(path.join(APP, 'lib/wallet.js'));
-  const ADDR2 = 'tgrin1zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz';
+  const ADDR2 = 'tgrin1' + 'z'.repeat(58);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const quiet = async (fn) => {
     const o = [console.log, console.error, console.warn];
@@ -2943,6 +3010,36 @@ async function bindingSection() {
       w.calls.join(',') === 'finalize:c1-issued,post:c1-issued', JSON.stringify(w.calls));
   }
 
+  // ── PP1 manual rail: the miner's wallet did not sign the payment proof the slate asks for ──
+  // finalize_tx refuses it before anything is broadcast; the miner gets a plain instruction (400),
+  // not the raw wallet error (502), and the row reopens so a properly signed reply still settles.
+  {
+    reset(); fund(0); seq++;
+    const id = seedRow({ slate: 'p1-issued' });
+    const w = bindWallet();
+    let refuse = true;
+    w.finalizeTx = async (slate) => {
+      w.calls.push(`finalize:${slate && slate.id}`);
+      if (refuse) throw new Error('Wallet error: {"PaymentProof":"Recipient did not provide requested proof signature"}');
+      return slate;
+    };
+    const s = sched(w);
+    const e = await thrown(() => quiet(() => s.finalizeSlatepackWithdrawal(ADDR, id, reply('p1-issued'))));
+    ok('PP1. an unsigned proof → 400 with the plain "your wallet did not sign" message, nothing posted',
+      !!e && e.code === 400 && /did not sign the payment proof/.test(e.message) && !w.calls.some((c) => c.startsWith('post:')),
+      JSON.stringify({ e: e && e.message, code: e && e.code, calls: w.calls }));
+    ok('PP1. …and the row is back to pending', rowOf(id).status === 'slatepack_pending', JSON.stringify(rowOf(id)));
+    refuse = false;
+    const r = await quiet(() => s.finalizeSlatepackWithdrawal(ADDR, id, reply('p1-issued')));
+    ok('PP1. …so a properly signed reply still finalizes and confirms',
+      !!r && r.status === 'confirmed' && rowOf(id).status === 'confirmed', JSON.stringify(w.calls));
+    w.finalizeTx = async () => { throw new Error('Wallet error: {"Lmdb":"something unrelated"}'); };
+    const id2 = seedRow({ slate: 'p1-other' });
+    const e2 = await thrown(() => quiet(() => sched(w).finalizeSlatepackWithdrawal(ADDR, id2, reply('p1-other'))));
+    ok('PP1. control: any other finalize error keeps the 502 + raw wallet error',
+      !!e2 && e2.code === 502 && /failed to finalize slatepack/.test(e2.message), e2 && e2.message);
+  }
+
   // ── B3 Goblin rail: a DM reply arriving while the new row has no slate id ──
   // The bridge routes a DM to the sender npub's OLDEST pending Goblin row, not by slate id, so a
   // reply sent during the create lands on the new row exactly as a pasted one does.
@@ -3556,6 +3653,8 @@ async function paymentQueueSection() {
     await thrown(() => quiet(() => sc.createSlatepackWithdrawal(ADDR, 60)));
     ok('Q14. a slatepack payout from a 1-output wallet asks init_send_tx for 3 change outputs',
       !!seen && seen.changeOutputs === 3, JSON.stringify(seen));
+    ok('Q14b. …and requests a payment proof addressed to the miner',
+      !!seen && seen.paymentProofRecipient === ADDR, JSON.stringify(seen));
   }
   {
     reset();

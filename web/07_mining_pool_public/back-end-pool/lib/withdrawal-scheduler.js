@@ -87,6 +87,42 @@ const MAX_REPOSTS = 24;
 const SLATE_CANCEL_BATCH = 10;
 const SLATE_CANCEL_ALERT_TICKS = 5;
 
+// Rails whose payouts carry a signed payment proof (see fetchAndStorePaymentProof). The backfill
+// SQL is built from it; the admin payments page mirrors it for its 🧾 button.
+const PROOF_METHODS = ['tor', 'slatepack'];
+const PROOF_METHODS_SQL = PROOF_METHODS.map(() => '?').join(', ');
+// A row whose proof fetch failed is not asked again for PROOF_RETRY_S, so a few unanswerable rows
+// can never fill the backfill's per-tick batch and starve older ones behind them.
+const PROOF_RETRY_S = 3600;
+// The wallet answering "this transaction does not exist" settles the row to '' (none) only after
+// PROOF_GONE_MIN answers spanning at least PROOF_GONE_SPAN_S: one such answer can be a wallet
+// mid-restore, a day of them is a wallet that never sent it (swapped, or recovered from seed —
+// a recovery rebuilds outputs, not the sent-tx log the proof lives in).
+const PROOF_GONE_MIN = 3;
+const PROOF_GONE_SPAN_S = 86400;
+// Only an ANSWER from the wallet can say a tx is gone. lib/wallet.js prefixes those with
+// "Wallet error" / "Wallet RPC error" / "RPC error"; a transport failure ("HTTP 404: Not Found")
+// must never count, however it is worded. The phrase is grin-wallet's own
+// (libwallet owner.rs retrieve_payment_proof, "Transaction doesn't exist", read at v5.5.0) — kept
+// exact, because a looser "not found" would also catch unrelated wallet errors and settle a row
+// whose proof is still in the wallet.
+const isWalletTxGone = (msg) =>
+  /^(Wallet (RPC )?error|RPC error)/.test(msg) && /Transaction doesn'?t exist/i.test(msg);
+// finalize_tx's refusals that mean the MINER's reply carries no usable proof signature — their
+// wallet does not sign payment proofs, or signed with a different key. grin-wallet's own phrases
+// (libwallet internal/tx.rs verify_slate_payment_proof, read at v5.5.0). Nothing was broadcast,
+// so the miner is told plainly what to do instead of seeing the raw wallet error.
+const PROOF_UNSIGNED_RE = new RegExp([
+  'Recipient did not provide requested proof signature',
+  'Invalid proof signature',
+  'Recipient address on slate does not match original recipient address',
+  'Expected Payment Proof for this Transaction is not present'
+].join('|'));
+const PROOF_UNSIGNED_MSG =
+  'Your wallet did not sign the payment proof this payout asks for, so the pool cannot finalize it. ' +
+  'Receive the slatepack with grin-wallet or Grim (using the wallet of this mining address) and paste ' +
+  'the new response. Nothing was sent; if you do nothing, the payout expires and your balance comes back.';
+
 // The pseudo-address the flat withdrawal fee is credited to — the SAME bucket the block-reward
 // pool fee lands in, so both show up as one fee-income line on the transparency page.
 const POOL_FEE_ADDRESS = IncentivesManager.POOL_FEE;
@@ -1506,29 +1542,36 @@ class WithdrawalScheduler {
   // IS the miner's grin1 address, so it is third-party-verifiable evidence that this wallet took
   // this amount at this kernel (`grin-wallet verify_proof`, or the explorer's /proof page).
   //
-  // Only the Tor rail has one: `grin-wallet send -d grin1…` requests a proof by default for a
-  // slatepack destination. The slatepack/nostr rails pass null (lib/wallet.js initSendTx) —
-  // turning that on changes
-  // the slate every recipient wallet must sign and is a money-path change, so it is NOT done
-  // here; those rows keep '' (none) and the kernel remains their evidence.
+  // Two rails request one. Tor: `grin-wallet send -d grin1…` does by default for a slatepack
+  // destination. Manual slatepack: createSlatepackWithdrawal passes the miner's address as
+  // paymentProofRecipient (lib/wallet.js initSendTx), so the miner's wallet signs on `receive`
+  // and finalize_tx verifies it. The Goblin rail requests none — its rows keep '' (none) and
+  // the kernel remains their evidence, as it does for slatepack payouts made before the
+  // slatepack rail requested proofs (the wallet answers "does not contain a payment proof").
   //
   // Read-only + best-effort, like the kernel backfill: never moves funds, runs while frozen.
-  // Only rows the kernel backfill has already seen CONFIRMED are asked (the wallet refuses a
-  // proof for an unconfirmed tx), so the call is a local tx-log read — no node round-trip.
+  // Only rows the kernel backfill has already seen CONFIRMED are asked — the wallet itself does
+  // not check confirmation, so this gate is ours — and the call is a local tx-log read, no node
+  // round-trip.
   // '' is a terminal answer ("the wallet holds no proof for this tx") so a row is never asked
-  // twice; a transient failure leaves NULL and is retried on a later tick, logged once per row.
+  // twice; any other failure leaves NULL and is retried after PROOF_RETRY_S, logged once per row.
+  // The proof lives ONLY in the wallet that sent the payout until it is stored here: a wallet
+  // swapped or recovered before then answers "transaction doesn't exist", and after a day of
+  // those answers the row settles to '' (reason 'wallet_lost'). Once stored, the wallet is never
+  // asked again — the DB copy survives any wallet change (and rides in the pool DB backups).
   async fetchAndStorePaymentProof(withdrawalId) {
     if (!this.wallet || typeof this.wallet.retrievePaymentProof !== 'function') {
       return { ok: false, reason: 'owner_api_unavailable' };
     }
     const w = this.db.prepare(
-      'SELECT id, status, method, slate_id, kernel_excess, payment_proof FROM withdrawals WHERE id = ?'
+      `SELECT id, status, method, slate_id, kernel_excess, payment_proof,
+              payment_proof_gone_count, payment_proof_gone_since FROM withdrawals WHERE id = ?`
     ).get(withdrawalId);
     if (!w) return { ok: false, reason: 'not_found' };
     if (w.payment_proof) return { ok: true, proof: JSON.parse(w.payment_proof), cached: true };
     if (w.payment_proof === '') return { ok: false, reason: 'none' };
     if (w.status !== 'confirmed' || !w.slate_id || !w.kernel_excess) return { ok: false, reason: 'not_confirmed' };
-    if (w.method !== 'tor') {
+    if (!PROOF_METHODS.includes(w.method)) {
       // The rail never requested one — record that so the backfill does not keep asking.
       this.db.prepare("UPDATE withdrawals SET payment_proof = '' WHERE id = ? AND payment_proof IS NULL").run(withdrawalId);
       return { ok: false, reason: 'none' };
@@ -1536,6 +1579,7 @@ class WithdrawalScheduler {
     try {
       const proof = await this.wallet.retrievePaymentProof(w.slate_id, false);
       if (!proof || typeof proof !== 'object' || !proof.recipient_sig || !proof.excess) {
+        this._proofBackoff(withdrawalId);
         return { ok: false, reason: 'malformed' };
       }
       // The proof must be OUR payout: the kernel the backfill attached and the kernel the
@@ -1546,6 +1590,7 @@ class WithdrawalScheduler {
           `[payment-proof] withdrawal ${withdrawalId}: proof excess ${proof.excess} does not match the row's ` +
           `kernel ${w.kernel_excess} — NOT storing (slate_id ${w.slate_id} may be misattributed)`
         );
+        this._proofBackoff(withdrawalId);
         return { ok: false, reason: 'kernel_mismatch' };
       }
       this.db.prepare('UPDATE withdrawals SET payment_proof = ? WHERE id = ? AND payment_proof IS NULL')
@@ -1558,6 +1603,30 @@ class WithdrawalScheduler {
         this.db.prepare("UPDATE withdrawals SET payment_proof = '' WHERE id = ? AND payment_proof IS NULL").run(withdrawalId);
         return { ok: false, reason: 'none' };
       }
+      const now = Math.floor(Date.now() / 1000);
+      if (isWalletTxGone(msg)) {
+        // The wallet does not know this tx. Count it; settle to '' only once the answers span
+        // PROOF_GONE_SPAN_S, so a wallet that is briefly mid-restore does not cost the proof.
+        const count = (w.payment_proof_gone_count || 0) + 1;
+        const since = w.payment_proof_gone_since || now;
+        if (count >= PROOF_GONE_MIN && now - since >= PROOF_GONE_SPAN_S) {
+          this.db.prepare(
+            `UPDATE withdrawals SET payment_proof = '', payment_proof_gone_count = ?, payment_proof_retry_at = NULL
+             WHERE id = ? AND payment_proof IS NULL`
+          ).run(count, withdrawalId);
+          console.warn(
+            `[payment-proof] withdrawal ${withdrawalId}: the wallet has not known this transaction for ` +
+            `${Math.round((now - since) / 3600)} h (${count} answers) — proof unrecoverable, kernel stays the evidence`
+          );
+          return { ok: false, reason: 'wallet_lost' };
+        }
+        this.db.prepare(
+          `UPDATE withdrawals SET payment_proof_gone_count = ?, payment_proof_gone_since = ?, payment_proof_retry_at = ?
+           WHERE id = ? AND payment_proof IS NULL`
+        ).run(count, since, now + PROOF_RETRY_S, withdrawalId);
+      } else {
+        this._proofBackoff(withdrawalId, now);
+      }
       this._proofWarned = this._proofWarned || new Set();
       if (!this._proofWarned.has(withdrawalId)) {
         this._proofWarned.add(withdrawalId);
@@ -1567,19 +1636,28 @@ class WithdrawalScheduler {
     }
   }
 
+  // Park a row whose fetch failed for PROOF_RETRY_S. The backfill skips it until then; the
+  // admin "fetch now" route calls fetchAndStorePaymentProof directly and is never held back.
+  _proofBackoff(withdrawalId, now = Math.floor(Date.now() / 1000)) {
+    this.db.prepare('UPDATE withdrawals SET payment_proof_retry_at = ? WHERE id = ? AND payment_proof IS NULL')
+      .run(now + PROOF_RETRY_S, withdrawalId);
+  }
+
   async backfillPaymentProofs() {
     if (!this.wallet) return;
     try {
       // Cheap local reads, but bound the per-tick work so a wallet outage cannot turn every
       // tick into a burst of failing calls. Newest first: a fresh payout is the one a miner is
-      // about to look for.
+      // about to look for. Rows in their retry backoff are skipped, so failing rows can never
+      // occupy all 20 slots and starve the rows behind them.
       if (this._lastProofScan && (Date.now() - this._lastProofScan) < 60000) return;
       const pending = this.db.prepare(
         `SELECT id FROM withdrawals
-         WHERE status = 'confirmed' AND method = 'tor' AND payment_proof IS NULL
+         WHERE status = 'confirmed' AND method IN (${PROOF_METHODS_SQL}) AND payment_proof IS NULL
            AND slate_id IS NOT NULL AND kernel_excess IS NOT NULL
+           AND (payment_proof_retry_at IS NULL OR payment_proof_retry_at <= ?)
          ORDER BY id DESC LIMIT 20`
-      ).all();
+      ).all(...PROOF_METHODS, Math.floor(Date.now() / 1000));
       if (!pending.length) return;
       this._lastProofScan = Date.now();
       let stored = 0;
@@ -1977,7 +2055,8 @@ class WithdrawalScheduler {
       // Select + lock under the wallet's send lock (see _withSendLock) so no other rail's init
       // can pick the same coins between these two calls.
       await this._withSendLock(async () => {
-        slate = await this.wallet.initSendTx(netSend, { changeOutputs });
+        // The proof is addressed to the same key the S1 is encrypted to (see fetchAndStorePaymentProof).
+        slate = await this.wallet.initSendTx(netSend, { changeOutputs, paymentProofRecipient: grinAddress });
         await this.wallet.txLockOutputs(slate);
       });
       const armored = await this.wallet.createSlatepackMessage(slate, [grinAddress]);
@@ -2073,6 +2152,11 @@ class WithdrawalScheduler {
         );
       }
       if (err.code) throw err; // our own 4xx (e.g. mismatch) — surface as-is
+      if (!broadcastAttempted && PROOF_UNSIGNED_RE.test(String(err.message || ''))) {
+        // The row was re-opened above, so a corrected response can still be pasted before the TTL.
+        console.warn(`[payment-proof] withdrawal ${withdrawalId}: miner's reply has no valid proof signature (${err.message})`);
+        const e = new Error(PROOF_UNSIGNED_MSG); e.code = 400; throw e;
+      }
       const e = new Error(`failed to finalize slatepack: ${err.message}`); e.code = 502; throw e;
     }
 

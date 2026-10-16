@@ -111,6 +111,8 @@
     }
     /* P-08 Proof column: the truncated Tx ID (kernel) link. */
     a.xplink.tx-id { font-family: var(--mono, monospace); font-size: 12px; white-space: nowrap; }
+    /* P-08 Method · Status column: the rail name leads, its status follows. */
+    .wd-rail { font-weight: 600; }
 
     /* ── worker status LED (replaces a Status text column) ──────────────── */
     .wled {
@@ -870,16 +872,29 @@
                     <div class="panel"><span class="screws"></span>
                         <h2 class="panel-title"><span class="tag">P-08</span> Withdrawal history <span class="right"><span class="dim">every payout, kept forever · </span><span id="wd-count"></span></span></h2>
                         <div class="panel-body">
-                            <p class="note">Your payout requests only — no donations or clawbacks. Unlike the ledgers above (row detail kept 60 days), this list goes back to your first payout. Export the full history as CSV for your records.</p>
-                            <p class="note" id="wd-proof-note">Proofs are hidden by default. A payout's <b>Tx ID</b> (its <b>kernel</b>) identifies its transaction in the Grin chain forever. Recent payouts are listed on the public <a href="/payment-history.html">Payments</a> page with a <b>masked</b> address beside their Tx ID; this list is your <b>complete</b> history under your <b>full</b> address, so it stays behind your ownership proof. Enter that proof at the top of this page and press <b>Reveal proofs</b>: every mined payout shows its Tx ID as an explorer link (proves the transaction was mined; hover it for the full kernel), and every Tor payout also gets a <b>⬇ file</b> — the <b>signed payment proof</b>. That file carries your own wallet's signature over the amount, the kernel and the sender, so it proves to anyone, with no trust in this pool, that your wallet received exactly this payment. Compare the kernel with <code>grin-wallet txs</code> on your side, or check the file with <code>grin-wallet verify_proof</code>. Slatepack payouts carry no signed proof — you finalised those yourself, and their kernel is the evidence.</p>
+                            <!-- Kept short on purpose; the detail behind it:
+                                 · Payouts only (no donations or clawbacks), from the withdrawals table, which is
+                                   never pruned — unlike the P-06/P-07 ledgers (row detail kept 60 days).
+                                 · Why proofs are hidden: a Tx ID (kernel) names its transaction in the Grin chain
+                                   forever. The public Payments page shows recent Tx IDs beside a MASKED address;
+                                   this list is the complete history under the FULL address, so it stays behind the
+                                   ownership proof (audit §J11-2).
+                                 · Tx ID = proves the tx was MINED (explorer link; full kernel in the tooltip; the
+                                   miner can match it against `grin-wallet txs`).
+                                 · ⬇ file = grin-wallet's signed PaymentProof: the miner's OWN wallet signature over
+                                   amount + kernel + sender, so it proves receipt to anyone with no trust in the pool.
+                                   Tor and Slatepack payouts only; Goblin payouts, and Slatepack payouts from before
+                                   that rail requested proofs, have the kernel only. -->
+                            <p class="note">Every payout you have requested, back to the first one. Download it all as CSV for your records.</p>
+                            <p class="note" id="wd-proof-note">Proofs are hidden for privacy. Enter your ownership proof at the top of this page and press <b>Reveal proofs</b>: each paid payout then shows its <b>Tx ID</b> (proof it was mined), and Tor and Slatepack payouts also get a <b>⬇ file</b>, a payment proof signed by your own wallet. Check it with <code>grin-wallet verify_proof</code>.</p>
                             <div class="pager-row" style="margin-bottom:10px;">
                                 <button class="btn sm" id="wd-reveal-proofs">Reveal proofs</button>
                                 <span class="msg" id="wd-proof-msg"></span>
                             </div>
                             <div class="table-scroll">
                                 <table class="data-table" aria-label="Withdrawal history">
-                                    <thead><tr><th>Requested</th><th>Confirmed</th><th>Method</th><th>Status</th><th class="num">Amount</th><th class="num" title="The flat withdrawal fee charged on this payout. It covers the Grin network fee, which the pool wallet pays.">Withdrawal fee</th><th class="num" title="What reached your wallet: the amount minus the withdrawal fee">You received</th><th>Proof</th></tr></thead>
-                                    <tbody id="log-wd"><tr><td colspan="8">—</td></tr></tbody>
+                                    <thead><tr><th>Requested</th><th>Confirmed</th><th>Method · Status</th><th class="num">Amount</th><th class="num" title="The flat withdrawal fee charged on this payout. It covers the Grin network fee, which the pool wallet pays.">Withdrawal fee</th><th class="num" title="What reached your wallet: the amount minus the withdrawal fee">You received</th><th>Proof</th></tr></thead>
+                                    <tbody id="log-wd"><tr><td colspan="7">—</td></tr></tbody>
                                 </table>
                             </div>
                             <div class="pager-row">

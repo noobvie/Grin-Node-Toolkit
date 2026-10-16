@@ -376,6 +376,10 @@ function migrateWithdrawals() {
       // withdrawal-scheduler.backfillPaymentProofs(); older confirmed Tor rows get theirs too,
       // since the wallet keeps the proof for as long as it keeps the transaction.
       payment_proof: 'TEXT DEFAULT NULL',
+      // Proof-fetch backoff + "transaction gone" counter (see CREATE TABLE). Legacy rows start clean.
+      payment_proof_retry_at: 'INTEGER DEFAULT NULL',
+      payment_proof_gone_count: 'INTEGER NOT NULL DEFAULT 0',
+      payment_proof_gone_since: 'INTEGER DEFAULT NULL',
       // LEGACY: why a row was parked in retry_scheduled (see CREATE TABLE). Nothing writes it
       // (one Tor attempt, no retry ladder); kept so an old row keeps loading.
       retry_reason: 'TEXT DEFAULT NULL',
@@ -766,9 +770,17 @@ function createSchema() {
       kernel_excess TEXT DEFAULT NULL,
       -- grin-wallet PaymentProof JSON (amount, excess, recipient_address, recipient_sig,
       -- sender_address, sender_sig), fetched from the Owner API once the payout is confirmed.
-      -- NULL = not fetched yet; '' = the wallet holds no proof for this tx (the slatepack/
-      -- nostr rail never requests one), so the backfill stops asking.
+      -- NULL = not fetched yet; '' = the wallet holds no proof for this tx (the Goblin rail
+      -- never requests one, nor did slatepack before it did, or the wallet that sent it is gone),
+      -- so the backfill stops asking.
       payment_proof TEXT DEFAULT NULL,
+      -- Proof-fetch bookkeeping (withdrawal-scheduler.fetchAndStorePaymentProof): retry_at backs
+      -- a failing row off so it cannot hold a backfill slot every tick; gone_count / gone_since
+      -- count the wallet's "this transaction does not exist" answers, which settle the row to ''
+      -- only after several of them spread over a day (a swapped or recovered wallet).
+      payment_proof_retry_at INTEGER DEFAULT NULL,
+      payment_proof_gone_count INTEGER NOT NULL DEFAULT 0,
+      payment_proof_gone_since INTEGER DEFAULT NULL,
       -- LEGACY since 2026-09-26: why a row was parked in retry_scheduled ('pool_wallet_short' or
       -- NULL). A Tor payout is now tried ONCE, so there is no retry ladder and nothing writes it;
       -- a legacy row is resolved out of retry_scheduled at startup (migrateLegacyTorRetries).

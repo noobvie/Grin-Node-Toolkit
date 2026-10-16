@@ -1595,7 +1595,7 @@
             tbody.textContent = '';
             if (!rows.length) {
                 const tr = document.createElement('tr'), td = document.createElement('td');
-                td.colSpan = 8; td.textContent = wd.page > 0 ? 'No more entries' : 'No payouts yet';
+                td.colSpan = 7; td.textContent = wd.page > 0 ? 'No more entries' : 'No payouts yet';
                 tr.appendChild(td); tbody.appendChild(tr);
             }
             rows.forEach(row => {
@@ -1614,17 +1614,25 @@
                 const cells = [
                     fmtShort(row.created_at),
                     row.confirmed_at ? fmtShort(row.confirmed_at) : '—',
-                    PayoutMethods.methodLabel(row.method),
-                    PayoutMethods.statusLabel(row),
+                    null,   // Method · Status, built below
                     '−' + Number(row.amount || 0).toFixed(4),
                     (paid || pending) ? fee.toFixed(4) : '—',
                     paid ? (Number(row.amount || 0) - fee).toFixed(4) : '—'
                 ];
                 cells.forEach((text, i) => {
                     const td = document.createElement('td');
-                    if (i === 4) td.className = 'num amt-out';
-                    else if (i === 5 || i === 6) td.className = 'num';
-                    td.textContent = text;
+                    if (i === 2) {
+                        // One column for both: the rail name, then its status (text-only DOM).
+                        const rail = document.createElement('span');
+                        rail.className = 'wd-rail';
+                        rail.textContent = PayoutMethods.methodLabel(row.method);
+                        td.appendChild(rail);
+                        td.appendChild(document.createTextNode(' · ' + PayoutMethods.statusLabel(row)));
+                    } else {
+                        if (i === 3) td.className = 'num amt-out';
+                        else if (i === 4 || i === 5) td.className = 'num';
+                        td.textContent = text;
+                    }
                     tr.appendChild(td);
                 });
                 // Proof: the payout tx's on-chain kernel excess (Grin's payment-proof primitive),
@@ -1699,13 +1707,13 @@
                 return;
             }
             const tbody = $id('log-wd');
-            tbody.innerHTML = '<tr><td colspan="8">Loading…</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7">Loading…</td></tr>';
             try {
                 const data = await getJson('/api/account/' + encodeURIComponent(currentAddr) +
                     '/withdrawals?limit=' + PAGE_SIZE + '&offset=' + (wd.page * PAGE_SIZE));
                 renderWithdrawals((data && data.withdrawals) || [], (data && data.total) || 0);
             } catch (e) {
-                tbody.innerHTML = '<tr><td colspan="8">History unavailable</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7">History unavailable</td></tr>';
             }
         }
 

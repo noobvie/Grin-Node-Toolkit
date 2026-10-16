@@ -458,4 +458,4 @@
         });
 
         // Refresh live tiles, leaderboards and the selected trend charts every 60s.
-        setInterval(function () { loadMinersStats(); loadMetrics(); }, 60000);
+        Auth.poll(function () { loadMinersStats(); loadMetrics(); }, 60000);

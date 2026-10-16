@@ -66,11 +66,19 @@
                    v.toFixed(0) + '%</td>';
         }
 
+        // no-store + a 20 s abort, for the reason given at Auth.read: a fetch on the connection a
+        // phone held before sleeping hangs, and the panel keeps its old value meanwhile.
         async function getJson(url) {
-            const r = await fetch(url, { credentials: 'same-origin' });
-            const j = await r.json().catch(() => null);
-            if (!r.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
-            return j;
+            const ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+            const timer = ctl ? setTimeout(() => ctl.abort(), 20000) : null;
+            try {
+                const r = await fetch(url, { credentials: 'same-origin', cache: 'no-store', signal: ctl ? ctl.signal : undefined });
+                const j = await r.json().catch(() => null);
+                if (!r.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+                return j;
+            } finally {
+                if (timer) clearTimeout(timer);
+            }
         }
 
         async function loadSummary() {
@@ -359,5 +367,5 @@
                 })
                 .catch(function () {})
                 .finally(function () { loadSummary(); loadBlocks(); loadBlockCharts(); });
-            setInterval(function () { loadSummary(); loadBlockCharts(); if (_page === 0) loadBlocks(); }, 60000);
+            Auth.poll(function () { loadSummary(); loadBlockCharts(); if (_page === 0) loadBlocks(); }, 60000);
         });

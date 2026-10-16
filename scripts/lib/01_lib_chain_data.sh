@@ -314,14 +314,24 @@ download_chain_data() {
     echo -e "     ${DIM}source and no extra disk for a .tar.gz.${RESET}"
     echo -e "     ${DIM}SHA256 / disk-space checks are not applicable.${RESET}"
     echo ""
-    echo -ne "${BOLD}Choose [1/2/3] (default: 1): ${RESET}"
+    echo -e "  ${DIM}0${RESET}) Back to the Script 01 menu"
+    echo ""
     fi
     local dl_choice
     if [[ "$SUPER_AUTO" == "true" ]]; then
         dl_choice=1
         info "Super Auto: on-the-fly streaming from the fastest available source."
     else
-        read -r dl_choice || true
+        while true; do
+            echo -ne "${BOLD}Choose [1/2/3 / 0] (default: 1): ${RESET}"
+            read -r dl_choice || exit "${S01_RC_BACK:-0}"
+            dl_choice="${dl_choice:-1}"
+            case "$dl_choice" in
+                0) exit "${S01_RC_BACK:-0}" ;;
+                1|2|3) break ;;
+                *) warn "Invalid choice '${dl_choice}' — enter 1, 2, 3 or 0." ;;
+            esac
+        done
     fi
     dl_choice="${dl_choice:-1}"
 
@@ -396,21 +406,26 @@ download_chain_data() {
             fi
             _zi=$(( _zi + 1 ))
         done
-        echo -e "  ${GREEN}0${RESET}) Auto  ${DIM}(all zones, fastest available — recommended fallback)${RESET}"
+        # Auto is the key after the last zone; 0 is back, as on every Script 01 prompt.
+        local _auto_key="$_zi"
+        echo -e "  ${GREEN}${_auto_key}${RESET}) Auto  ${DIM}(all zones, fastest available — recommended fallback)${RESET}"
+        echo -e "  ${DIM}0${RESET}) Back to the Script 01 menu"
         echo ""
-        echo -ne "${BOLD}Zone [1]: ${RESET}"
         local _zone_choice
-        read -r _zone_choice || true
-        _zone_choice="${_zone_choice:-1}"
-
-        if [[ "$_zone_choice" == "0" ]]; then
-            SELECTED_ZONE="all"
-        elif [[ "$_zone_choice" =~ ^[1-4]$ ]]; then
-            SELECTED_ZONE="${_zone_order[$(( _zone_choice - 1 ))]}"
-        else
-            warn "Invalid zone '${_zone_choice}' — defaulting to America."
-            SELECTED_ZONE="america"
-        fi
+        while true; do
+            echo -ne "${BOLD}Zone [1-${_auto_key} / 0] (default: 1): ${RESET}"
+            read -r _zone_choice || exit "${S01_RC_BACK:-0}"
+            _zone_choice="${_zone_choice:-1}"
+            if [[ "$_zone_choice" == "0" ]]; then
+                exit "${S01_RC_BACK:-0}"
+            elif [[ "$_zone_choice" == "$_auto_key" ]]; then
+                SELECTED_ZONE="all"; break
+            elif [[ "$_zone_choice" =~ ^[0-9]+$ ]] && (( _zone_choice >= 1 && _zone_choice < _auto_key )); then
+                SELECTED_ZONE="${_zone_order[$(( _zone_choice - 1 ))]}"; break
+            else
+                warn "Invalid zone '${_zone_choice}' — enter 1-${_auto_key} or 0."
+            fi
+        done
     fi
 
     # ── Resolve zone to host list ───────────────────────────────────────────────

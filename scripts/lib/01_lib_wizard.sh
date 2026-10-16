@@ -370,7 +370,7 @@ select_archive_mode() {
             echo ""
             echo -ne "  Continue anyway? [Y/n]: "
             read -r _space_ok || true
-            [[ "${_space_ok,,}" == "n" ]] && exit "${S01_RC_BACK:-0}"
+            if [[ "${_space_ok,,}" == "n" || "${_space_ok,,}" == "no" || "$_space_ok" == "0" ]]; then exit "${S01_RC_BACK:-0}"; fi
         fi
     fi
 

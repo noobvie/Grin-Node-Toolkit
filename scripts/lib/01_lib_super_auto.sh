@@ -98,9 +98,9 @@ _offer_autostart() {
     else
         echo -ne "  ${BOLD}Start this node automatically after a reboot? [Y/n]: ${RESET}"
     fi
-    # EOF declines; only an explicit n is no.
+    # EOF declines; only an explicit n (or 0) is no.
     read -r _ans || _ans="n"
-    if [[ "${_ans,,}" == "n" || "${_ans,,}" == "no" ]]; then
+    if [[ "${_ans,,}" == "n" || "${_ans,,}" == "no" || "$_ans" == "0" ]]; then
         info "Skipped — crontab not changed. Set it up later in Script 03 → G."
         log "[STEP 14c] autostart declined for ${network}"
         return 0
@@ -133,9 +133,9 @@ _offer_event_recorder() {
     else
         echo -ne "  ${BOLD}Install the node event recorder? [Y/n]: ${RESET}"
     fi
-    # EOF declines (project_prompt_default_catchall); only an explicit n is no.
+    # EOF declines (project_prompt_default_catchall); only an explicit n (or 0) is no.
     read -r _ans || _ans="n"
-    if [[ "${_ans,,}" == "n" || "${_ans,,}" == "no" ]]; then
+    if [[ "${_ans,,}" == "n" || "${_ans,,}" == "no" || "$_ans" == "0" ]]; then
         info "Skipped — install it later from hub 08 → Diagnostics → Node event recorder."
         log "[STEP 14d] event recorder declined"
         return 0
@@ -252,7 +252,7 @@ run_super_auto() {
         echo ""
         echo -ne "  ${BOLD}Proceed? [Y/n]: ${RESET}"
         local _cf; read -r _cf || true
-        if [[ "${_cf,,}" == "n" ]]; then info "Super Auto cancelled."; return "${S01_RC_BACK:-1}"; fi
+        if [[ "${_cf,,}" == "n" || "${_cf,,}" == "no" || "$_cf" == "0" ]]; then info "Super Auto cancelled."; return "${S01_RC_BACK:-1}"; fi
     fi
 
     # ── 3. Kill + wipe everything (reuse existing K-path) ────────────────────────

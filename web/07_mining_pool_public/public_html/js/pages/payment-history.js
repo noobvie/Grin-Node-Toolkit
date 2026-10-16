@@ -319,4 +319,4 @@
         });
 
         // Refresh every 60 seconds.
-        setInterval(function () { loadTransparency(); loadRecentPayouts(); loadUnclaimed(); }, 60000);
+        Auth.poll(function () { loadTransparency(); loadRecentPayouts(); loadUnclaimed(); }, 60000);

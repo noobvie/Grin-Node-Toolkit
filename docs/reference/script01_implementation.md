@@ -203,7 +203,13 @@ the Script 01 menu" (its `exec "$0"` retry would fail the flock the parent holds
 Enter at a typed token, `n`) returns or exits with `S01_RC_BACK`, and the loop skips its "Press Enter"
 pause for that status, so one key gets the operator back. The same errexit-off context meant a bare
 command in a wizard step failed silently, so the binary `install`, the `patch_config` seds and the
-registry write in `save_instance_location` now `die` on failure. Uncommitted at writing. **Lesson:** a loop
+registry write in `save_instance_location` now `die` on failure. A second sweep found wizard-era
+prompts that took `0` as an ordinary answer: the source-build Ref (compiled a ref named "0"), the
+download method (fell through to a full download), the zone list (`0` was Auto — Auto is now the key
+after the last zone) and four `[Y/n]` prompts where `0` was yes, Super Auto's final Proceed among them.
+All now treat `0` as back / no, and
+`docs/tools/check_prompt_back.sh` fails on any prompt that does not. Uncommitted at
+writing. **Lesson:** a loop
 wrapped around old linear code inherits every `exit` in it — contain them, don't hunt them one by one.
 
 ## 4. Open items

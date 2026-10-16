@@ -488,7 +488,7 @@ _gsb_list_artifacts() {
 }
 
 # -----------------------------------------------------------------------------
-# _gsb_pick_artifact — set GSB_ARTIFACT from the stash. Returns 1 on cancel/none.
+# _gsb_pick_artifact — set GSB_ARTIFACT from the stash. Returns 1 when there is none, S01_RC_BACK on 0 / cancel.
 # -----------------------------------------------------------------------------
 _gsb_pick_artifact() {
     local -a arts=()
@@ -516,15 +516,17 @@ _gsb_pick_artifact() {
     done
     echo -e "    ${DIM}0${RESET}) Cancel"
     echo ""
-    echo -ne "${BOLD}Choose: ${RESET}"
     local pick=""
-    read -r pick || true
-    if [[ "$pick" =~ ^[1-9][0-9]*$ ]] && (( pick >= 1 && pick <= ${#arts[@]} )); then
-        GSB_ARTIFACT="${arts[$((pick - 1))]}"
-        return 0
-    fi
-    info "Cancelled."
-    return 1
+    while true; do
+        echo -ne "${BOLD}Choose [1-${#arts[@]} / 0]: ${RESET}"
+        read -r pick || return "${S01_RC_BACK:-1}"
+        if [[ "$pick" == "0" ]]; then return "${S01_RC_BACK:-1}"; fi
+        if [[ "$pick" =~ ^[1-9][0-9]*$ ]] && (( pick >= 1 && pick <= ${#arts[@]} )); then
+            GSB_ARTIFACT="${arts[$((pick - 1))]}"
+            return 0
+        fi
+        warn "Invalid choice '${pick}'."
+    done
 }
 
 # -----------------------------------------------------------------------------
@@ -901,9 +903,11 @@ _gsb_build() {
         echo -e "  ${DIM}listed in $GSB_PATCH_DIR/README.md.${RESET}"
     fi
     echo ""
-    echo -ne "${BOLD}Ref [${GSB_DEFAULT_REF}]: ${RESET}"
+    echo -ne "${BOLD}Ref [${GSB_DEFAULT_REF}] (0 = back): ${RESET}"
     local ref=""
-    read -r ref || true
+    read -r ref || return "${S01_RC_BACK:-1}"
+    # "0" is a valid git ref by the character check below, so it must be caught first.
+    if [[ "$ref" == "0" ]]; then return "${S01_RC_BACK:-1}"; fi
     [[ -z "$ref" ]] && ref="$GSB_DEFAULT_REF"
 
     # Refs go straight into git commands; keep the character set boring.
@@ -940,15 +944,16 @@ _gsb_build() {
     echo -e "  ${BOLD}Next:${RESET}"
     echo -e "    ${GREEN}2${RESET} — install it into the node(s) already on this box"
     echo -e "    ${GREEN}3${RESET} — install it into the NEXT node you build (not the release download)"
-    echo -e "    ${DIM}Enter${RESET} — leave it in $GSB_BIN_DIR and decide later"
+    echo -e "    ${DIM}0 / Enter${RESET} — leave it in $GSB_BIN_DIR and decide later"
     echo ""
-    echo -ne "${BOLD}Choice [2/3/Enter]: ${RESET}"
+    echo -ne "${BOLD}Choice [2/3 / 0]: ${RESET}"
     local nxt=""
     read -r nxt || true
     case "${nxt}" in
         2) _gsb_install_to_instances || true ;;
         3) _gsb_use_for_session || true ;;
-        *) info "Artifact left in $GSB_BIN_DIR." ;;
+        0|"") info "Artifact left in $GSB_BIN_DIR." ;;
+        *) info "Unknown choice '${nxt}' — artifact left in $GSB_BIN_DIR." ;;
     esac
     return 0
 }
@@ -963,7 +968,7 @@ _gsb_build() {
 # -----------------------------------------------------------------------------
 _gsb_use_for_session() {
     if [[ -z "${GSB_ARTIFACT:-}" || ! -x "${GSB_ARTIFACT:-}" ]]; then
-        _gsb_pick_artifact || return 1
+        _gsb_pick_artifact || return $?
     fi
     export GRIN_PREBUILT_BIN="$GSB_ARTIFACT"
     GRIN_BIN_TMP="$GSB_ARTIFACT"
@@ -1033,10 +1038,16 @@ gsb_menu() {
         local choice=""
         read -r choice || true
 
+        # A sub-step that returns S01_RC_BACK was cancelled at a prompt: redraw at once, no "Press Enter".
+        local rc
         case "${choice}" in
-            1) _gsb_build || true; _gsb_pause ;;
-            2) if _gsb_pick_artifact; then _gsb_install_to_instances || true; fi; _gsb_pause ;;
-            3) _gsb_use_for_session || true; _gsb_pause ;;
+            1) rc=0; _gsb_build || rc=$?
+               if [[ "$rc" != "${S01_RC_BACK:-x}" ]]; then _gsb_pause; fi ;;
+            2) rc=0; _gsb_pick_artifact || rc=$?
+               if (( rc == 0 )); then _gsb_install_to_instances || true; fi
+               if [[ "$rc" != "${S01_RC_BACK:-x}" ]]; then _gsb_pause; fi ;;
+            3) rc=0; _gsb_use_for_session || rc=$?
+               if [[ "$rc" != "${S01_RC_BACK:-x}" ]]; then _gsb_pause; fi ;;
             4) _gsb_restore_previous || true; _gsb_pause ;;
             5) _gsb_purge_cache || true; _gsb_pause ;;
             0|"") return 0 ;;

@@ -11,6 +11,7 @@ server.
 | [check_comments.js](check_comments.js) | Code → doc twin: `scan` flags plan tags, diary dates, dead paths/`§` pointers, stale terms, commented-out code in comments; `diffgate` fails if a change touched anything but comments; `--map` rewrites `§` pointers from a section map |
 | [comment_stale_terms.txt](comment_stale_terms.txt) | Stale-term CANDIDATES for `scan` (`regex => reason`) — confirm in code before acting |
 | [comment_allowlist.txt](comment_allowlist.txt) | Confirmed-legitimate `scan` hits, `file-glob:regex CLASS reason` (reason mandatory) |
+| [check_prompt_back.sh](check_prompt_back.sh) | Code check: every interactive `read` prompt in Script 01 handles `0` (back / no) |
 
 ---
 
@@ -35,6 +36,22 @@ node docs/tools/check_comments.js --map section_map.tsv [--write] [PATH ...]   #
 - `--map` is a dry run without `--write`; applied maps are recorded in `<map>.applied` so a
   chained map can't run twice. Keep the section map with the re-org plan, not in the repo.
 - Never touches `vendor/`; `patches/` only gets the marker check.
+
+## Prompt checker — `check_prompt_back.sh`
+
+The one code check here. Rule it enforces: at every prompt, `0` goes back (a menu, a free-text
+field) or means no (a `[Y/n]`). Exit `0` clean, `1` findings.
+
+```bash
+bash docs/tools/check_prompt_back.sh            # Script 01 (entry script + scripts/lib/01_lib_*.sh)
+bash docs/tools/check_prompt_back.sh FILE ...   # any other script
+```
+
+- Exempt by prompt text: "Press Enter" pauses, "Type X to …" tokens, `[y/N]` (anything but y is no).
+- Anything else must name `0` in code within 15 lines of the `read`, inside the same function.
+  A prompt that really does something else is marked `# prompt-back: <reason>` on or above the `read`.
+- It proves `0` is handled, not what it does: a zone list where `0` meant "Auto" passed it.
+  Run it after adding any prompt to Script 01, and before committing.
 
 ## Why the drift checker exists
 

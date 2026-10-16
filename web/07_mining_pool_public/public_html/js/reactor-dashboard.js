@@ -1645,5 +1645,5 @@
   } else {
     boot();
   }
-  setInterval(refresh, 60000);
+  Auth.poll(refresh, 60000);
 })();

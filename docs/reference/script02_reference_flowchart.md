@@ -2,8 +2,27 @@
 ║                  02_nginx_fileserver_manager.sh  —  ENTRY               ║
 ╚══════════════════════════════════════════════════════════════════════════╝
 
-> **Covers code as of:** 2026-03-12 · **Last verified:** never systematically verified
-> **Product code last changed:** 2026-08-22 — `scripts/02_nginx_fileserver_manager.sh`, `scripts/lib/02_lib_landing.sh`
+> **Covers code as of:** 2026-10-18 (Code layout section only; the flowcharts below were last written against 2026-03-12 code) · **Last verified:** 2026-10-18, PARTIAL — Code layout section only, checked against the entry's source lines and the two lib headers; flowcharts never systematically verified
+> **Product code last changed:** 2026-10-18 — `scripts/02_nginx_fileserver_manager.sh`, `scripts/lib/02_lib_ratelimit.sh`, `scripts/lib/02_lib_security.sh`, `scripts/lib/02_lib_landing.sh` (the 10-18 change moved code between files; no behaviour change)
+
+## Code layout
+
+| File | Menu actions | Purpose |
+|---|---|---|
+| `scripts/02_nginx_fileserver_manager.sh` (entry) | 1 Grin Domain, 2 Custom Domain, 3 Remove Domain, 4 List Domains, `--action` dispatch | Argument parsing, menu loop, domain setup/removal, SSL, bandwidth-limit setup/removal, validators |
+| `scripts/lib/02_lib_ratelimit.sh` | 5 Limit Rate, 6 Lift Rate | Per-IP and default download-rate limits (`run_limit_rate`, `run_lift_rate`) |
+| `scripts/lib/02_lib_security.sh` | 7 fail2ban Setup, 8 fail2ban Mgmt, 9 IP Filtering | Firewall detection, hardening, IP block/unblock, fail2ban (`run_enhance_security`, `run_fail2ban_management`, `run_ip_filtering`) |
+| `scripts/lib/02_lib_landing.sh` (existing) | landing-page generator (`landing_menu`) | Styled index page for chain-data mirrors |
+
+- **Source order:** after `nginx_shared_helpers.sh`, the two new libs are sourced unconditionally (a missing lib
+  must fail loudly rather than drop menu actions), before `main`. `02_lib_landing.sh` keeps its optional
+  `[[ -f … ]] && source` guard.
+- **errexit:** the entry sets `set -e`, but the libs are reached through `fn || …`, which runs them with errexit
+  off; file operations in them are not individually guarded. They also define only functions and heredoc
+  bodies at top level, so sourcing cannot trip `set -e`.
+- `setup_bandwidth_limiting` stays whole in the entry: its `SCRIPT_EOF` heredoc contains column-0
+  `parse_bandwidth_log() {`, `generate_nginx_map() {` and `reset_counters() {`, which are content of the generated
+  script, not functions of Script 02.
 
                                     │
                     ┌───────────────▼───────────────┐

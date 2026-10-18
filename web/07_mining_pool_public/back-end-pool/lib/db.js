@@ -29,7 +29,7 @@ function initDb(dbPath = './pool.sqlite') {
   //
   // It does NOT rescue a long exclusive lock — a VACUUM against a live pool holds one for
   // minutes, far past any sane busy_timeout. That is why the toolkit's maintenance cron stops
-  // the service around it rather than relying on this pragma (07_grin_mining_public_pool.sh).
+  // the service around it rather than relying on this pragma (scripts/lib/07_lib_pool_ops.sh).
   db.pragma('busy_timeout = 5000');
 
   createSchema();

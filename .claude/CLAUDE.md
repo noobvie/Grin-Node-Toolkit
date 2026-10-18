@@ -127,7 +127,7 @@ scripts/
   07_  Mining services hub → 07_grin_mining_solo.sh (solo private, has a `lan` arg) and
        07_grin_mining_public_pool.sh (GRINIUM public pool; libs 07_lib_hub.sh central hub /
        07_lib_gateway.sh thin regional stratum forwarder / 07_lib_gwctl.sh the single
-       WireGuard-mutation binary / 07_lib_pool_wallet.sh / 07_lib_pool_backup.sh; app code in
+       WireGuard-mutation binary / 07_lib_pool_wallet.sh / 07_lib_pool_backup.sh / 07_lib_pool_install.sh install+deploy / 07_lib_pool_nginx.sh vhost / 07_lib_pool_ops.sh admin+service+cron / 07_lib_pool_regions.sh WireGuard peers / 07_lib_pool_cleanup.sh Z cleanup; app code in
        web/07_mining_pool_public/). The pool's /play/ games service is menu P (07_lib_pool_games.sh,
        web/07_mining_pool_public/play/): its own unit/user/DB, and nothing under P restarts the pool.
        ⚠ The old SATELLITE role is GONE — deleted 2026-06-22

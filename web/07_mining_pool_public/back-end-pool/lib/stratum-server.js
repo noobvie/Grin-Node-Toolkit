@@ -174,7 +174,7 @@ class StratumServer {
     // trusted WireGuard tunnels where one peer IP fronts a whole region, so they are exempt.
     // Defaults sized with 5× headroom over a ~1000-miner target (miners run several rigs, so
     // connections ≈ 3–5× miners) to avoid re-tuning as the pool grows. Both stay well under the
-    // service's LimitNOFILE=65535 (see the systemd unit in 07_grin_mining_public_pool.sh).
+    // service's LimitNOFILE=65535 (see the systemd unit in scripts/lib/07_lib_pool_install.sh).
     // The per-IP default is deliberately generous so shared-NAT / CGNAT / farm miners aren't
     // collateral-blocked; the gateway edge (HAProxy stick-table) is the finer per-IP control.
     this.maxConnTotal  = config.max_stratum_connections || 25000;

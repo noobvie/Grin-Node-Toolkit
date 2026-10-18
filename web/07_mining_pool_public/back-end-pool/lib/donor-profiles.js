@@ -224,7 +224,7 @@ function audit(db, adminId, action, targetId, details, ip, targetType = 'donor')
 // ── files (approved banners only) ───────────────────────────────────────────────────────────
 // uploads/donors/<16 hex>.<ext>: the name is random, the extension comes from the sniff. Served
 // by nginx's existing `location /uploads/` (nosniff + sandbox CSP), which the deploy rsync
-// excludes and the pool backup includes — verified against 07_grin_mining_public_pool.sh.
+// excludes and the pool backup includes — verified against scripts/lib/07_lib_pool_nginx.sh, 07_lib_pool_install.sh and 07_lib_pool_backup.sh.
 const FILE_RE = /^[0-9a-f]{16}\.(png|jpg|gif)$/;
 const donorsDir = (uploadsDir) => path.join(path.resolve(String(uploadsDir)), 'donors');
 const publicUrl = (file) => (FILE_RE.test(String(file || '')) ? `/uploads/donors/${file}` : null);

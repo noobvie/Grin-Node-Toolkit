@@ -1929,7 +1929,7 @@ callers that pretty-print its JSON.
   doesn't, but the helper never runs there).
 - **Per-network:** every subcommand takes `--net mainnet|testnet` and derives
   `WG_IFACE` / tunnel `/24` / `ListenPort` / `REGION_PORT_BASE` / `$POOL_CONF` exactly as
-  `07_grin_mining_public_pool.sh:1853-1866` does today (single source: the helper).
+  `scripts/lib/07_lib_pool_regions.sh` (the `WG_*` block and `pool_wg_setup_server`) does today (single source: the helper).
 
 | Subcommand | Does | stdout (always JSON) |
 |---|---|---|
@@ -1951,7 +1951,7 @@ callers that pretty-print its JSON.
 Errors → non-zero exit + `{ok:false, error:"…"}` on stdout so `execFile` callers get one parse path.
 
 **Privilege note:** `grin-pool-manager` currently runs `User=root`
-(`07_grin_mining_public_pool.sh:470`) — historical convenience, not a requirement. §13.9
+(`scripts/lib/07_lib_pool_install.sh` `pool_install`) — historical convenience, not a requirement. §13.9
 de-roots it as part of this work; the backend calls the helper via
 `sudo grin-gateway-ctl …` under a one-line scoped sudoers entry. Design the backend call as a
 single `gwctl()` wrapper so the sudo prefix lives in exactly one place.

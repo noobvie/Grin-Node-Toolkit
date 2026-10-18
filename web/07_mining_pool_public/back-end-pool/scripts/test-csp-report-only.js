@@ -33,9 +33,10 @@ const ok = (name, cond, extra = '') => {
 };
 
 const INDEX = path.resolve(__dirname, '../index.js');
-const VHOST = path.resolve(__dirname, '../../../../scripts/07_grin_mining_public_pool.sh');
+const VHOST = path.resolve(__dirname, '../../../../scripts/lib/07_lib_pool_nginx.sh');
 const indexSrc = fs.readFileSync(INDEX, 'utf8');
 const vhostSrc = fs.readFileSync(VHOST, 'utf8');
+ok('vhost source is the real nginx lib (non-vacuity)', vhostSrc.includes('pool_setup_nginx() {') && vhostSrc.includes('HDREOF'));
 
 // "a b; c d e;" → [['a','b'], ['c','d','e']]
 function directives(policy) {

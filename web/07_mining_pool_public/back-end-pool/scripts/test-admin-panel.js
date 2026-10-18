@@ -186,7 +186,8 @@ console.log('\n[6] §J14-10 — token handling');
 console.log('\n[7] §J14-4 — the admin panel gets its own CSP');
 {
   const vhost = fs.readFileSync(
-    path.resolve(__dirname, '../../../../scripts/07_grin_mining_public_pool.sh'), 'utf8');
+    path.resolve(__dirname, '../../../../scripts/lib/07_lib_pool_nginx.sh'), 'utf8');
+  ok('vhost source is the real nginx lib (non-vacuity)', vhost.includes('pool_setup_nginx() {') && vhost.includes('HDREOF'));
 
   // /admin/ is static-served, so Express's header middleware never runs for an admin page:
   // whatever the vhost includes IS the admin CSP. It must not include $hdr_page, the public
@@ -244,7 +245,8 @@ console.log('\n[7] §J14-4 — the admin panel gets its own CSP');
   ok('control — location / still includes $hdr_page',
      /include \$hdr_page;/.test(rootLoc) && !/include \$hdr_admin;/.test(rootLoc));
   ok('cleanup removes the new snippet too (snippets/ is swept by nothing else)',
-     /"\$hdr_common" "\$hdr_page" "\$hdr_admin"/.test(vhost));
+     /"\$hdr_common" "\$hdr_page" "\$hdr_admin"/.test(fs.readFileSync(
+       path.resolve(__dirname, '../../../../scripts/lib/07_lib_pool_cleanup.sh'), 'utf8')));
 
   // The panel loads nothing third-party — the premise the tight CSP rests on. If someone
   // adds a CDN <script>/<link> to a page, this fails and the CSP must be revisited.

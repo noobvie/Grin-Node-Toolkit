@@ -36,7 +36,7 @@
 #   P) Play & chat (games)   (/play/ games service — lib/07_lib_pool_games.sh; never
 #                             restarts the pool; design §19 (script07_design_games.md))
 #   B) Backup & Restore      (encrypted: DB + wallet + WG identity · offsite push)
-#   C) Cron schedules        (daily backup, weekly VACUUM)
+#   C) Cron schedules        (daily backup, weekly VACUUM, run VACUUM now)
 #   L) View logs             (tail -50 | less)
 #   S) Edit config           (manual JSON config edit)
 #   DEL) Reset database      (⚠ permanently wipes all data)
@@ -2685,6 +2685,76 @@ EOF
     return 0
 }
 
+# Run an offline VACUUM once, now, at a time the operator chose (menu C → V / G).
+# For the pool this is the preferred path: the vacuum stops the WHOLE pool service (stratum,
+# site, API, payouts), and that downtime belongs in a planned, announced window rather than on
+# a timer. The script is regenerated first so a manual run always uses the current version,
+# and removed afterwards when no cron owns it — it exists at rest only while its cron does.
+# Args: <label> <service> <db> <script> <writer fn> <cron file> <log>
+_pool_vacuum_run_now() {
+    local label="$1" svc="$2" db="$3" bin="$4" writer="$5" cron="$6" log="$7"
+    echo -e "\n${BOLD}Run ${label} VACUUM now — ${POOL_NET_LABEL}${RESET}\n"
+
+    if [[ ! -f "$db" ]]; then
+        warn "No database at $db — nothing to vacuum."
+        return 0
+    fi
+    if command -v pgrep >/dev/null 2>&1 && pgrep -f -- "$bin" >/dev/null 2>&1; then
+        warn "A ${label} VACUUM is already running — wait for it to finish (see $log)."
+        return 0
+    fi
+
+    local size free_kb state
+    size=$(stat -c %s "$db" 2>/dev/null || echo 0)
+    free_kb=$(df -Pk "$(dirname "$db")" 2>/dev/null | awk 'NR==2 {print $4}')
+    state=$(systemctl is-active "$svc" 2>/dev/null || true)
+    echo -e "  Database : $db ($(( size / 1048576 )) MB)"
+    echo -e "  Service  : $svc (${state:-unknown})"
+    echo ""
+    if [[ "$state" == "active" ]]; then
+        warn "$svc will be STOPPED for the whole vacuum and started again afterwards."
+        if [[ "$label" == "pool" ]]; then
+            echo -e "  ${DIM}Stratum, the website, the API and payouts are all down meanwhile; shares${RESET}"
+            echo -e "  ${DIM}submitted in that window are lost. Announce the window to miners first.${RESET}"
+        fi
+    fi
+    # VACUUM builds a full copy in SQLite's temp dir, then writes it back through the WAL —
+    # roughly the database's size twice over while it runs (once if the temp dir is elsewhere).
+    if [[ -n "$free_kb" ]] && (( free_kb * 1024 < size * 2 )); then
+        warn "Only $(( free_kb / 1024 )) MB free beside the database — VACUUM needs up to twice its size."
+    fi
+    echo -ne "  Proceed? [y/N]: "
+    local ans; read -r ans
+    if [[ ! "$ans" =~ ^[Yy]$ ]]; then
+        info "Cancelled — nothing was changed."
+        return 0
+    fi
+
+    "$writer" || { error "Could not write the maintenance script — VACUUM NOT run."; return 1; }
+    # The script exits 0 when the VACUUM itself fails (it logs "VACUUM FAILED" and carries on to
+    # restore the service), so the outcome is read from its own "VACUUM ok" line, not from rc.
+    local out; out=$(mktemp) || { error "mktemp failed — VACUUM NOT run."; return 1; }
+    info "Running $bin (output also goes to $log) ..."
+    "$bin" 2>&1 | tee -a "$log" "$out"
+    local rc=${PIPESTATUS[0]} ok=no
+    if grep -q '\[vacuum\] VACUUM ok' "$out" 2>/dev/null; then ok=yes; fi
+    rm -f "$out"
+
+    if [[ ! -f "$cron" ]]; then
+        rm -f "$bin" || warn "Could not remove $bin (no cron uses it)."
+    fi
+    if [[ "$state" == "active" ]] && ! systemctl is-active --quiet "$svc"; then
+        error "$svc is NOT running after the vacuum — start it now: systemctl start $svc"
+        return 1
+    fi
+    if (( rc != 0 )) || [[ "$ok" != "yes" ]]; then
+        error "The VACUUM did not complete (exit $rc) — read the lines above. The database is unchanged."
+        return 1
+    fi
+    success "${label^} VACUUM finished."
+    return 0
+}
+
 pool_cron_schedules() {
     echo -e "\n${BOLD}Cron Schedules — ${POOL_NET_LABEL} ($POOL_SERVICE)${RESET}\n"
     local cron_backup="/etc/cron.d/${POOL_SERVICE}-backup"
@@ -2709,6 +2779,11 @@ pool_cron_schedules() {
     echo -e "  ${GREEN}2${RESET}) Toggle weekly SQLite VACUUM (Sunday 03:00 UTC)"
     if pgs_installed; then
         echo -e "  ${GREEN}3${RESET}) Toggle weekly games VACUUM (Sunday 03:30 UTC — stops the games only)"
+    fi
+    echo ""
+    echo -e "  ${GREEN}V${RESET}) Run pool VACUUM now   ${DIM}(stops the pool — use a planned window)${RESET}"
+    if pgs_installed; then
+        echo -e "  ${GREEN}G${RESET}) Run games VACUUM now  ${DIM}(stops the games only)${RESET}"
     fi
     echo -e "  ${DIM}0) Back${RESET}"
     echo -ne "Choice: "
@@ -2755,6 +2830,18 @@ EOF
             ;;
         3)
             if pgs_installed; then pgs_vacuum_toggle || true; _pool_pause; fi
+            ;;
+        v|V)
+            _pool_vacuum_run_now pool "$POOL_SERVICE" "$POOL_APP_DIR/pool.db" \
+                "$vacuum_script" pool_write_vacuum_script "$cron_vacuum" "$POOL_LOG" || true
+            _pool_pause
+            ;;
+        g|G)
+            if pgs_installed; then
+                _pool_vacuum_run_now games "$PGS_SERVICE" "$PGS_DB" \
+                    "$PGS_VACUUM_BIN" _pgs_write_vacuum_script "$PGS_CRON_VACUUM" "$PGS_LOG" || true
+                _pool_pause
+            fi
             ;;
     esac
 }

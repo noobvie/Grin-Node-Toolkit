@@ -17,6 +17,8 @@
     .ge-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
     .ge-title { overflow-wrap: anywhere; }
     #ge-results-card[hidden], #ge-part-fields[hidden] { display: none; }
+    /* games-events.js scrollIntoView()s these two; clear the sticky topbar + section rail. */
+    #ge-form-card, #ge-results-card { scroll-margin-top: calc(var(--topbar-h) + 58px); }
     #confirm-dialog .modal { max-width: 460px; }
   </style>
 </head>
@@ -25,7 +27,7 @@
 <main>
   <div class="container">
     <section>
-      <h2>Games · Events</h2>
+      <h2 data-sec="Create / edit">Games · Events</h2>
       <p class="helper-text" style="margin:0 0 .8rem;">
         Competitions between addresses on <a href="/play/" target="_blank" rel="noopener">/play/</a>:
         most mining minutes, most active days, most wins against the bot. Rewards are
@@ -102,8 +104,11 @@
         <p id="ge-form-msg" style="display:none;"></p>
       </div>
 
+    </section>
+
+    <section>
       <!-- ═══ List ═══ -->
-      <h3 class="sub-title">Events</h3>
+      <h2>Events</h2>
       <div class="tabs" id="ge-chips">
         <button class="tab-btn active" data-state="">All</button>
         <button class="tab-btn" data-state="scheduled">Scheduled</button>

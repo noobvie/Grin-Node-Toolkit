@@ -27,7 +27,7 @@
 <main>
   <div class="container">
     <section>
-      <h2>Games · Players</h2>
+      <h2 data-sec="Look up">Games · Players</h2>
       <p class="helper-text" style="margin:0 0 .8rem;">
         One address's games account: plays and points, sign-ins, chat and matches. Full addresses are shown here
         only — /play/ always masks them. A <strong>mute</strong> stops chat only; a <strong>ban</strong> signs the
@@ -46,6 +46,10 @@
         </div>
       </div>
 
+    </section>
+
+    <section>
+      <h2 data-sec="Lists">Muted, banned &amp; moderators</h2>
       <div class="tabs" id="gp-lists">
         <button class="tab-btn" data-filter="muted">Muted now</button>
         <button class="tab-btn" data-filter="banned">Banned now</button>
@@ -60,8 +64,12 @@
         </div>
       </div>
 
+    </section>
+
+    <section>
       <!-- ═══ One player ═══ -->
       <div id="gp-card" hidden>
+        <h2 data-nosection>Player</h2>
         <div class="card">
           <div class="gp-head" id="gp-head"></div>
           <div class="gp-figs" id="gp-figs"></div>

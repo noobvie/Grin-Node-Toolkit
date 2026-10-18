@@ -23,7 +23,7 @@
 <main>
   <div class="container">
     <section>
-      <h2>Games · Overview &amp; settings</h2>
+      <h2 data-sec="Launch">Games · Overview &amp; settings</h2>
       <p class="helper-text" style="margin:0 0 .8rem;">
         The games on <a href="/play/" target="_blank" rel="noopener">/play/</a> run as their own service
         with their own database; nothing here touches mining. The <strong>master switch</strong> and the
@@ -50,8 +50,11 @@
         </p>
       </div>
 
+    </section>
+
+    <section>
+      <h2>Pages</h2>
       <div class="card">
-        <h3 class="sub-title" style="margin-top:0;">Pages</h3>
         <div class="gs-links">
           <a class="btn btn-secondary btn-sm" href="games-chat.html">Chat &amp; moderation</a>
           <a class="btn btn-secondary btn-sm" href="games-players.html">Players</a>
@@ -61,6 +64,10 @@
         </div>
       </div>
 
+    </section>
+
+    <section>
+      <h2>Settings</h2>
       <!-- Built from GET settings: the spec (type, default, bounds) comes from the games service,
            the labels and grouping from GROUPS below. Every input is .settings-skip: this page does
            not use the settings-common.js harvester. -->

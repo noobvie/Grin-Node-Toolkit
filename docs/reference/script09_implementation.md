@@ -1,7 +1,7 @@
 # Script 09 — Connectivity Hub: implementation
 
-> **Covers code as of:** 2026-08-13 · **Last verified:** never systematically verified
-> **Product code last changed:** 2026-08-13 — `scripts/09*_*.sh`, `scripts/lib/09*_lib_*.sh`, `scripts/lib/nostr_relay_deploy.sh`, `web/093_transporter/`
+> **Covers code as of:** 2026-10-18 · **Last verified:** never systematically verified (2026-10-18: landing-template pointer only, byte-identical extraction checked)
+> **Product code last changed:** 2026-10-18 — `scripts/09*_*.sh`, `scripts/lib/09*_lib_*.sh`, `scripts/lib/nostr_relay_deploy.sh`, `web/093_transporter/`
 
 **Scope:** what is actually built, per member. Design/rationale lives in
 `script09_design.md`; this file records the implemented shape and the decisions
@@ -59,6 +59,9 @@ certbot email, relay name, description) → summary confirm → hands-off:
    entrance — an upstream example shipping 0.0.0.0 must not win)
 7. nginx zones + `nrd_deploy_wss_vhost` + ufw/firewalld 80/443
 8. enable + start + local WebSocket handshake verify
+
+The public landing page template is `web/091_floonet_relay/landing.html`, rendered by
+`flr_write_landing_page` (Python placeholder replacement of `@@NAME@@` etc.); edit the HTML there, not in the lib.
 
 Every step idempotent; failures print a "fix and re-run option 1" hint. Final
 screen shows the wss:// URL (end-to-end verified when possible) and next steps.

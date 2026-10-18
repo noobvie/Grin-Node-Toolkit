@@ -252,7 +252,7 @@ console.log('\n[7] nginx header inheritance — every block with its own add_hea
     return { blocks, balanced: !bad && !q && stack.length === 1 && !cur.trim() };
   };
 
-  const heredocs = [...vhostSrc.matchAll(/cat > "\$POOL_NGINX_CONF" << EOF\n([\s\S]*?)\nEOF\n/g)].map((m) => m[1]);
+  const heredocs = [...vhostSrc.matchAll(/cat > "\$POOL_NGINX_CONF" << EOF(?: \|\| \{[^\n]*\})?\n([\s\S]*?)\nEOF\n/g)].map((m) => m[1]);
   ok('both vhost heredocs located (HTTP bootstrap + the SSL vhost)', heredocs.length === 2, `found ${heredocs.length}`);
   const all = []; let sslBlocks = [];
   heredocs.forEach((h, n) => {

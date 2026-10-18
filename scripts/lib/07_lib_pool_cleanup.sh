@@ -2,7 +2,7 @@
 # 07_lib_pool_cleanup.sh — Full cleanup of the public pool script (menu Z): destructive, kept apart from the other sections.
 # =============================================================================
 # Sourced by 07_grin_mining_public_pool.sh after the POOL_* constants; shares its globals and log/info/warn/error.
-# Trap: moved as-is; runs with errexit off (callers guard with `|| true`), so its file operations are not individually guarded.
+# Trap: runs with errexit off (callers guard with `|| true`), so each removal carries its own `|| { error …; return 1; }` — a failed rm stops the cleanup instead of printing "removed"; re-running it is safe.
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Z) CLEANUP — remove the public-pool footprint (any mode) for fast rebuild tests
@@ -30,7 +30,7 @@ pool_cleanup() {
     clear
     # Gateway paths (GW_*) live in the gateway lib — sourcing here is safe and idempotent
     # (constants + function definitions only).
-    # shellcheck source=lib/07_lib_gateway.sh
+    # shellcheck source=07_lib_gateway.sh
     source "$SCRIPT_DIR/lib/07_lib_gateway.sh"
 
     # Legacy SATELLITE footprint (role removed in the Model C refactor; its lib is gone).
@@ -105,7 +105,8 @@ pool_cleanup() {
             systemctl stop "$svc" 2>/dev/null || true
             systemctl disable "$svc" 2>/dev/null || true
         done
-        rm -f "$pool_unit" "$sat_unit" "$gw_unit"
+        rm -f "$pool_unit" "$sat_unit" "$gw_unit" \
+            || { error "Could not remove the service unit files."; return 1; }
         systemctl daemon-reload 2>/dev/null || true
         success "Services stopped, disabled, units removed."
         log "Cleanup: removed $POOL_SERVICE + $SAT_SERVICE + $GW_SERVICE services"
@@ -127,9 +128,14 @@ pool_cleanup() {
         echo -ne "${BOLD}2)${RESET} Remove pool app + database ($POOL_APP_DIR)? [Y/n]: "
         read -r a || true
         if [[ "${a,,}" != "n" ]]; then
-            rm -rf "${POOL_APP_DIR:?}"
+            rm -rf "${POOL_APP_DIR:?}" \
+                || { error "Could not remove $POOL_APP_DIR."; return 1; }
             rm -f "$POOL_RESTART_MARK" "$POOL_DEPS_STAMP" 2>/dev/null || true   # deploy state beside it
-            [[ -d "$legacy_app" ]] && { rm -rf "${legacy_app:?}"; info "Legacy app dir removed ($legacy_app)."; }
+            if [[ -d "$legacy_app" ]]; then
+                rm -rf "${legacy_app:?}" \
+                    || { error "Could not remove $legacy_app."; return 1; }
+                info "Legacy app dir removed ($legacy_app)."
+            fi
             success "Pool app + database removed."
             log "Cleanup: removed $POOL_APP_DIR (+ legacy $legacy_app if present)"
         fi
@@ -141,7 +147,8 @@ pool_cleanup() {
         echo -ne "${BOLD}3)${RESET} Remove legacy satellite app + staging DB ($SAT_APP_DIR)? [Y/n]: "
         read -r a || true
         if [[ "${a,,}" != "n" ]]; then
-            rm -rf "${SAT_APP_DIR:?}"
+            rm -rf "${SAT_APP_DIR:?}" \
+                || { error "Could not remove $SAT_APP_DIR."; return 1; }
             success "Legacy satellite app + staging DB removed."
             log "Cleanup: removed $SAT_APP_DIR"
         fi
@@ -149,7 +156,7 @@ pool_cleanup() {
     fi
 
     # 3b) Gateway app dir (edge box) AND/OR the central WireGuard server for THIS network.
-    #     Edge: GW_DIR + GW_WG_CONF (wg-grinpool). Central: this script's WG_* (network-aware:
+    #     Edge: GW_DIR + GW_WG_CONF (wg-grinpool). Central: WG_* from 07_lib_pool_regions.sh (network-aware:
     #     wg-grinpool / wg-grinpool-tn). Bring down + remove whichever is present.
     if [[ -d "$GW_DIR" || -f "$GW_WG_CONF" || -f "$WG_CONF" || -d "$WG_DIR_CONF" ]]; then
         echo -ne "${BOLD}3b)${RESET} Remove gateway app + WireGuard tunnels (edge $GW_WG_IFACE / central $WG_IFACE)? [Y/n]: "
@@ -166,8 +173,10 @@ pool_cleanup() {
             # Same for the latency probe: its unit, certbot hook and certificate live outside
             # GW_DIR, and certbot would keep binding :80 to renew the cert every ~60 days.
             if declare -F gw_probe_remove >/dev/null 2>&1; then gw_probe_remove || true; fi
-            rm -f "$GW_WG_CONF" "$WG_CONF"
-            rm -rf "${GW_DIR:?}" "$WG_DIR_CONF"
+            rm -f "$GW_WG_CONF" "$WG_CONF" \
+                || { error "Could not remove the WireGuard conf files."; return 1; }
+            rm -rf "${GW_DIR:?}" "$WG_DIR_CONF" \
+                || { error "Could not remove $GW_DIR / $WG_DIR_CONF."; return 1; }
             success "Gateway app + WireGuard tunnels removed."
             log "Cleanup: removed $GW_DIR + $GW_WG_CONF + $WG_CONF + $WG_DIR_CONF"
         fi
@@ -184,14 +193,17 @@ pool_cleanup() {
         if command -v nginx &>/dev/null && [[ -e "/etc/nginx/sites-enabled/$conf_name" || -f "$POOL_NGINX_CONF" ]]; then
             nginx_disable_site "$conf_name" || true
             [[ -n "$legacy_name" ]] && nginx_disable_site "$legacy_name" || true
-            rm -f "$POOL_NGINX_CONF" "$POOL_NGINX_CONF_LEGACY" "$zones_conf" "$hdr_common" "$hdr_page" "$hdr_admin"
+            rm -f "$POOL_NGINX_CONF" "$POOL_NGINX_CONF_LEGACY" "$zones_conf" "$hdr_common" "$hdr_page" "$hdr_admin" \
+                || { error "Could not remove the pool vhost / zones / header snippets."; return 1; }
             nginx_test_reload "after removing $conf_name vhost" || true
         else
             # nginx absent (or only a dangling symlink left) — remove files directly
-            rm -f "/etc/nginx/sites-enabled/$conf_name" "$POOL_NGINX_CONF" "$zones_conf" "$hdr_common" "$hdr_page" "$hdr_admin"
+            rm -f "/etc/nginx/sites-enabled/$conf_name" "$POOL_NGINX_CONF" "$zones_conf" "$hdr_common" "$hdr_page" "$hdr_admin" \
+                || { error "Could not remove the pool vhost / zones / header snippets."; return 1; }
             [[ -n "$legacy_name" ]] && rm -f "/etc/nginx/sites-enabled/$legacy_name" "$POOL_NGINX_CONF_LEGACY" || true
         fi
-        rm -rf "${POOL_WEB_DIR:?}"
+        rm -rf "${POOL_WEB_DIR:?}" \
+            || { error "Could not remove $POOL_WEB_DIR."; return 1; }
         success "Web files + vhost + rate-limit zones + header snippets removed."
         info "Any TLS cert under /etc/letsencrypt is left in place (harmless) — 'certbot delete' to drop it."
         log "Cleanup: removed $POOL_WEB_DIR, $POOL_NGINX_CONF, $zones_conf, $hdr_common, $hdr_page, $hdr_admin"
@@ -204,7 +216,8 @@ pool_cleanup() {
     echo -ne "${BOLD}5)${RESET} Remove cron + logrotate + wrapper + stop wallet listeners? [Y/n]: "
     read -r a || true
     if [[ "${a,,}" != "n" ]]; then
-        rm -f "$cron_backup" "$cron_vacuum" "$backup_wrapper" "$logrotate_conf" "$POOL_ADMIN_RESET_BIN"
+        rm -f "$cron_backup" "$cron_vacuum" "$backup_wrapper" "$logrotate_conf" "$POOL_ADMIN_RESET_BIN" \
+            || { error "Could not remove the cron / logrotate / wrapper files."; return 1; }
         # De-root artifacts (§13.9): scoped sudoers + pairing helper — but ONLY
         # when the other network's pool isn't still installed on this box (both
         # nets share the helper + sudoers). The grinpool user itself is kept.
@@ -226,7 +239,8 @@ pool_cleanup() {
     echo -ne "${BOLD}6)${RESET} Remove configs ($POOL_CONF, $SAT_CONF, $GW_CONF)? [Y/n]: "
     read -r a || true
     if [[ "${a,,}" != "n" ]]; then
-        rm -f "$POOL_CONF" "$SAT_CONF" "$GW_CONF" "/opt/grin/conf/grin_pool.json"
+        rm -f "$POOL_CONF" "$SAT_CONF" "$GW_CONF" "/opt/grin/conf/grin_pool.json" \
+            || { error "Could not remove the pool/gateway JSON configs."; return 1; }
         success "Configs removed."
         log "Cleanup: removed $POOL_CONF + $SAT_CONF + $GW_CONF (+ legacy grin_pool.json)"
     fi
@@ -254,7 +268,8 @@ pool_cleanup() {
             # Also drops the dbpurgeage override — it only exists to serve this jail's
             # long bantime, and leaving it behind silently changes ban retention for
             # every OTHER jail on the box.
-            rm -f "$f2b_jail" "$f2b_filter" "$f2b_purge"
+            rm -f "$f2b_jail" "$f2b_filter" "$f2b_purge" \
+                || { error "Could not remove the fail2ban jail/filter files."; return 1; }
             if systemctl is-active --quiet fail2ban 2>/dev/null; then
                 systemctl restart fail2ban 2>/dev/null \
                     && success "fail2ban restarted without the pool jail." \

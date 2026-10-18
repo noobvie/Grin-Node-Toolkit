@@ -156,7 +156,7 @@ source "$SCRIPT_DIR/lib/07_lib_pool_backup.sh"
 # The backup lib above calls its pgs_* hooks at call time (games DB snapshot + restore).
 # shellcheck source=lib/07_lib_pool_games.sh
 source "$SCRIPT_DIR/lib/07_lib_pool_games.sh"
-# Pool script sections moved out of the entry file (install, nginx, ops, regions, cleanup); each lib needs only the globals above this line.
+# Menu sections live in these libs (install, nginx, ops, regions, cleanup); each reads only the globals above this line.
 # shellcheck source=lib/07_lib_pool_install.sh
 source "$SCRIPT_DIR/lib/07_lib_pool_install.sh"
 # shellcheck source=lib/07_lib_pool_nginx.sh
@@ -514,6 +514,10 @@ _pool_menu_status_line() {
         echo -e "${DIM}not installed${RESET}"
     fi
 }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAIN MENU
+# ═══════════════════════════════════════════════════════════════════════════════
 
 show_menu() {
     clear

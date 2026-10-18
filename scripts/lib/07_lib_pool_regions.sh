@@ -2,11 +2,7 @@
 # 07_lib_pool_regions.sh — Regional gateways for the public pool script: WireGuard hub setup and gateway peers (menu W).
 # =============================================================================
 # Sourced by 07_grin_mining_public_pool.sh after the POOL_* constants; shares its globals and log/info/warn/error.
-# Trap: moved as-is; runs with errexit off (callers guard with `|| true`), so its file operations are not individually guarded.
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# MAIN MENU
-# ═══════════════════════════════════════════════════════════════════════════════
+# Trap: runs with errexit off (callers guard with `|| true`); WireGuard state is written only by grin-gateway-ctl, whose result is parsed; the one pool.json write (wg_endpoint_host) is guarded, and the chown/chmod on pool.db sidecars is best-effort (`|| true`).
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # W) MULTI-REGION — central WireGuard server + gateway peers (Model C)
@@ -454,7 +450,8 @@ pool_wg_endpoint_host() {
     read -r host
     [[ -z "$host" ]] && { info "Unchanged."; return 0; }
     if [[ "$host" == "-" ]]; then
-        pool_write_conf_key "wg_endpoint_host" ""
+        pool_write_conf_key "wg_endpoint_host" "" \
+            || { error "Could not write wg_endpoint_host to ${POOL_CONF} — not cleared."; return 1; }
         success "Cleared — pairing strings carry the public IP again."
         return 0
     fi
@@ -462,7 +459,8 @@ pool_wg_endpoint_host() {
         warn "'$host' does not look like a hostname — nothing changed."
         return 1
     fi
-    pool_write_conf_key "wg_endpoint_host" "$host"
+    pool_write_conf_key "wg_endpoint_host" "$host" \
+        || { error "Could not write wg_endpoint_host to ${POOL_CONF} — not set."; return 1; }
     success "Hub endpoint host set: ${host}:${WG_LISTEN_PORT} (used by new/re-printed pairing strings)."
     echo -e "  ${DIM}Point a DNS A record for '${host}' at this box's public IP. Already-paired${RESET}"
     echo -e "  ${DIM}gateways keep working on the raw IP; to migrate one, edit its 2) Configure${RESET}"

@@ -2,7 +2,7 @@
 # 07_lib_pool_install.sh — Install, configure, deploy and guided-setup sections of the public pool script (menus 1/2/3/9/G).
 # =============================================================================
 # Sourced by 07_grin_mining_public_pool.sh after the POOL_* constants; shares its globals and log/info/warn/error.
-# Trap: moved as-is; runs with errexit off (callers guard with `|| true`), so its file operations are not individually guarded.
+# Trap: runs with errexit off (callers guard with `|| true`), so each file-writing command carries its own `|| { error …; return 1; }`; ownership/mode sweeps marked `|| true` are best-effort.
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 1) INSTALL
@@ -90,13 +90,15 @@ pool_deroot() {
 
     # Scoped sudo: grin-gateway-ctl is root-owned 0755 (root-writable only), so
     # this cannot be parlayed into arbitrary root by the grinpool user.
-    cat > /etc/sudoers.d/grin-pool-gwctl <<'EOF'
+    cat > /etc/sudoers.d/grin-pool-gwctl <<'EOF' || { error "Could not write /etc/sudoers.d/grin-pool-gwctl"; return 1; }
 # grin-node-toolkit: de-rooted pool backend → gateway pairing helper (design §13.9)
 grinpool ALL=(root) NOPASSWD: /usr/local/bin/grin-gateway-ctl
 EOF
-    chmod 440 /etc/sudoers.d/grin-pool-gwctl
+    chmod 440 /etc/sudoers.d/grin-pool-gwctl \
+        || { rm -f /etc/sudoers.d/grin-pool-gwctl; error "Could not chmod /etc/sudoers.d/grin-pool-gwctl — entry removed."; return 1; }
     if command -v visudo &>/dev/null && ! visudo -c -f /etc/sudoers.d/grin-pool-gwctl >/dev/null 2>&1; then
-        rm -f /etc/sudoers.d/grin-pool-gwctl
+        rm -f /etc/sudoers.d/grin-pool-gwctl \
+            || { error "sudoers validation failed AND /etc/sudoers.d/grin-pool-gwctl could not be removed — delete it by hand, an invalid sudoers file can break sudo."; return 1; }
         warn "sudoers validation failed — removed grin-pool-gwctl entry (panel gateway pairing disabled)."
     fi
     success "grinpool service user ready — ownership swept, node secrets group-read, scoped sudo installed."
@@ -135,8 +137,8 @@ pool_install() {
 
     pool_ensure_node24 || return 1
 
-    mkdir -p "$POOL_APP_DIR"
-    chmod 700 "$POOL_APP_DIR"
+    mkdir -p "$POOL_APP_DIR" || { error "Could not create $POOL_APP_DIR."; return 1; }
+    chmod 700 "$POOL_APP_DIR" || { error "Could not chmod $POOL_APP_DIR."; return 1; }
     info "Copying pool manager to $POOL_APP_DIR..."
     # ⚠ SAME --delete EXCLUDES AS pool_deploy_code, and for a stronger reason.
     # Install is not a first-run-only step: an operator re-runs it to pick up a
@@ -152,7 +154,8 @@ pool_install() {
         --exclude='.wallet_pass' --exclude='node_modules' \
         --exclude='custom_assets' --exclude='uploads' \
         "$POOL_APP_SRC/" "$POOL_APP_DIR/" \
-        2>/dev/null || cp -r "$POOL_APP_SRC/"* "$POOL_APP_DIR/"
+        2>/dev/null || cp -r "$POOL_APP_SRC/"* "$POOL_APP_DIR/" \
+        || { error "Could not copy the pool manager into $POOL_APP_DIR."; return 1; }
     # Install replaces the code and node_modules/ but never restarts, so a pool running
     # through a re-run keeps the old code. Leave the restart marker: the next 9) Deploy
     # new code restarts it, and any start after this (menu 6) makes the marker stale.
@@ -175,7 +178,8 @@ pool_install() {
     if [[ -z "$jwt_secret" ]]; then
         jwt_secret=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" \
             2>/dev/null || openssl rand -hex 32)
-        pool_write_conf_key "jwt_secret" "$jwt_secret"
+        pool_write_conf_key "jwt_secret" "$jwt_secret" \
+            || { error "Could not write jwt_secret to $POOL_CONF."; return 1; }
         success "JWT secret generated."
     fi
 
@@ -213,7 +217,7 @@ pool_install() {
     # pool_ensure_wg_prereqs() (entry script) creates the directory BEFORE this unit starts,
     # because ReadWritePaths is bound at service start: a directory created later
     # is not writable inside the already-running service's namespace.
-    cat > "/etc/systemd/system/$POOL_SERVICE.service" << EOF
+    cat > "/etc/systemd/system/$POOL_SERVICE.service" << EOF || { error "Could not write /etc/systemd/system/$POOL_SERVICE.service"; return 1; }
 [Unit]
 Description=Grin Pool Manager (GRINIUM — ${POOL_NET_LABEL})
 After=network.target
@@ -244,8 +248,8 @@ EOF
     systemctl enable "$POOL_SERVICE" 2>/dev/null || true
     success "Systemd service $POOL_SERVICE installed (runs as grinpool, hardened unit)."
 
-    mkdir -p "$(dirname "$POOL_LOG")"
-    cat > "/etc/logrotate.d/${POOL_SERVICE}" << EOF
+    mkdir -p "$(dirname "$POOL_LOG")" || { error "Could not create $(dirname "$POOL_LOG")."; return 1; }
+    cat > "/etc/logrotate.d/${POOL_SERVICE}" << EOF || { error "Could not write /etc/logrotate.d/${POOL_SERVICE}"; return 1; }
 $POOL_LOG {
     daily
     rotate 10
@@ -314,7 +318,9 @@ pool_configure() {
         fi
         [[ "$val" == "0" ]] && { info "Configure cancelled."; return 1; }
         if nginx_validate_domain "$val"; then
-            pool_write_conf_key "subdomain" "$val"; cur_domain="$val"; break
+            pool_write_conf_key "subdomain" "$val" \
+                || { error "Could not write the domain to $POOL_CONF."; return 1; }
+            cur_domain="$val"; break
         fi
         warn "Invalid domain name '$val' — try again (e.g. pool.example.com), or 0 to cancel."
     done
@@ -359,11 +365,18 @@ pool_configure() {
 
     # Keep the already-deployed frontend in sync with a changed pool name
     # (no-op before 3) Deploy has run).
-    pool_write_web_config_js
+    # pool.json is already written, so a failed frontend-config write must not
+    # skip the restart that applies it to the running service.
+    local web_cfg_ok=1
+    pool_write_web_config_js || web_cfg_ok=0
 
     if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
         info "Restarting $POOL_SERVICE to apply config..."
         systemctl restart "$POOL_SERVICE"
+    fi
+    if (( ! web_cfg_ok )); then
+        error "Pool config saved and applied, but the frontend config (pool-config.js) was not regenerated."
+        return 1
     fi
     success "Pool manager configured."
 }
@@ -379,9 +392,10 @@ pool_deploy_web() {
     fi
 
     info "Deploying web files (${POOL_NET_LABEL}) to $POOL_WEB_DIR..."
-    mkdir -p "$POOL_WEB_DIR"
+    mkdir -p "$POOL_WEB_DIR" || { error "Could not create $POOL_WEB_DIR."; return 1; }
     rsync -a --delete "$POOL_WEB_SRC/" "$POOL_WEB_DIR/" \
-        2>/dev/null || cp -r "$POOL_WEB_SRC/"* "$POOL_WEB_DIR/"
+        2>/dev/null || cp -r "$POOL_WEB_SRC/"* "$POOL_WEB_DIR/" \
+        || { pool_fix_web_perms; error "Could not copy the web files into $POOL_WEB_DIR."; return 1; }
 
     # Serve the full web admin (dashboard/settings/users/payments/incentives/health) at /admin/.
     # It ships in the app source under admin-panel/; copy it into the web root so nginx's
@@ -391,12 +405,13 @@ pool_deploy_web() {
     # NOTE: must run AFTER the --delete rsync above, which would otherwise prune /admin/.
     if [[ -d "$POOL_APP_SRC/admin-panel" ]]; then
         info "Deploying web admin panel to $POOL_WEB_DIR/admin..."
-        mkdir -p "$POOL_WEB_DIR/admin"
+        mkdir -p "$POOL_WEB_DIR/admin" || { error "Could not create $POOL_WEB_DIR/admin."; return 1; }
         rsync -a --delete "$POOL_APP_SRC/admin-panel/" "$POOL_WEB_DIR/admin/" \
-            2>/dev/null || cp -r "$POOL_APP_SRC/admin-panel/"* "$POOL_WEB_DIR/admin/"
+            2>/dev/null || cp -r "$POOL_APP_SRC/admin-panel/"* "$POOL_WEB_DIR/admin/" \
+            || { pool_fix_web_perms; error "Could not copy the admin panel into $POOL_WEB_DIR/admin."; return 1; }
     fi
 
-    pool_write_web_config_js
+    pool_write_web_config_js || { pool_fix_web_perms; return 1; }
 
     # Ownership + perms: the docroot is rsync'd as root, leaving files root:root.
     # nginx (www-data) must be able to traverse + read every file it serves, so
@@ -427,7 +442,7 @@ pool_write_web_config_js() {
     pool_name=$(pool_read_conf "pool_name" "My Grin Pool")
     escaped_name=$(node -e "process.stdout.write(JSON.stringify(process.argv[1]))" "$pool_name" 2>/dev/null \
         || printf '"%s"' "${pool_name//\"/\\\"}")
-    cat > "$POOL_WEB_DIR/js/pool-config.js" << EOF
+    cat > "$POOL_WEB_DIR/js/pool-config.js" << EOF || { error "Could not write $POOL_WEB_DIR/js/pool-config.js"; return 1; }
 // Auto-generated by GRINIUM pool_deploy.sh
 window.POOL_NETWORK = "$(pool_read_conf network "$POOL_NET")";
 window.POOL_NAME = ${escaped_name};
@@ -739,9 +754,6 @@ pool_deploy_code() {
 # ═══════════════════════════════════════════════════════════════════════════════
 # G) GUIDED FULL SETUP
 # ═══════════════════════════════════════════════════════════════════════════════
-
-# Pause between guided steps. Enter continues; 0 (or q) aborts the guided flow
-# (rc 1) so the caller can return to the menu. <label of the next step>
 
 # Run guided step <n> "<label>" <fn> — when the step already looks complete
 # (per _pool_step_done), offer to skip it. This makes re-running G) after a

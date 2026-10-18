@@ -4,7 +4,7 @@
 # One root-owned executable is the ONLY code that mutates the pool's WireGuard
 # config (/etc/wireguard/wg-grinpool*.conf) and the region_ports map in the pool
 # JSON config. Both callers go through it:
-#   · the CLI  — 07_grin_mining_public_pool.sh menu W (thin pretty-printers)
+#   · the CLI  — 07_lib_pool_regions.sh (menu W) (thin pretty-printers)
 #   · the panel — back-end-pool/index.js via `sudo grin-gateway-ctl …`
 #     (scoped sudoers written by pool_deroot(); the de-rooted grin-pool-manager
 #     may run this ONE binary as root and nothing else)
@@ -83,7 +83,7 @@ if [[ "$CMD" == "add-peer" ]]; then
     [[ "$PUBKEY" =~ ^[A-Za-z0-9+/]{43}=$ ]] || jerr "--pubkey is not a WireGuard public key (44 chars, ends =)"
 fi
 
-# ── Per-network derivation — single source (mirrors 07_grin_mining_public_pool.sh) ──
+# ── Per-network derivation — single source (mirrors 07_lib_pool_regions.sh) ──
 if [[ "$NET" == "testnet" ]]; then
     WG_IFACE="wg-grinpool-tn"
     WG_DIR_CONF="/opt/grin/conf/wg-testnet"

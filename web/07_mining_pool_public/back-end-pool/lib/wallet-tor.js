@@ -291,13 +291,15 @@ function postJsonRpcOverSocket(socket, opts) {
 
 // ─── What did `grin-wallet send -d <address>` actually do? ────────────────────
 // The CLI exits 0 on three different outcomes, and only one of them paid anyone. Read against
-// upstream controller/src/command.rs `send` + `output_slatepack` at v5.4.1 and v5.5.0 (same
-// output in both):
-//   'sent'                Tor round-trip, then tx_lock_outputs → finalize_tx → post_tx all
-//                         succeeded, and the CLI printed `Tx sent successfully`. A failing post_tx
-//                         exits NON-zero instead, so it never reaches this function.
-//   'slatepack_fallback'  the Tor delivery failed (miner offline, onion unreachable, timeout), so
-//                         the CLI LOCKED the outputs, wrote <tld>/slatepack/<slate-uuid>.S1.slatepack,
+// upstream controller/src/command.rs `send` + `output_slatepack` at v5.4.1, v5.5.0 and v5.5.1;
+// both markers below match all three. v5.5.1 locks the outputs BEFORE the Tor attempt (upstream
+// #814; earlier releases locked after it), ends the "Slatepack data follows" line with a period
+// and adds an "Outputs are locked … cancel -t <id>" line to a fallback.
+//   'sent'                Tor round-trip, then finalize_tx → post_tx succeeded, and the CLI
+//                         printed `Tx sent successfully`. A failing post_tx exits NON-zero
+//                         instead, so it never reaches this function.
+//   'slatepack_fallback'  the Tor delivery failed (miner offline, onion unreachable, timeout): the
+//                         outputs are LOCKED, the CLI wrote <tld>/slatepack/<slate-uuid>.S1.slatepack,
 //                         printed the armored slatepack, and exited 0. Nothing was finalized — only
 //                         the sender can finalize — so nothing can ever post from this state.
 //   'unrecognised'        exit 0 with neither marker. Treated as an unknown outcome, never as sent.
@@ -318,6 +320,23 @@ function classifySendOutput(stdout) {
     return { outcome: 'slatepack_fallback', slateId: m ? m[1].toLowerCase() : null };
   }
   return { outcome: 'unrecognised', slateId: null };
+}
+
+// ─── Why the CLI fell back ────────────────────────────────────────────────────
+// grin-wallet logs the Tor failure behind a fallback as `Error sending slate sync: <error>` at
+// ERROR (controller/src/command.rs `send`), and the default stdout_log_level (Warn) prints it to
+// the stdout we already hold. With stdout logging switched off there is no line, and nothing is
+// guessed. `stage: 'version_check'` = the CLI's own Tor started (a failed start is a TorProcess
+// error) but the recipient's onion never answered check_version, the first request of the round
+// trip (impls/src/adapters/tor.rs check_other_version). Read against v5.5.1.
+const SYNC_ERROR_RE = /Error sending slate sync: ([^\r\n]*)/;
+const VERSION_CHECK_RE = /Performing version check \(is recipient listening\?\)/;
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+function torFailureReason(stdout) {
+  const m = String(stdout || '').replace(ANSI_RE, '').match(SYNC_ERROR_RE);
+  if (!m) return { syncError: null, stage: null };
+  const syncError = m[1].trim().slice(0, OUTPUT_TAIL_CHARS);
+  return { syncError, stage: VERSION_CHECK_RE.test(syncError) ? 'version_check' : null };
 }
 
 // ─── What the CLI printed, when it failed ─────────────────────────────────────
@@ -419,11 +438,18 @@ class WalletTor {
   // The result object for a classified `send` output (see classifySendOutput).
   _sendResult(verdict, stdout, address, amount, suffix = '') {
     if (verdict.outcome === 'slatepack_fallback') {
+      // torStage lets the scheduler tell "the miner's onion never answered our send's Tor" from a
+      // failure of the pool's own send path (see torFailureReason).
+      const { syncError, stage } = torFailureReason(stdout);
       return {
         success: false,
         torFallback: true,
         slateId: verdict.slateId,
-        error: 'Tor delivery failed: grin-wallet fell back to printing a slatepack — nothing was posted' + suffix,
+        torStage: stage,
+        syncError,
+        cliNote: suffix.trim() || null,
+        error: 'Tor delivery failed: grin-wallet fell back to printing a slatepack — nothing was posted' + suffix +
+          (syncError ? `; grin-wallet: ${syncError}` : ''),
         address,
         amount
       };
@@ -641,4 +667,5 @@ module.exports.classifyProbeError = classifyProbeError;
 module.exports.readProbeAnswer = readProbeAnswer;
 module.exports.checkVersionOverSocket = checkVersionOverSocket;
 module.exports.classifySendOutput = classifySendOutput;
+module.exports.torFailureReason = torFailureReason;
 module.exports.DEFAULT_SEND_TIMEOUT_MS = DEFAULT_SEND_TIMEOUT_MS;

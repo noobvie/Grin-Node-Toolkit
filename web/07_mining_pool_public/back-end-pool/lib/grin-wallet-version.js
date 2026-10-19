@@ -3,8 +3,9 @@
 //
 // WHY A CONSTANT, AND WHO BUMPS IT. Several payout guards depend on how grin-wallet behaves, not
 // only on its API shape, and a new release can change that behaviour with no error anywhere. The
-// ones checked against the v5.5.0 source on 2026-09-27 (see the gate in
-// withdrawal-scheduler.js processSlatepackExpiry and docs/reference/script07_implementation.md):
+// ones checked against the v5.5.0 source on 2026-09-27 and re-read in v5.5.1 on 2026-10-19 (see
+// the gate in withdrawal-scheduler.js processSlatepackExpiry and
+// docs/reference/script07_implementation.md):
 //   1. `owner_api` never publishes a Tor onion — only `listen` does (controller.rs
 //      foreign_listener, both the external tor and the built-in Arti path). The pool runs owner_api
 //      only, so a miner's `grin-wallet receive` cannot reach it over Tor and prints the reply.
@@ -12,14 +13,19 @@
 //      finalizes AND posts (foreign_rpc.rs: post_automatically = true) behind the backend's back.
 //   3. The tx log records the slate state: Standard1 at lock, Standard3 after any finalize. The
 //      expiry gate refunds only Standard1.
-// Raise TESTED_VERSION only after re-reading those three in the new release's source. The admin
+//   4. The Tor rail's CLI `send` (controller/src/command.rs `send`): `Tx sent successfully` only
+//      after a post; on a Tor failure it keeps the outputs locked, writes
+//      <tld>/slatepack/<uuid>.S1.slatepack, prints "Slatepack data follows" and exits 0; it logs
+//      the reason as `Error sending slate sync:`. wallet-tor.js classifySendOutput and
+//      torFailureReason read exactly those lines, and the scheduler's refund depends on them.
+// Raise TESTED_VERSION only after re-reading those four in the new release's source. The admin
 // panel's "Pool wallet safety" note on the Payout settings page states the same version (a test
 // pins the two together), and the toolkit's shared pin is GWI_DEFAULT_TAG in
 // scripts/lib/grin_wallet_install.sh.
 const { execFile } = require('child_process');
 const path = require('path');
 
-const TESTED_VERSION = '5.5.0';
+const TESTED_VERSION = '5.5.1';
 const CACHE_MS = 10 * 60 * 1000;   // a rollback (hub 05 binary store) shows up within 10 min, no restart
 const TIMEOUT_MS = 5000;
 

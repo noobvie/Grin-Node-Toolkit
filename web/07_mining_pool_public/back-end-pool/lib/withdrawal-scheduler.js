@@ -48,6 +48,9 @@ const TOR_PAUSE_S = 86400;
 const TOR_COUNTED_CODE = 'wallet_offline';
 const TOR_CLEARED_CODE = 'wallet_offline_cleared';   // un-counted by the operator; history kept
 
+// Distinct recipients failing with wallet_not_findable in 24 h that make it a pool-side warning.
+const NOT_FINDABLE_SPREAD = 2;
+
 // withdrawals.fail_detail — the CLI error / output tail behind a fail_code. Admin-only.
 const FAIL_DETAIL_MAX = 500;
 
@@ -746,8 +749,9 @@ class WithdrawalScheduler {
       }
 
       // The wallet send lock, held for the CLI's WHOLE run. `grin-wallet
-      // send` selects its coins at start but locks them only after the Tor round trip, and
-      // lock_output never checks an existing lock (v5.5.0 selection.rs; selection takes the
+      // send` selects its coins at start and locks them in a later step (v5.5.1: just before the
+      // Tor attempt; v5.5.0: after it), and
+      // lock_output never checks an existing lock (v5.5.1 selection.rs; selection takes the
       // SMALLEST coins first) — so a Slatepack / Goblin create running meanwhile would pick the same
       // coins, and the chain can accept only one of the two transactions: the other payout then
       // sticks in finalizing or Held. The CLI is this process's own child, so this process's lock
@@ -836,12 +840,27 @@ class WithdrawalScheduler {
       try { probe = await this.walletTor.probeToronlineStatus(this._recipientOf(withdrawal)); }
       catch (e) { probe = { online: null, reason: `probe_error: ${e.message}` }; }
       const online = probe ? probe.online : null;
-      const code = online === false ? 'wallet_offline' : online === true ? 'pool_send_path' : 'wallet_unreachable';
+      // The probe answering does NOT clear the miner. The probe rides the long-running system tor;
+      // the send starts a fresh tor of its own every time (grin-wallet has no option to reuse
+      // one), and tor keeps onion descriptors in memory only. An onion that has stopped being
+      // findable on the network still answers a tor holding an older copy of its descriptor, and
+      // nothing else (observed live on mainnet #31–33, 2026-10-19: system tor 3.9 s, an
+      // empty-datadir tor nothing in 90 s). So when the send's own tor ran but never got check_version answered, the fault is
+      // the miner's onion: wallet_not_findable, not counted toward the Tor pause — unless it spreads
+      // (see _noteNotFindableSpread). Every other fallback with the probe answering is still the
+      // pool's send path.
+      const code = online === false ? 'wallet_offline'
+        : online === true ? (result.torStage === 'version_check' ? 'wallet_not_findable' : 'pool_send_path')
+        : 'wallet_unreachable';
       const why = probe && probe.reason ? probe.reason : 'unknown';
       if (code === 'pool_send_path') this._noteTorSendPath(withdrawal, why);
+      // The CLI's own reason goes LAST, so the ≤ 500-char cap trims it, never the slate or probe.
       this._failTor(id, 'tor_sending', code,
-        `${error} [fallback slate ${result.slateId} cancelled; probe after the failure: ${why}]`,
+        `Tor delivery failed${result.cliNote ? ` ${result.cliNote}` : ''} — fallback slate ${result.slateId} ` +
+          `cancelled; probe after the failure: ${why}` +
+          (result.syncError ? `; grin-wallet: ${result.syncError}` : '; grin-wallet printed no reason'),
         `tor send failed (${code}) — fallback slate ${result.slateId} cancelled, balance returned`);
+      if (code === 'wallet_not_findable') this._noteNotFindableSpread(withdrawal);
       return;
     }
 
@@ -923,6 +942,32 @@ class WithdrawalScheduler {
         { withdrawal_id: withdrawal.id, probe: probeReason });
     } catch (e) {
       console.error(`[tor] failed to record tor_send_path alert: ${e.message}`);
+    }
+  }
+
+  // wallet_not_findable blames the miner, which is right for ONE onion and wrong for many: a fresh
+  // tor on the POOL box that bootstraps but cannot fetch onion descriptors (a skewed pool clock,
+  // say) fails every recipient at the same check_version step. So once NOT_FINDABLE_SPREAD distinct
+  // recipients hit it inside 24 h, raise the same rolling tor_send_path warning a pool_send_path
+  // raises. Called after _failTor, so the row that triggered it counts.
+  _noteNotFindableSpread(withdrawal) {
+    try {
+      const since = Math.floor(Date.now() / 1000) - 86400;
+      const rows = this.db.prepare(`
+        SELECT DISTINCT COALESCE(w.dest_address, w.grin_address) AS recipient
+          FROM withdrawals w
+          JOIN withdrawal_events e ON e.withdrawal_id = w.id AND e.to_status = 'tor_failed'
+         WHERE w.status = 'tor_failed' AND w.fail_code = 'wallet_not_findable' AND e.created_at > ?
+      `).all(since);
+      if (rows.length < NOT_FINDABLE_SPREAD) return;
+      this._rollingAlert('tor_send_path', 'warning',
+        `Tor payout #${withdrawal.id}: ${rows.length} different miners' wallets could not be found by ` +
+        'grin-wallet\'s own fresh tor in 24 h, though our probe reached them — one miner is the miner, ' +
+        'several point at the pool box (check its clock and that a fresh tor can reach onion services). ' +
+        'Each payout was refunded and the miner offered Slatepack.',
+        { withdrawal_id: withdrawal.id, not_findable_recipients_24h: rows.length });
+    } catch (e) {
+      console.error(`[tor] failed to check the wallet_not_findable spread: ${e.message}`);
     }
   }
 

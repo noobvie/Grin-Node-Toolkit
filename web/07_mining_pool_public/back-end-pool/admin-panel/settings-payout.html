@@ -39,13 +39,15 @@
               Health page turns red. Never refund one by hand.
             </li>
             <li>
-              <b>Payouts are tested with grin-wallet <span data-tested-grin-wallet>v5.5.0</span>.</b> The Health
+              <b>Payouts are tested with grin-wallet <span data-tested-grin-wallet>v5.5.1</span>.</b> The Health
               page shows the version the pool actually runs, and a different one turns the card Degraded.
               Before moving to another version, re-check in its source that it still (1) never opens a Tor
               onion from <code>owner_api</code>, (2) records each slate's state in the transaction log
-              (Standard1 when locked, Standard3 once finalized), and (3) posts a Tor reply through the Foreign
-              <code>finalize_tx</code>. Details: the pool's implementation notes, &ldquo;Slatepack expiry
-              gate&rdquo;.
+              (Standard1 when locked, Standard3 once finalized), (3) posts a Tor reply through the Foreign
+              <code>finalize_tx</code>, and (4) prints the same lines from <code>send</code> over Tor
+              (&ldquo;Tx sent successfully&rdquo;, or a fallback &ldquo;Slatepack data follows&rdquo; with
+              its <code>.S1.slatepack</code> file and an &ldquo;Error sending slate sync&rdquo; reason).
+              Details: the pool's implementation notes, &ldquo;Slatepack expiry gate&rdquo;.
             </li>
           </ul>
         </div>

@@ -472,6 +472,17 @@ const FALLBACK_OUT = [
   '',
 ].join('\n');
 const SENT_OUT = 'Tx sent successfully\n';
+// v5.5.1's fallback, as observed live in mainnet payout #33's output on 2026-10-19: the ERROR log line reaches
+// stdout at the default stdout_log_level (Warn), then the slatepack follows. The onion is a
+// placeholder. The colour codes are what log4rs's highlight writes when stdout is a terminal.
+const VERSION_CHECK_ERR = 'Client Callback Error: Performing version check (is recipient listening?): Request error: ' +
+  'Cannot make request: error sending request for url (http://example.onion/v2/foreign)';
+const FALLBACK_551_OUT = [
+  `\x1b[31mERROR\x1b[0m grin_wallet_controller::command - Error sending slate sync: ${VERSION_CHECK_ERR}`,
+  FALLBACK_OUT.replace('to the other party', 'to the other party.'),
+  `Outputs are locked. To unlock them, cancel with \`cancel -t ${FB_ID}\`.`,
+  '',
+].join('\n');
 
 async function torSendSection() {
   section('Tor send — classify the CLI output, never trust exit 0');
@@ -536,6 +547,44 @@ async function torSendSection() {
     t.execWalletCommand = async () => { throw new Error('Command failed (code 1): Tx sent fail'); };
     const r = await t.sendToTorAddress(TOR_ADDR, 1.5);
     ok('k. non-zero exit → success:false with the CLI error, unchanged', r.success === false && /code 1/.test(r.error), JSON.stringify(r));
+  }
+
+  section('Tor send — the CLI\'s own reason for a fallback');
+  const reason = (s) => (typeof WalletTor.torFailureReason === 'function'
+    ? WalletTor.torFailureReason(s) : { syncError: 'torFailureReason not exported', stage: 'x' });
+  {
+    const r = reason(FALLBACK_551_OUT);
+    ok('r1. the `Error sending slate sync:` line is read whole, prefix and colour codes stripped',
+      r.syncError === VERSION_CHECK_ERR, JSON.stringify(r));
+    ok('r2. …and a version-check failure is named as such (our Tor ran; the onion never answered)', r.stage === 'version_check', JSON.stringify(r));
+  }
+  {
+    const r = reason(`ERROR grin_wallet_controller::command - Error sending slate sync: Tor Process Error: "Timeout"\n${FALLBACK_OUT}`);
+    ok('r3. any other sync error is kept, with no stage (our own Tor did not start, say)',
+      r.syncError === 'Tor Process Error: "Timeout"' && r.stage === null, JSON.stringify(r));
+  }
+  {
+    const r = reason(FALLBACK_OUT);
+    ok('r4. no error line (stdout logging off) → nothing invented', r.syncError === null && r.stage === null, JSON.stringify(r));
+  }
+  {
+    const r = reason(`Error sending slate sync: ${'x'.repeat(1000)}\n`);
+    ok('r5. a runaway error line is capped at 300 chars', !!r.syncError && r.syncError.length === 300, String(r.syncError && r.syncError.length));
+  }
+  {
+    const r = await runSend(FALLBACK_551_OUT);
+    ok('r6. fallback result carries the CLI reason and stage, and the error names it',
+      r.torFallback === true && r.slateId === FB_ID && r.torStage === 'version_check' && r.syncError === VERSION_CHECK_ERR &&
+      r.error.includes(VERSION_CHECK_ERR), JSON.stringify(r));
+    ok('r6. …and no cliNote on a CLI that exited by itself', r.cliNote === null, JSON.stringify(r));
+  }
+  {
+    const t = new WalletTor({ network: 'testnet', wallet_dir: '/nonexistent' });
+    t.execWalletCommand = async () => { throw Object.assign(new Error('timed out'), { stdout: FALLBACK_551_OUT }); };
+    const r = await t.sendToTorAddress(TOR_ADDR, 1.5);
+    ok('r7. a fallback the timeout killed carries cliNote, stage and the CLI reason',
+      r.torFallback === true && /hung until the timeout/.test(r.cliNote || '') && r.torStage === 'version_check' &&
+        r.syncError === VERSION_CHECK_ERR, JSON.stringify(r));
   }
 
   // The ARGV itself, checked against grin-wallet v5.5.0's own CLI spec (src/bin/grin-wallet.yml,
@@ -845,8 +894,8 @@ function accountOfferSection() {
   ok('O11. no window from the summary → no number is invented', !/\d/.test(noN), noN);
 
   const out = api.torFailOutcome || (() => ({}));
-  const OFFER = ['wallet_offline', 'wallet_unreachable', 'pool_send_path', 'unknown'];
-  ok('O12. wallet_offline / wallet_unreachable / pool_send_path / unknown offer Slatepack',
+  const OFFER = ['wallet_offline', 'wallet_unreachable', 'wallet_not_findable', 'pool_send_path', 'unknown'];
+  ok('O12. wallet_offline / wallet_unreachable / wallet_not_findable / pool_send_path / unknown offer Slatepack',
     OFFER.every((c) => out(c).offer === true), OFFER.map((c) => c + '=' + out(c).offer).join(' '));
   ok('O13. pool_busy offers nothing and says another payment was ahead + when to retry (a Slatepack would fail the same way)',
     out('pool_busy').offer === false && /^Another payment was ahead of yours/.test(out('pool_busy').text || '') &&
@@ -859,6 +908,9 @@ function accountOfferSection() {
     /^✗ The payout could not reach your wallet over Tor — your balance is back\. Try again, or get it as a Slatepack now\.$/.test(out('wallet_unreachable').text || '') &&
     /^✗ The pool could not deliver over Tor — your balance is back\. Please use Slatepack; the operator has been alerted\.$/.test(out('pool_send_path').text || '') &&
     /^✗ This payout did not go out — your balance is back\.$/.test(out('unknown').text || ''));
+  ok('O16b. wallet_not_findable tells the miner it is THEIR wallet\'s Tor and what to do — never "the pool could not deliver"',
+    /^✗ A fresh Tor connection could not find your wallet — your balance is back\. Restart your wallet listener and check that your computer's clock is correct, then try again, or get it as a Slatepack now\.$/
+      .test(out('wallet_not_findable').text || ''), out('wallet_not_findable').text);
   ok('O17. an operator-cleared failure reads like wallet_offline (the miner is not told about the clear)',
     out('wallet_offline_cleared').text === out('wallet_offline').text && out('wallet_offline_cleared').offer === true);
 

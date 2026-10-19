@@ -789,8 +789,11 @@ function createSchema() {
       --   wallet_offline     the miner's onion did not answer a fresh probe after the send failed
       --                      (the ONLY code that counts toward the 5-in-24h Tor pause)
       --   wallet_unreachable the probe could not tell (our Tor could not look)
+      --   wallet_not_findable the probe's long-running tor reaches the onion, but the send's fresh
+      --                      tor never got check_version answered — the miner's onion is no
+      --                      longer findable on the network (not counted, no operator alert)
       --   pool_send_path     the miner's wallet answers the probe, yet grin-wallet could not
-      --                      deliver — the pool's side (operator alert tor_send_path)
+      --                      deliver for any other reason — the pool's side (operator alert tor_send_path)
       --   pool_busy          the pool wallet could not cover it (NotEnoughFunds), nothing sent
       --   unknown            a Held payout later proven absent (or refunded by the operator)
       --   wallet_offline_cleared  a wallet_offline the operator un-counted (pause clear)

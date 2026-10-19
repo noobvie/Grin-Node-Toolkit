@@ -53,6 +53,7 @@ const FAIL_CODE = {
   wallet_offline:         'miner wallet offline (counted)',
   wallet_offline_cleared: 'miner wallet offline (un-counted by an admin)',
   wallet_unreachable:     'miner wallet unreachable (probe could not look)',
+  wallet_not_findable:    'miner onion not findable by a fresh Tor (our probe still reached it)',
   pool_send_path:         'POOL send path — the wallet answered our probe',
   pool_busy:              'POOL wallet could not cover it',
   unknown:                'Held, then proven not sent',

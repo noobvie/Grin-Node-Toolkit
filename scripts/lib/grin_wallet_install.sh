@@ -80,6 +80,17 @@
 #    `repost -i -f`, init_send_tx / tx_lock_outputs / finalize_tx / post_tx);
 #    TxLogEntry only gained an optional `tx_slate_state`.
 #
+# What v5.5.1 changes versus v5.5.0 (checked against upstream v5.5.0..v5.5.1, 2026-10-19):
+#  - CLI `send` over Tor LOCKS the outputs BEFORE the Tor attempt (#814), not
+#    after it; a fallback still prints "Slatepack data follows" + writes the
+#    .S1.slatepack, now with an "Outputs are locked … cancel -t <id>" line.
+#  - The external-tor send still starts its OWN tor every time (no option to
+#    reuse a running one); Arti, used only with `use_integrated = true`, went
+#    back to 0.43 (#810).
+#  - Node HTTP errors read "HTTP <status>" / "Cannot parse response: <detail>"
+#    (#820); `receive` refuses a slate in the wrong state (#807). rpassword,
+#    the stdin passphrase path and Owner v3 / CLI argument shapes are unchanged.
+#
 # Convention: sourced lib → NO shebang / NO `set -e`.
 # =============================================================================
 

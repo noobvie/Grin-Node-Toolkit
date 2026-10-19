@@ -631,7 +631,7 @@ class AlertMonitor {
       // permanently on and train the operator to ignore it. Counted: pool_send_path (the miner's
       // wallet answers but our send could not deliver), pool_busy (pool wallet short) and unknown
       // (a Held payout proven absent, i.e. a send that died on our side). Not counted:
-      // wallet_offline / wallet_unreachable (the miner's side, bounded by the Tor pause), the
+      // wallet_offline / wallet_unreachable / wallet_not_findable (the miner's side), the
       // cleared variant, and legacy NULL rows. Timed by the tor_failed EVENT — a Held payout can
       // resolve days after it was requested. Times are INTEGER unixepoch.
       const stmt = this.db.prepare(`

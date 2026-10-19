@@ -270,8 +270,10 @@ for (const [re, label] of FORBIDDEN) {
 // quietest hour). No API text reaches any of them: labels are the HEAT_DAYS constants, every count
 // goes through Number() || 0, hours are loop indexes, `expected` goes through fmtExpected().
 //
-// account-settings 20: the page's script is js/pages/account-settings.js (keyed by that file, not
-// `…html#inline0`).
+// account-settings 21: the page's script is js/pages/account-settings.js (keyed by that file, not
+// `…html#inline0`). The 21st is the P-09 link column's `dp-link-lines`: every string in it goes
+// through dpLine() → escHtml, and no URL is in it — the live link is an <a> whose href is set as a
+// property, and this tab's own pending URL is a textContent node (design §18.12).
 const INNER_HTML = {
   'public_html/js/pages/api-docs.js': 4,
   'public_html/js/pages/blocks.js': 7,
@@ -282,7 +284,7 @@ const INNER_HTML = {
   'public_html/js/api.js': 1,
   'public_html/js/branding.js': 7,
   'public_html/js/network-map.js': 7,
-  'public_html/js/pages/account-settings.js': 20,
+  'public_html/js/pages/account-settings.js': 21,
   'public_html/js/payout-goblin.js': 3,
   'public_html/js/public-shell.js': 2,
   'public_html/js/public-theme.js': 4,

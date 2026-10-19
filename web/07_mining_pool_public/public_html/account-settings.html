@@ -333,11 +333,21 @@
     }
 
     /* ── P-09 donor profile (design §18.8) ─────────────────────────────────
-       Two columns (name | banner) under one two-proof gate. Every block that starts hidden
+       Three columns (name | banner | link) under one two-proof gate. Every block that starts hidden
        does so with an inline style="display:none", never through these classes, so a
        style.display = '' reveal always works (memory: project_pool_frontend_uiux_audit). */
-    .dp-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 26px; }
+    .dp-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 26px; }
+    /* Two columns while three would squeeze the banner's 4:1 box; the link column then takes the
+       full row beneath. */
+    @media (max-width: 1100px) { .dp-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .dp-col-link { grid-column: 1 / -1; } }
     @media (max-width: 900px) { .dp-grid { grid-template-columns: minmax(0, 1fr); } }
+    .dp-livelink { margin: 0 0 12px; font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
+    .dp-linktag {
+      display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 10.5px;
+      letter-spacing: .06em; color: var(--text-dim);
+      border: 1px solid var(--border, rgba(255,255,255,.12));
+    }
+    .dp-col input[type="text"] { max-width: 100%; }
     .dp-col h3 {
       font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .16em;
       text-transform: uppercase; color: var(--text-dim); margin: 0 0 12px;
@@ -921,7 +931,7 @@
                      or remove: removing your own data is always allowed (script07_implementation.md §18.11). -->
                 <div class="deck-row" id="acct-donor" style="display:none">
                     <div class="panel"><span class="screws"></span>
-                        <h2 class="panel-title"><span class="tag">P-09</span> Donor profile <span class="right">names checked at once · banners reviewed</span></h2>
+                        <h2 class="panel-title"><span class="tag">P-09</span> Donor profile <span class="right">names checked at once · banners &amp; links reviewed</span></h2>
                         <div class="panel-body">
                             <div id="dp-lead" class="dp-lines"></div>
                             <div id="dp-body" style="display:none">
@@ -931,7 +941,7 @@
                                 <div class="gate-block">
                                     <div class="gate-title">🔐 Both proofs — required for every donor-profile change</div>
                                     <p class="note" style="margin:0 0 12px;">
-                                        Your name and banner speak for this address on a public page, so changing them asks for
+                                        Your name, banner and link speak for this address on a public page, so changing them asks for
                                         your mining IP <em>and</em> your rig password, not either one. Each must have been on
                                         record for a while — that is what stops someone who briefly mined to your address from
                                         putting words on the donor wall in your name.
@@ -999,6 +1009,32 @@
                                             <button type="button" class="btn-save btn-quiet" id="dp-banner-remove" style="display:none">Remove from wall</button>
                                         </div>
                                         <div class="acct-msg" id="dp-banner-msg"></div>
+                                    </div>
+
+                                    <div class="dp-col dp-col-link">
+                                        <h3>Link</h3>
+                                        <div class="dp-lines" id="dp-link-lines"></div>
+                                        <!-- The approved link. The anchor's href is set as a property by
+                                             renderDonor(), never through markup; the text is the host. -->
+                                        <p class="dp-livelink" id="dp-link-live" style="display:none">
+                                            <a id="dp-link-live-a"></a><span class="dp-linktag" id="dp-link-live-tag" style="display:none"></span>
+                                        </p>
+                                        <!-- This tab's own pending submission, shown as text only. -->
+                                        <p class="dp-livelink" id="dp-link-mine" style="display:none"></p>
+                                        <div id="dp-link-form" style="display:none">
+                                            <div class="form-group">
+                                                <label for="dp-link">One link for your card
+                                                    <span style="color:var(--text-mute);font-weight:400">(https://&hellip; &middot; a Tor .onion address &middot; nostr:npub1&hellip; &middot; up to 200 characters)</span></label>
+                                                <input type="text" id="dp-link" maxlength="220" placeholder="https://example.com" autocomplete="off" spellcheck="false">
+                                                <small class="dp-hint" id="dp-link-hint" aria-live="polite"></small>
+                                            </div>
+                                        </div>
+                                        <div class="dp-actions">
+                                            <button class="btn-save" id="dp-link-submit" style="display:none">Submit link for review</button>
+                                            <button type="button" class="btn-save btn-quiet" id="dp-link-withdraw" style="display:none">Withdraw request</button>
+                                            <button type="button" class="btn-save btn-quiet" id="dp-link-remove" style="display:none">Remove from wall</button>
+                                        </div>
+                                        <div class="acct-msg" id="dp-link-msg"></div>
                                     </div>
                                 </div>
                             </div>

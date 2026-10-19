@@ -295,6 +295,27 @@ try {
     /DonorProfiles\.adminQueue\(db, \{/.test(handler('get', '/api/admin/donors/requests')) &&
     /bad_status:\s*\[400,/.test(src));
 
+  // Links (design §18.12) go through the SAME guarded routes: the queue (?kind=link), approve /
+  // reject by id, remove {kind:'link'}. No new admin route exists for them, so the guard tiers
+  // above cover them; what is pinned here is that those routes actually reach a link row.
+  const DPg = require(path.join(APP, 'lib/donor-profiles.js'));
+  ok('link: the kind enum the remove route and the queue check includes "link"',
+    DPg.KINDS.includes('link') && DPg.adminQueue(db, { kind: 'link' }).ok === true);
+  ok('link: approve / remove need no uploads dir for a link (the 503 is banner-only), and the lib does not throw without one',
+    !/kind === 'link'[\s\S]{0,40}503/.test(handler('post', '/api/admin/donors/requests/:id/approve')) &&
+    !/kind === 'link'[\s\S]{0,40}503/.test(handler('post', '/api/admin/donors/:addr/remove')) && (() => {
+      const LA = 'grin1' + 'l'.repeat(58);
+      db.prepare('INSERT INTO miner_accounts (grin_address, balance) VALUES (?, 0)').run(LA);
+      const s = DPg.submitLink(db, LA, 'https://guard-check.example', { isDonor: true });
+      const a = DPg.approve(db, s.id, { adminId: 7 });
+      const r = DPg.removeLive(db, LA, 'link', { adminId: 7, reason: 'test' });
+      const rows = db.prepare("SELECT action, details FROM admin_audit_log WHERE target_id = ? ORDER BY id").all(LA);
+      return s.ok && a.ok && r.ok && rows.map((x) => x.action).join() === 'donor_request_approve,donor_profile_remove' &&
+             rows.every((x) => JSON.parse(x.details).host === 'guard-check.example' && !x.details.includes('https://'));
+    })());
+  ok('link: a stored link that no longer validates is a 422 invalid_link, never published',
+    /invalid_link:\s*\[422,/.test(src) && /bad_kind:\s*\[400, 'kind must be "name", "banner" or "link"'\]/.test(src));
+
   // The image route (§18.6): the STORED sniffed mime, nosniff, a sandbox CSP with nothing
   // allowed, no-store — and a 404 (via the lib's no_image/not_found) when there are no bytes.
   const img = handler('get', '/api/admin/donors/requests/:id/image');

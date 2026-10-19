@@ -437,10 +437,15 @@ const fnSrc = (name) => {
 const readCols = (profilesSrc.match(/const READ_COLS = '([^']*)'/) || [])[1] || '';
 ok('§18.9 publicProfiles selects status = approved only, and never `image`',
   /WHERE status = 'approved'/.test(fnSrc('publicProfiles')) && !/\bimage\b/.test(fnSrc('publicProfiles')));
-ok('§18.9 profileFor reads READ_COLS (no image, no name) + the name of APPROVED rows only',
-  readCols !== '' && !/\bimage\b|\bname\b/.test(readCols) &&
+ok('§18.9 profileFor reads READ_COLS (no image, no name, no url) + the name and url of APPROVED rows only',
+  readCols !== '' && !/\bimage\b|\bname\b|\burl\b/.test(readCols) &&
   /CASE WHEN status = 'approved' THEN name END AS live_name/.test(fnSrc('profileFor')) &&
+  /CASE WHEN status = 'approved' THEN url END AS live_link/.test(fnSrc('profileFor')) &&
   !/\bimage\b/.test(fnSrc('profileFor')));
+// §18.12: the check run BEFORE the proofs compares the LIVE link only — "is this your pending
+// URL?" answered to anyone holding the address would be an oracle for a value never returned.
+ok('§18.12 linkPrecheck reads the approved link only, never the pending one',
+  /linkRow\(db, address, 'approved'\)/.test(fnSrc('linkPrecheck')) && !/pending/.test(fnSrc('linkPrecheck')));
 
 // Every route that touches donor_requests, directly (SQL) or through the profile/wall libs,
 // enumerated from the route declarations. A public route on this list reads only the
@@ -462,14 +467,30 @@ const touching = routeDecls.filter((r) => /donor_requests|DonorProfiles\.|donorW
 const ADMIN_READERS = /DonorProfiles\.(adminQueue|requestImage|adminProfiles)\(/;
 const publicTouching = touching.filter((r) => !r.path.startsWith('/api/admin/'))
   .map((r) => `${r.verb.toUpperCase()} ${r.path}`).sort();
-ok('§18.9 the public routes that touch donor_requests are exactly the reviewed five',
+// POST …/donor-profile/link (§18.12) reviewed: it emits a refusal code + the lib's rule text,
+// or — after both proofs — the URL the caller just sent, normalised; never a stored pending URL
+// (the "same as the pending one" answer comes only after the proofs, from submitLink), never
+// an admin reader. Pinned below together with its gate order.
+ok('§18.9 the public routes that touch donor_requests are exactly the reviewed six',
   publicTouching.join(' | ') === [
     'DELETE /api/account/:addr/donor-profile/:kind',
     'GET /api/account/:addr',
     'GET /api/pool/donors',
     'POST /api/account/:addr/donor-profile/banner',
+    'POST /api/account/:addr/donor-profile/link',
     'POST /api/account/:addr/donor-profile/name'
   ].join(' | '), publicTouching.join(' | '));
+{
+  const linkRoute = handlerSrc('post', '/api/account/:addr/donor-profile/link');
+  const at = (s) => linkRoute.indexOf(s);
+  ok('§18.12 the link route: refusal → shape → live-only precheck → BOTH proofs → submitLink, in that order',
+    at('donorSubmitRefusal(addr)') > 0 && at('donorSubmitRefusal(addr)') < at('DonorProfiles.validateLink(') &&
+    at('DonorProfiles.validateLink(') < at('DonorProfiles.linkPrecheck(') &&
+    at('DonorProfiles.linkPrecheck(') < at("requireBothProofs(addr, req.body, reqIp, 'donor_profile_submit', 'donor_profile')") &&
+    at("requireBothProofs(addr, req.body, reqIp, 'donor_profile_submit', 'donor_profile')") < at('DonorProfiles.submitLink(db, addr, v.url, { isDonor: true })'));
+  ok('§18.12 the link route audits the host, never the full URL',
+    /details: \{ kind: 'link', request_id: r\.id, host: r\.host,/.test(linkRoute) && !/details: \{[^}]*\burl\b/.test(linkRoute));
+}
 ok('§18.9 no public route calls an admin reader (adminQueue / requestImage / adminProfiles)',
   touching.filter((r) => !r.path.startsWith('/api/admin/'))
     .every((r) => !ADMIN_READERS.test(handlerSrc(r.verb, r.path))));
@@ -525,14 +546,76 @@ ok('§18.9 the page shows a live banner only through DP_BANNER_URL_RE, the serve
 ok('§18.8 banner previews are data: URLs — createObjectURL appears only in the proof-file download',
   /readAsDataURL/.test(acctPageJs) && (acctPageJs.match(/createObjectURL/g) || []).length === 1 &&
   /function downloadPaymentProof[\s\S]*?createObjectURL/.test(acctPageJs));
-ok('§18.8 every donor-profile success clears both proof boxes (name, banner, delete)',
-  (acctPageJs.match(/dpClearProofs\(\);/g) || []).length === 3 &&
+ok('§18.8 every donor-profile success clears both proof boxes (name, banner, link, delete)',
+  (acctPageJs.match(/dpClearProofs\(\);/g) || []).length === 4 &&
   /function dpClearProofs\(\) \{ \$id\('dp-ip-proof'\)\.value = ''; \$id\('dp-pass-proof'\)\.value = ''; \}/.test(acctPageJs));
+// §18.12 rendering rules, pinned in the three front-end files: a link reaches the DOM as an href
+// PROPERTY (never markup), always with the full rel, with no target on nostr:, and never on the
+// past-donors strip; the admin queue shows the URL as text and never as an anchor.
+{
+  const REL = 'nofollow ugc sponsored noopener noreferrer';
+  const donateJs = fs.readFileSync(path.join(WEB, 'public_html/js/pages/donate.js'), 'utf8');
+  const adminJs = fs.readFileSync(path.join(WEB, 'back-end-pool/admin-panel/js/donors.js'), 'utf8');
+  // The text of `function name(` up to the first line that is just the closing brace at `indent`.
+  const fnText = (src, name, indent) => {
+    const i = src.indexOf('function ' + name + '(');
+    if (i < 0) return '';
+    const j = src.indexOf('\n' + indent + '}\n', i);
+    return j < 0 ? '' : src.slice(i, j + 2 + indent.length);
+  };
+  ok('§18.12 account page: the live link is an <a> whose href is set as a property, with the full rel; nostr: gets no target',
+    /a\.href = view\.url;/.test(acctPageJs) && acctPageJs.includes("a.rel = '" + REL + "'") &&
+    /view\.kind === 'nostr'\) a\.removeAttribute\('target'\)/.test(acctPageJs));
+  ok('§18.12 account page: this tab\'s pending URL is a textContent node, not markup',
+    /mine\.textContent = minePend \? minePend\.url : ''/.test(acctPageJs) && !/dpLine\([^)]*minePend\.url/.test(acctPageJs));
+  ok('§18.12 wall: a link is built as DOM nodes (href property, full rel, no target on nostr:), from an empty slot',
+    /a\.href = l\.url;/.test(donateJs) && donateJs.includes("a.rel = '" + REL + "'") &&
+    /if \(l\.kind !== 'nostr'\) a\.target = '_blank'/.test(donateJs) && /data-link="' \+ \(linkQueue\.length - 1\)/.test(donateJs) &&
+    !/href="' \+/.test(donateJs));
+  ok('§18.12 wall: the client fences the URL again (https / v3 onion http / nostr npub|nprofile only)',
+    /var WEB_RE/.test(donateJs) && /NOSTR_RE = \/\^nostr:\(npub1\|nprofile1\)/.test(donateJs) && /u\.slice\(0, 8\) !== 'https:\/\/'/.test(donateJs));
+  const past = fnText(donateJs, 'pastRow', ' '.repeat(12));
+  ok('§18.12 wall: the past-donors strip never carries a link', past.length > 40 && !/link/i.test(past), past.slice(0, 60));
+  const lc = fnText(adminJs, 'linkCell', '');
+  ok('§18.12 admin queue: a link row shows the URL as text - no anchor, no preview image', lc.length > 100 && !/<a[\s>]/i.test(lc) && !/<img/i.test(lc), lc.slice(0, 60));
+}
 // Since C4 (§19.17.6 (script07_design_games.md)) a name is live at once, so the page names it only in its own POST answer
 // ("Done — “X” is on the donor wall now") and otherwise reads the LIVE name from the summary.
 ok('§18.6 the page never reads a pending name or image from the API (only its own POST response)',
   !/pending_name|pending_image|\.pending\.name|name\.pending\b/.test(acctPageJs) &&
   /'Done — “' \+ String\(json\.name \|\| v\.name\)/.test(acctPageJs));
+
+// §18.12 behaviour, on an in-memory copy of the real schema: a PENDING URL never reaches the
+// donor's own view (GET /api/account/:addr → profileFor) or the wall (GET /api/pool/donors →
+// donorWall), neither alone nor beside a live link; the live one does reach both.
+{
+  const { initDb, getDb } = require(path.join(APP, 'lib/db.js'));
+  initDb(':memory:');
+  const ldb = getDb();
+  const DP = require(path.join(APP, 'lib/donor-profiles.js'));
+  const DL = require(path.join(APP, 'lib/donor-ledger.js'));
+  const now = Math.floor(Date.now() / 1000);
+  const A = 'grin1' + 'q'.repeat(58), Bx = 'grin1' + 'z'.repeat(58);
+  for (const a of [A, Bx]) {
+    ldb.prepare('INSERT INTO miner_accounts (grin_address, balance) VALUES (?, 0)').run(a);
+    ldb.prepare(`INSERT INTO balance_log (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id, created_at)
+                 VALUES (?, 'debit', 1, 1, 0, 0, 0, 'donation', 1, ?)`).run(a, now - 60);
+  }
+  const LIVE = 'https://live-link.example/';
+  const PEND = 'https://pending-secret.example/';
+  const PEND_ONLY = 'https://pending-only.example/';
+  DP.submitLink(ldb, A, LIVE, { isDonor: true, now: now - 50 });
+  DP.approve(ldb, ldb.prepare("SELECT id FROM donor_requests WHERE grin_address = ? AND status = 'pending'").get(A).id, { now: now - 40 });
+  DP.submitLink(ldb, A, PEND, { isDonor: true, now: now - 30 });
+  DP.submitLink(ldb, Bx, PEND_ONLY, { isDonor: true, now: now - 30 });
+  const own = JSON.stringify([DP.profileFor(ldb, A, { active: true, lastDonatedAt: now - 60 }),
+                              DP.profileFor(ldb, Bx, { active: true, lastDonatedAt: now - 60 })]);
+  const wall = JSON.stringify(DL.donorWall(ldb, { active: true, now, mask: (a) => a.slice(0, 9) }));
+  ok('§18.12 a pending URL is absent from the donor\'s own view and from the wall (beside a live link, and alone)',
+    !own.includes('pending-secret') && !own.includes('pending-only') && !wall.includes('pending-secret') && !wall.includes('pending-only'));
+  ok('§18.12 control — the LIVE link does reach both, and the pending one is reported by its time only',
+    own.includes(LIVE) && wall.includes(LIVE) && DP.profileFor(ldb, A, { active: true, lastDonatedAt: now - 60 }).link.pending_at === now - 30);
+}
 
 // ── §17.4 — the ownership-proof set must never reach a browser ───────────────────────────
 const acctProofJs = routeSrc('get', '/api/account/:addr').replace(/\/\/[^\n]*/g, '');

@@ -1092,6 +1092,14 @@
   "handler": "anon"
  },
  {
+  "method": "post",
+  "path": "/api/account/:addr/donor-profile/link",
+  "chain": [
+   "rateLimiter.middleware('withdraw')"
+  ],
+  "handler": "anon"
+ },
+ {
   "method": "delete",
   "path": "/api/account/:addr/donor-profile/:kind",
   "chain": [

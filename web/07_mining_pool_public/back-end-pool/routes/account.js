@@ -156,9 +156,9 @@ module.exports = function createAccountRoutes(ctx) {
         } catch (e) { return off(0); }
       })();
 
-      // Donor profile (design §18.6) — the donor's OWN view of their nickname + banner requests.
-      // This page is public to anyone holding the address, so profileFor() never returns the
-      // pending name text, image bytes or who decided; a rejection reason IS shown (the admin UI
+      // Donor profile (design §18.6, §18.12) — the donor's OWN view of their nickname, banner and
+      // link requests. This page is public to anyone holding the address, so profileFor() never
+      // returns the pending name text, pending URL, image bytes or who decided; a rejection reason IS shown (the admin UI
       // says so beside the field). Guarded on its own like the two blocks above: null on a
       // failure, never a 500 of the money page. slot_rank costs one ledger scan and only runs
       // for an address that has donated.
@@ -1125,11 +1125,11 @@ module.exports = function createAccountRoutes(ctx) {
     }
   });
 
-  // ─── Donor profile — nickname + banner (design §18.4–§18.6) ──────────────
-  // A donor sets a public name and a banner (the banner shows only for the top N of the league).
+  // ─── Donor profile — nickname + banner + link (design §18.4–§18.6, §18.12) ──────────────
+  // A donor sets a public name, a banner (shown only for the top N of the league) and one link.
   // A NAME is checked automatically and goes live at once (script07_design_games.md §19.17.6): the name rule with the donor
-  // shape, banned names, "taken", one change per 7 days. A BANNER is still PRE-MODERATED: it
-  // becomes a pending donor_requests row that nothing public reads until an admin approves it.
+  // shape, banned names, "taken", one change per 7 days. A BANNER and a LINK are PRE-MODERATED:
+  // each becomes a pending donor_requests row that nothing public reads until an admin approves it.
   //
   // The writes are gated like a payout-destination change, BOTH proofs each aged past the same
   // floor (requireBothProofs, audit §J3-1), because a profile speaks for the address on a public
@@ -1158,6 +1158,7 @@ module.exports = function createAccountRoutes(ctx) {
     blocked: [403, 'This address cannot submit a donor profile. Contact the pool operator if you think this is a mistake.'],
     not_a_donor: [409, "A donor profile unlocks after your first donation. Add a donateN tag to a rig's worker name (for example rig01-donate10); once that rig has earned a share of a matured block, you can set your name and banner here."],
     conflict: [409, 'Another change to this profile was saved at the same moment. Reload the page and try again.'],
+    links_unavailable: [503, DonorProfiles.LINK_TEXT.links_unavailable],
     donations_off: [503, 'Donations are switched off on this pool, so donor profiles cannot be changed right now.'],
     // The name answers. not_allowed (a reserved or blocked word) and unavailable (banned
     // OR taken) are generic on purpose: which list hit, and banned vs taken, is the admin's.
@@ -1205,9 +1206,10 @@ module.exports = function createAccountRoutes(ctx) {
         auditOwnerProof(db, { action: 'donor_profile_submit', grinAddress: addr, ip: reqIp, ok: true, details: { kind: 'name', refused: r.code, proof_method: proof.method } });
         return donorRefuse(res, r.code, r.error, r.available_at ? { available_at: r.available_at } : null);
       }
-      auditOwnerProof(db, { action: 'donor_profile_submit', grinAddress: addr, ip: reqIp, ok: true, details: { kind: 'name', request_id: r.id, replaced_id: r.replaced_id, proof_method: proof.method } });
-      // Live at once: the wall and the account page show it from the next read.
-      res.json({ success: true, kind: 'name', status: 'approved', name: r.name, submitted_at: r.submitted_at, replaced_id: r.replaced_id });
+      auditOwnerProof(db, { action: 'donor_profile_submit', grinAddress: addr, ip: reqIp, ok: true, details: { kind: 'name', request_id: r.id, replaced_id: r.replaced_id, link_review_id: r.link_review ? r.link_review.pending_id : null, proof_method: proof.method } });
+      // Live at once: the wall and the account page show it from the next read. A live link went
+      // back to review with it (design §18.12) — link_review says so, so the page can tell the donor.
+      res.json({ success: true, kind: 'name', status: 'approved', name: r.name, submitted_at: r.submitted_at, replaced_id: r.replaced_id, link_review: !!(r.link_review && r.link_review.replaced_id) });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -1244,6 +1246,40 @@ module.exports = function createAccountRoutes(ctx) {
     });
   });
 
+  // A LINK (design §18.12) is pre-moderated like a banner: a pending row nothing public reads
+  // until an admin approves it — the pending URL is not returned by /api/account/:addr either.
+  // Gate order as the name route. Before the proofs: the URL's own shape (the validator, which
+  // reads no list) and "same as the LIVE link" (public on the wall anyway). "Same as the
+  // PENDING one" is answered only after the proofs, inside submitLink, so a stranger holding the
+  // address cannot test guesses against a URL that is never shown to them.
+  router.post('/api/account/:addr/donor-profile/link', rateLimiter.middleware('withdraw'), async (req, res) => {
+    try {
+      const { addr } = req.params;
+      const reqIp = normalizeIp(req.ip);
+      const bad = donorSubmitRefusal(addr);
+      if (bad) return donorRefuse(res, bad);
+      // A failed startup rebuild (lib/db.js migrateDonorRequests) is a fact about the pool, not
+      // the address, so it is answered before any proof is spent. submitLink keeps its own check.
+      if (!DonorProfiles.linksSupported(db)) return donorRefuse(res, 'links_unavailable');
+      const v = DonorProfiles.validateLink(req.body ? req.body.url : undefined);
+      if (!v.ok) return donorRefuse(res, v.code, v.error);
+      const pre = DonorProfiles.linkPrecheck(db, addr, v.url);
+      if (pre) return donorRefuse(res, pre.code, pre.error);
+      const proof = await requireBothProofs(addr, req.body, reqIp, 'donor_profile_submit', 'donor_profile');
+      if (!proof.ok) return res.status(proof.code).json({ error: proof.error, reason: proof.reason });
+      const r = DonorProfiles.submitLink(db, addr, v.url, { isDonor: true });
+      if (!r.ok) {
+        auditOwnerProof(db, { action: 'donor_profile_submit', grinAddress: addr, ip: reqIp, ok: true, details: { kind: 'link', refused: r.code, proof_method: proof.method } });
+        return donorRefuse(res, r.code, r.error);
+      }
+      // The host, never the full URL: the audit trail is not where a donor's URL is kept.
+      auditOwnerProof(db, { action: 'donor_profile_submit', grinAddress: addr, ip: reqIp, ok: true, details: { kind: 'link', request_id: r.id, host: r.host, replaced_pending: r.replaced, proof_method: proof.method } });
+      res.json({ success: true, kind: 'link', status: 'pending', url: r.url, host: r.host, link_kind: r.link_kind, submitted_at: r.submitted_at, replaced_pending: r.replaced });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Withdraw a request under review (which=pending) or take down the approved one (which=live).
   // Same AND-gate as a submit, since taking a donor's name off the wall is itself a public change
   // made in their name. It deliberately does NOT need donations on, a donation debit, or an
@@ -1274,7 +1310,9 @@ module.exports = function createAccountRoutes(ctx) {
         : DonorProfiles.removeLive(db, addr, kind, { uploadsDir });
       if (!r.ok) return res.status(404).json(none);
       if (r.warning) console.warn(`[donor-profile] ${addr.slice(0, 9)}… ${kind}: ${r.warning}`);
-      auditOwnerProof(db, { action, grinAddress: addr, ip: reqIp, ok: true, details: { kind, request_id: r.id, proof_method: proof.method } });
+      // A link row also names its host (never the URL), as the submit and admin rows do.
+      const details = kind === 'link' ? { kind, request_id: r.id, host: r.host, proof_method: proof.method } : { kind, request_id: r.id, proof_method: proof.method };
+      auditOwnerProof(db, { action, grinAddress: addr, ip: reqIp, ok: true, details });
       res.json({ success: true, kind, which, status: which === 'pending' ? 'withdrawn' : 'removed' });
     } catch (err) {
       res.status(500).json({ error: err.message });

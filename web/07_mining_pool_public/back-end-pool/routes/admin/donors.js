@@ -16,10 +16,10 @@ module.exports = function createAdminDonorsRoutes(ctx, guards) {
   const router = express.Router();
 
   // ─── DONORS (Admin only) — design §18.6 ─────────────────────────
-  // The operator's review surface for donor profiles. Every donor nickname and banner is
+  // The operator's review surface for donor profiles. Every donor banner and link is
   // PRE-moderated: a submission is a pending donor_requests row (lib/donor-profiles.js) that
-  // nothing public reads until an approve here. FULL addresses on purpose — this is the admin
-  // side (the public wall masks, §J11-1).
+  // nothing public reads until an approve here (names are auto-checked — the list below).
+  // FULL addresses on purpose — this is the admin side (the public wall masks, §J11-1).
   //
   // Tiers: secureAdmin reads, freshAdmin (step-up) writes — a decision puts words or an image on
   // a public page in someone's name, the same tier as ban/unban. Every write's state change and
@@ -31,13 +31,14 @@ module.exports = function createAdminDonorsRoutes(ctx, guards) {
   const DONOR_ADMIN_CODES = {
     bad_id:        [400, 'Not a valid request id'],
     bad_status:    [400, `status must be one of ${DonorProfiles.STATUSES.join(', ')}`],
-    bad_kind:      [400, 'kind must be "name" or "banner"'],
+    bad_kind:      [400, 'kind must be "name", "banner" or "link"'],
     not_found:     [404, 'No such request (for an image: no such banner request)'],
     no_image:      [404, 'This request has no image bytes (only a pending or approved banner does)'],
     not_pending:   [409, 'This request has already been decided — reload the queue'],
     blocked:       [409, 'This address is blocked from donor profiles — unblock it first'],
     conflict:      [409, 'Another decision on this donor landed at the same moment — reload and try again'],
     invalid_image: [422, 'The stored image no longer passes the banner rules'],
+    invalid_link:  [422, 'The stored link no longer passes the link rules — reject it'],
     write_failed:  [500, 'The banner file could not be written — check the uploads directory'],
     nothing_live:  [404, 'There is no live item of that kind to remove'],
     already:       [409, 'This address is already blocked'],
@@ -98,7 +99,7 @@ module.exports = function createAdminDonorsRoutes(ctx, guards) {
       const rows = [];
       for (const address of addrs) {
         const l = ledgerByAddr.get(address) || {};
-        const p = profiles.get(address) || { name: null, banner: null, pending: { name: false, banner: false }, blocked: null };
+        const p = profiles.get(address) || { name: null, banner: null, link: null, pending: { name: false, banner: false, link: false }, blocked: null };
         const lv = live.get(address) || DONOR_NO_LIVE;
         const donating = active ? lv.rigs_donating : 0;
         rows.push({
@@ -106,6 +107,7 @@ module.exports = function createAdminDonorsRoutes(ctx, guards) {
           // The LIVE (approved) profile, with the same expiry state the donor and the wall see.
           name: p.name,
           banner: p.banner,
+          link: p.link,
           pending: p.pending,
           blocked: p.blocked,
           // Same readings + gate as the wall and the account page (design §18.3).
@@ -165,11 +167,12 @@ module.exports = function createAdminDonorsRoutes(ctx, guards) {
     }
   });
 
-  // The review queue (§18.6). ?status= is a closed enum (default pending — oldest first);
-  // the decided statuses are the history. ?kind= (name | banner, optional) narrows it: since
-  // names are auto-checked, so the admin page asks for banners. Each row carries the
-  // address's current approved item of that kind and the donor's league rank + lifetime so the
-  // reviewer knows who is asking. Never the bytes.
+  // The review queue (§18.6, §18.12). ?status= is a closed enum (default pending — oldest first);
+  // the decided statuses are the history. ?kind= (name | banner | link, optional) narrows it:
+  // names are auto-checked, so the admin page asks for banners and for links. Each row carries
+  // the address's current approved item of that kind and the donor's league rank + lifetime so
+  // the reviewer knows who is asking; a link row also its donor's live name and a same-host
+  // hint. Never the bytes.
   router.get('/api/admin/donors/requests', secureAdmin, (req, res) => {
     try {
       const ds = donorAdminSettings();
@@ -213,7 +216,8 @@ module.exports = function createAdminDonorsRoutes(ctx, guards) {
   });
 
   // A banner decision needs the uploads directory (approve writes the file; removing a live one
-  // deletes it). The lib throws without it, so say it here as a clean 503 instead.
+  // deletes it). The lib throws without it, so say it here as a clean 503 instead. A name or a
+  // link decision touches no file and works without it.
   const donorRequestKind = (id) => {
     const n = /^[0-9]{1,15}$/.test(String(id)) ? parseInt(id, 10) : NaN;
     const row = Number.isSafeInteger(n) ? db.prepare('SELECT kind FROM donor_requests WHERE id = ?').get(n) : null;
@@ -246,7 +250,7 @@ module.exports = function createAdminDonorsRoutes(ctx, guards) {
     }
   });
 
-  // Take a LIVE (approved) name or banner down. :addr through the one gate the account family
+  // Take a LIVE (approved) name, banner or link down. :addr through the one gate the account family
   // uses (GRIN_ADDR_RE, §J3-8) — the prize_pool/pool_fee pseudo-accounts are not reachable.
   router.post('/api/admin/donors/:addr/remove', freshAdmin, (req, res) => {
     try {

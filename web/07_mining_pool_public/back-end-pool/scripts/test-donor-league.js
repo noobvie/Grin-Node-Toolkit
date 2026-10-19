@@ -123,9 +123,9 @@ function keys(v, out = new Set()) {
         w.league.length + w.past.donors.length === 100);
   check('mask: every league address is masked and none equals a seeded full address',
         w.league.every((c) => MASK_RE.test(c.address) && !allAddrs.has(c.address)));
-  check('shape: every card carries exactly the §18.7 fields (banner in, current_percent gone)',
+  check('shape: every card carries exactly the §18.7 + §18.12 fields (banner and link in, current_percent gone)',
         w.league.every((c) => Object.keys(c).sort().join(',') ===
-          'active_months,address,banner,donation_count,first_donated_at,in_window_donated,last_donated_at,multiplier,name,name_state,pct_max,pct_min,rank,rigs_donating,rigs_online,score,total_donated'));
+          'active_months,address,banner,donation_count,first_donated_at,in_window_donated,last_donated_at,link,multiplier,name,name_state,pct_max,pct_min,rank,rigs_donating,rigs_online,score,total_donated'));
   check('shape: top level is league/past/totals/ranking (censored_display is gone, §18.6)',
         Object.keys(w).sort().join(',') === 'league,past,ranking,totals');
   check('shape: ranking echoes the five bounded settings (banner_slots default 5)',

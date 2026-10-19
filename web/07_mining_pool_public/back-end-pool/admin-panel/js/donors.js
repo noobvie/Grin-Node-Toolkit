@@ -62,12 +62,13 @@ async function postAction(url, body, okMsg, msgId) {
     if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
     flashInto(msgId, okMsg + (data.warning ? ` Warning: ${data.warning}` : ''), !!data.warning);
     loadQueue();
+    loadLinkQueue();
     loadNames();
     loadDonors();
     return true;
   } catch (err) {
     flashInto(msgId, err.message, true);
-    if (/already been decided/.test(err.message)) loadQueue();
+    if (/already been decided/.test(err.message)) { loadQueue(); loadLinkQueue(); }
     return false;
   }
 }
@@ -113,6 +114,12 @@ let _queueStatus = 'pending';
 // A reason typed into a queue row must survive a re-render (a search keystroke or page change
 // repaints the rows), so the inputs write through to this map and the row reads it back.
 const _reasons = new Map();
+// The request ids each of the two queue tables shows now; a reason survives while either has it.
+let _queueIds = new Set();
+let _linkIds = new Set();
+function pruneReasons() {
+  for (const id of [..._reasons.keys()]) if (!_queueIds.has(id) && !_linkIds.has(id)) _reasons.delete(id);
+}
 
 function requestCell(r) {
   if (r.kind === 'name') {
@@ -147,21 +154,46 @@ function decisionCell(r) {
   const id = escHtml(String(r.id));
   if (r.status === 'pending') {
     const val = escHtml(_reasons.get(String(r.id)) || '');
+    // Each queue reports into its own section's message box.
+    const msg = r.kind === 'link' ? 'link-queue-msg' : 'queue-msg';
     return `<div class="req-decide">
       <input type="text" class="settings-skip" maxlength="200" placeholder="Reason for a rejection (optional)"
              aria-label="Rejection reason for request ${id}" data-reason-for="${id}" value="${val}">
       <span class="req-reason-note">The reason is shown to the donor on their account page, which anyone holding the address can open.</span>
       <div class="req-btns">
-        <button type="button" class="btn btn-primary" data-id="${id}" data-action="approve-request">Approve</button>
-        <button type="button" class="btn btn-danger" data-id="${id}" data-action="reject-request">Reject</button>
+        <button type="button" class="btn btn-primary" data-id="${id}" data-msg="${msg}" data-action="approve-request">Approve</button>
+        <button type="button" class="btn btn-danger" data-id="${id}" data-msg="${msg}" data-action="reject-request">Reject</button>
       </div>
     </div>`;
   }
   const badge = { approved: 'badge-ok', rejected: 'badge-error', removed: 'badge-error' }[r.status] || 'badge-dim';
   const by = r.decided_by ? ` · admin #${escHtml(String(r.decided_by))}` : '';
+  // A live link is taken down from here (the live-links view of the link queue).
+  const takeDown = r.kind === 'link' && r.status === 'approved'
+    ? `<div class="req-btns" style="margin-top:.4rem;"><button type="button" class="btn btn-danger" data-addr="${escHtml(r.address)}" data-action="remove-live-link">Remove</button></div>` : '';
   return `<span class="badge ${badge}">${escHtml(r.status)}</span>
     <div class="req-meta">${escHtml(fmtDateTime(r.decided_at))} UTC${by}</div>
-    ${r.reason ? `<div class="req-meta">reason: ${escHtml(r.reason)}</div>` : ''}`;
+    ${r.reason ? `<div class="req-meta">reason: ${escHtml(r.reason)}</div>` : ''}${takeDown}`;
+}
+
+// A link request (design §18.12). The PAIR is what is judged, so the donor's current live name
+// comes first and large; then the stored URL exactly as it will be shown, in the mono face; then
+// the host on its own line. Everything is text: no <a>, no preview, the admin copies the URL.
+const LINK_KIND_WORD = { onion: 'Tor', nostr: 'Nostr' };
+function linkCell(r) {
+  const name = r.live_name != null
+    ? `<span class="req-name">${escHtml(r.live_name)}</span>`
+    : '<span class="donor-none">(no name)</span>';
+  const kindWord = LINK_KIND_WORD[r.link_kind];
+  const host = r.host
+    ? `<div class="req-meta req-wrap">host: <b class="mono">${escHtml(r.host)}</b>${kindWord ? ` <span class="badge badge-dim">${kindWord}</span>` : ''}</div>`
+    : '<div class="req-meta"><span class="badge badge-error">no longer passes the link rules — reject it</span></div>';
+  const same = r.same_host_as && r.same_host_as.length
+    ? `<div class="req-meta"><span class="badge badge-warn req-badge-wrap" title="${escHtml('Another donor’s live link points at the same place: ' + r.same_host_as.join(' '))}">same host as ${escHtml(r.same_host_as.map(shortAddr).join(', '))}</span></div>` : '';
+  const cur = r.current && r.current.url
+    ? `<div class="req-meta req-wrap">replaces the live link <span class="mono">${escHtml(r.current.url)}</span></div>` : '';
+  return `<span class="badge badge-dim">link</span> beside the name ${name}
+    <div class="req-url">${escHtml(r.url || '')}</div>${host}${same}${cur}`;
 }
 
 const queueTable = AdminTable.create({
@@ -187,6 +219,45 @@ const queueTable = AdminTable.create({
   }
 });
 
+// The link queue: same decision cell and reason map as the banner queue (request ids are unique
+// across kinds), its own table and status select.
+const linkQueueTable = AdminTable.create({
+  tbody: 'link-queue-tbody',
+  search: 'Filter by address, name or link…',
+  empty: 'Nothing to review. A request appears here when a donor submits a link.',
+  text: r => [r.address, r.live_name, r.url, r.host, r.reason].filter(Boolean).join(' '),
+  row: r => `<tr>
+      <td class="mono" style="white-space:nowrap;">${escHtml(fmtDateTime(r.submitted_at))}</td>
+      <td>${donorCell(r)}</td>
+      <td>${linkCell(r)}</td>
+      <td>${decisionCell(r)}</td>
+    </tr>`,
+  onRender: tbody => {
+    tbody.querySelectorAll('input[data-reason-for]').forEach(inp => {
+      inp.addEventListener('input', () => _reasons.set(inp.dataset.reasonFor, inp.value));
+    });
+  }
+});
+
+async function loadLinkQueue(reset) {
+  const status = document.getElementById('link-queue-status').value;
+  try {
+    const data = await API.get('/api/admin/donors/requests?kind=link&status=' + encodeURIComponent(status));
+    if (!data || data.success !== true || !Array.isArray(data.requests)) {
+      linkQueueTable.setError((data && data.error) || 'Could not load the link queue');
+      return;
+    }
+    _linkIds = new Set(data.requests.map(r => String(r.id)));
+    pruneReasons();
+    document.getElementById('link-queue-summary').textContent = status === 'pending'
+      ? `${data.total} waiting for review`
+      : `${data.total} ${status === 'approved' ? 'live' : status}` + (data.total > data.requests.length ? ` (newest ${data.requests.length} shown)` : '');
+    linkQueueTable.setRows(data.requests, { reset: reset === true });
+  } catch (err) {
+    linkQueueTable.setError(err.message);
+  }
+}
+
 // A preview that cannot load (the request was decided meanwhile, the file is gone, the session
 // expired) becomes a line of text instead of a broken-image icon.
 function imageFailed(img) {
@@ -209,8 +280,8 @@ async function loadQueue(reset) {
       queueTable.setError((data && data.error) || 'Could not load the review queue');
       return;
     }
-    const ids = new Set(data.requests.map(r => String(r.id)));
-    for (const id of [..._reasons.keys()]) if (!ids.has(id)) _reasons.delete(id);
+    _queueIds = new Set(data.requests.map(r => String(r.id)));
+    pruneReasons();
     document.getElementById('queue-summary').textContent = _queueStatus === 'pending'
       ? `${data.total} waiting for review`
       : `${data.total} ${_queueStatus}` + (data.total > data.requests.length ? ` (newest ${data.requests.length} shown)` : '');
@@ -220,14 +291,14 @@ async function loadQueue(reset) {
   }
 }
 
-async function approveRequest(id) {
+async function approveRequest(id, msgId) {
   await postAction('/api/admin/donors/requests/' + encodeURIComponent(id) + '/approve', {},
-                   'Approved — it is live now.', 'queue-msg');
+                   'Approved — it is live now.', msgId || 'queue-msg');
 }
-async function rejectRequest(id) {
+async function rejectRequest(id, msgId) {
   const reason = _reasons.get(String(id)) || '';
   const ok = await postAction('/api/admin/donors/requests/' + encodeURIComponent(id) + '/reject', { reason },
-                              'Rejected' + (reason ? ' — the donor will see your reason.' : '.'), 'queue-msg');
+                              'Rejected' + (reason ? ' — the donor will see your reason.' : '.'), msgId || 'queue-msg');
   if (ok) _reasons.delete(String(id));
 }
 
@@ -371,6 +442,10 @@ function profileCell(d) {
         : `<span class="badge badge-dim" title="Approved; shows while the donor is in the top ${escHtml(String(_bannerSlots))}">banner (not in top ${escHtml(String(_bannerSlots))})</span>`));
   if (d.pending && d.pending.name) b.push('<span class="badge badge-warn">name waiting</span>');
   if (d.pending && d.pending.banner) b.push('<span class="badge badge-warn">banner waiting</span>');
+  if (d.link) b.push(d.link.state === 'expired'
+    ? '<span class="badge badge-dim" title="Approved, but aged out — shows again after the next donation">link expired</span>'
+    : `<span class="badge badge-ok" title="${escHtml('Shown on the donor wall: ' + (d.link.url || ''))}">link live</span>`);
+  if (d.pending && d.pending.link) b.push('<span class="badge badge-warn">link waiting</span>');
   if (d.blocked) b.push(`<span class="badge badge-error" title="${escHtml('Blocked ' + fmtDate(d.blocked.at) + (d.blocked.reason ? ' — ' + d.blocked.reason : ''))}">blocked</span>`);
   const url = d.banner && bannerUrl(d.banner.url);
   const thumb = url
@@ -422,6 +497,7 @@ const donorsTable = AdminTable.create({
     const actions =
       (d.name ? `<button class="btn-icon btn-icon-danger" data-addr="${addr}" data-kind="name" data-action="remove-live" data-tip="Remove the live name" aria-label="Remove the live name">✂️</button>` : '') +
       (live ? `<button class="btn-icon btn-icon-danger" data-addr="${addr}" data-kind="banner" data-action="remove-live" data-tip="Remove the live banner" aria-label="Remove the live banner">🖼</button>` : '') +
+      (d.link ? `<button class="btn-icon btn-icon-danger" data-addr="${addr}" data-kind="link" data-action="remove-live" data-tip="Remove the live link" aria-label="Remove the live link">🔗</button>` : '') +
       (d.blocked
         ? `<button class="btn-icon" data-addr="${addr}" data-action="unblock-donor" data-tip="Unblock — allow profile submissions again" aria-label="Unblock this address">✅</button>`
         : `<button class="btn-icon btn-icon-danger" data-addr="${addr}" data-action="block-donor" data-tip="Block profile submissions from this address" aria-label="Block this address">🚫</button>`);
@@ -453,7 +529,7 @@ async function loadDonors() {
     _donationsActive = data.donations_active !== false;
     _windowDays = Number(data.window_days) || 0;
     _bannerSlots = Number.isFinite(Number(data.banner_slots)) ? Number(data.banner_slots) : 5;
-    const withProfile = _allDonors.filter(d => d.name || d.banner).length;
+    const withProfile = _allDonors.filter(d => d.name || d.banner || d.link).length;
     const blocked = _allDonors.filter(d => d.blocked).length;
     const donating = _allDonors.filter(d => d.rigs_donating > 0).length;
     document.getElementById('donor-summary').textContent =
@@ -470,30 +546,32 @@ async function loadDonors() {
 function filterDonors(reset) {
   const mode = document.getElementById('donor-filter').value;
   let rows = _allDonors;
-  if (mode === 'profile')  rows = rows.filter(d => d.name || d.banner);
-  if (mode === 'pending')  rows = rows.filter(d => d.pending && (d.pending.name || d.pending.banner));
+  if (mode === 'profile')  rows = rows.filter(d => d.name || d.banner || d.link);
+  if (mode === 'pending')  rows = rows.filter(d => d.pending && (d.pending.name || d.pending.banner || d.pending.link));
   if (mode === 'donating') rows = rows.filter(d => d.rigs_donating > 0);
   if (mode === 'blocked')  rows = rows.filter(d => !!d.blocked);
   donorsTable.setRows(rows, { reset: reset === true });   // server order = league order
 }
 
 async function removeLive(addr, kind, msgId) {
+  const WORDS = {
+    banner: ['Remove the live banner', `${addr}\n\nIt comes off the donor wall now. The donor can submit a new one, which goes through review again.`, 'Banner removed.'],
+    link: ['Remove the live link', `${addr}\n\nIt comes off the donor wall now. The donor can submit a new one, which goes through review again.`, 'Link removed.'],
+    name: ['Remove the live name', `${addr}\n\nIt comes off the donor wall now. The donor can set another name when their 7-day change limit allows; it is checked automatically. To stop this name coming back in any spelling, ban it instead.`, 'Name removed.']
+  };
+  const w = WORDS[kind] || WORDS.name;
   const reason = await askReason({
-    title: kind === 'banner' ? 'Remove the live banner' : 'Remove the live name',
-    body: kind === 'banner'
-      ? `${addr}\n\nIt comes off the donor wall now. The donor can submit a new one, which goes through review again.`
-      : `${addr}\n\nIt comes off the donor wall now. The donor can set another name when their 7-day change limit allows; it is checked automatically. To stop this name coming back in any spelling, ban it instead.`,
+    title: w[0], body: w[1],
     label: 'Reason (optional) — shown to the donor on their public account page',
     confirmText: 'Remove', danger: true
   });
   if (reason === null) return;
-  await postAction('/api/admin/donors/' + encodeURIComponent(addr) + '/remove', { kind, reason },
-                   kind === 'banner' ? 'Banner removed.' : 'Name removed.', msgId || 'donor-msg');
+  await postAction('/api/admin/donors/' + encodeURIComponent(addr) + '/remove', { kind, reason }, w[2], msgId || 'donor-msg');
 }
 async function blockDonor(addr, msgId) {
   const reason = await askReason({
     title: 'Block donor-profile submissions',
-    body: `${addr}\n\nThis address can no longer set a name or submit a banner, and a banner it has waiting is withdrawn. A live name or banner stays until you remove it. Donations are unaffected.`,
+    body: `${addr}\n\nThis address can no longer set a name or submit a banner or link, and the banner and link it has waiting are withdrawn. A live name, banner or link stays until you remove it. Donations are unaffected.`,
     label: 'Note (optional) — kept for the admin side only, never shown to the donor',
     confirmText: 'Block', danger: true
   });
@@ -501,7 +579,7 @@ async function blockDonor(addr, msgId) {
   await postAction('/api/admin/donors/' + encodeURIComponent(addr) + '/block', { reason }, 'Address blocked.', msgId || 'donor-msg');
 }
 async function unblockDonor(addr) {
-  if (!confirm(`Unblock ${addr}?\n\nIt can set a donor name (checked automatically) and submit a banner (still reviewed by you) again.`)) return;
+  if (!confirm(`Unblock ${addr}?\n\nIt can set a donor name (checked automatically) and submit a banner or link (still reviewed by you) again.`)) return;
   await postAction('/api/admin/donors/' + encodeURIComponent(addr) + '/unblock', {}, 'Address unblocked.', 'donor-msg');
 }
 
@@ -550,11 +628,12 @@ async function saveDonationSettings() {
     flashInto('settings-msg', 'Donation settings saved.', false);
     // Slots/expiry feed the list's badges.
     loadQueue();
+    loadLinkQueue();
     loadDonors();
   } catch (err) { flashInto('settings-msg', 'Not saved: ' + err.message, true); }
 }
 
-document.addEventListener('DOMContentLoaded', () => { loadQueue(); loadNames(); loadDonors(); loadDonationSettings(); });
+document.addEventListener('DOMContentLoaded', () => { loadQueue(); loadLinkQueue(); loadNames(); loadDonors(); loadDonationSettings(); });
 // The donors list re-polls; the queue does NOT — a timer repaint would throw away a reason the
 // operator is typing. It reloads after every decision and on the Refresh button.
 setInterval(loadDonors, 60000);
@@ -567,10 +646,12 @@ document.addEventListener('click', (e) => {
   if (!el) return;
   switch (el.dataset.action) {
     case 'load-queue':             loadQueue(); break;
+    case 'load-link-queue':        loadLinkQueue(); break;
+    case 'remove-live-link':       removeLive(el.dataset.addr, 'link', 'link-queue-msg'); break;
     case 'load-names':             loadNames(); break;
     case 'save-donation-settings': saveDonationSettings(); break;
-    case 'approve-request':        approveRequest(el.dataset.id); break;
-    case 'reject-request':         rejectRequest(el.dataset.id); break;
+    case 'approve-request':        approveRequest(el.dataset.id, el.dataset.msg); break;
+    case 'reject-request':         rejectRequest(el.dataset.id, el.dataset.msg); break;
     case 'unban-name':             unbanName(el.dataset.norm); break;
     case 'remove-live-names':      removeLive(el.dataset.addr, el.dataset.kind, 'names-msg'); break;
     case 'ban-name':               banName(el.dataset.name); break;
@@ -585,6 +666,7 @@ document.addEventListener('change', (e) => {
   if (!el) return;
   switch (el.dataset.action) {
     case 'load-queue-change':     loadQueue(true); break;
+    case 'load-link-queue-change': loadLinkQueue(true); break;
     case 'load-names-change':     loadNames(true); break;
     case 'filter-donors-change':  filterDonors(true); break;
   }

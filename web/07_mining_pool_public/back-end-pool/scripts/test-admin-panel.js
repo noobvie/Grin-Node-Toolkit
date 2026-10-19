@@ -382,9 +382,9 @@ console.log('\n[9] §18.6 — donors.html');
   // Row actions pass their value via this.dataset (audit §J14), and every write uses the panel
   // helper for step-up-gated writes (adminFetch handles the freshAdmin challenge; a bare
   // Auth.fetch would show "re-authentication required" with no way to complete it).
-  ok('queue decisions pass the request id via this.dataset',
-     /data-id="\$\{id\}" data-action="approve-request"/.test(donors) && /data-id="\$\{id\}" data-action="reject-request"/.test(donors) &&
-     /case 'approve-request':\s+approveRequest\(el\.dataset\.id\)/.test(donors) && /case 'reject-request':\s+rejectRequest\(el\.dataset\.id\)/.test(donors));
+  ok('queue decisions pass the request id (and their section\'s message box) via this.dataset',
+     /data-id="\$\{id\}" data-msg="\$\{msg\}" data-action="approve-request"/.test(donors) && /data-id="\$\{id\}" data-msg="\$\{msg\}" data-action="reject-request"/.test(donors) &&
+     /case 'approve-request':\s+approveRequest\(el\.dataset\.id, el\.dataset\.msg\)/.test(donors) && /case 'reject-request':\s+rejectRequest\(el\.dataset\.id, el\.dataset\.msg\)/.test(donors));
   ok('remove / block / unblock pass the address (and kind) via this.dataset',
      /data-kind="name" data-action="remove-live"/.test(donors) && /case 'remove-live':\s+removeLive\(el\.dataset\.addr, el\.dataset\.kind\)/.test(donors) &&
      /case 'block-donor':\s+blockDonor\(el\.dataset\.addr\)/.test(donors) && /case 'unblock-donor':\s+unblockDonor\(el\.dataset\.addr\)/.test(donors));

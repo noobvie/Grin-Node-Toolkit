@@ -509,6 +509,20 @@ body {
 .rgn-help > summary:hover { color: var(--text); }
 .rgn-help .rgn-legend { margin-top: 10px; }
 .rgn-help .rgn-note { margin-top: 8px; }
+/* "How to read this chart" disclosure under a chart panel (blocks.html, payment-history.html):
+   default closed, same look as .rgn-help. A <details>, not a title tooltip — a tooltip never
+   opens on touch. No max-width on the text: it spans the panel. */
+.chart-explain { margin-top: 10px; }
+.chart-explain > summary {
+  cursor: pointer; width: fit-content; list-style: none; font-family: var(--mono);
+  font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--text-mute); padding: 2px 0;
+}
+.chart-explain > summary::-webkit-details-marker { display: none; }
+.chart-explain > summary::before { content: "▸ "; color: var(--accent2); }
+.chart-explain[open] > summary::before { content: "▾ "; }
+.chart-explain > summary:hover { color: var(--text); }
+.chart-explain > p { margin: 8px 0 0; font-size: 12px; line-height: 1.6; }
 /* LED legend */
 .rgn-legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 12px; font-family: var(--mono); font-size: 10.5px; letter-spacing: .05em; color: var(--text-mute); }
 .rgn-legend span { display: inline-flex; align-items: center; gap: 6px; }

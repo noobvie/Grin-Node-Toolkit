@@ -148,7 +148,7 @@
             </div>
         </div>
 
-        <p class="dim" style="margin:0 0 16px;max-width:78ch;font-size:13px;line-height:1.6;">
+        <p class="dim" style="margin:0 0 16px;font-size:13px;line-height:1.6;">
             <strong>Luck</strong> is the round's shares &divide; the network difficulty — under 100% means the
             block was found with fewer shares than statistically expected (lucky), over 100% means it took
             more (unlucky). Each block is independently verifiable on the Grin chain explorer.
@@ -217,7 +217,9 @@
                         <canvas id="bk-chart-gap" aria-label="Time since the previous pool block, for the blocks in the selected timeframe (at most the latest 500), against the gap expected from the pool's hashrate share" role="img"></canvas>
                         <div class="chart-empty" id="bk-empty-gap">NOT ENOUGH BLOCKS YET</div>
                     </div>
-                    <p class="dim" style="margin:10px 0 0;font-size:12px;line-height:1.6;max-width:90ch;">
+                    <details class="chart-explain">
+                    <summary>How to read this chart</summary>
+                    <p class="dim">
                         Each dot is one block: how long after the pool's previous block it was found.
                         <b>Expected</b> is the average gap the pool's share of network hashrate predicts.
                         Gaps are random, so even at exactly that rate about two in three dots fall below
@@ -228,6 +230,7 @@
                         Dots are spaced one per block, not by time, so the gap still running shows in the
                         summary as <b>now</b>.
                     </p>
+                    </details>
                 </div>
             </div>
 
@@ -245,12 +248,15 @@
                             more</span>
                         <span class="bk-heat-readout" id="bk-heat-readout" aria-live="polite">Hover or tap a cell</span>
                     </div>
-                    <p class="dim" style="margin:10px 0 0;font-size:12px;line-height:1.6;max-width:90ch;">
+                    <details class="chart-explain">
+                    <summary>How to read this chart</summary>
+                    <p class="dim">
                         Every hash is an independent draw, so no hour is luckier than another &mdash; an hour
                         finds more blocks when more hashrate mines in it. <b>Expected</b> is what the pool's
                         hashrate in that hour should have found: a busy hour that is also high on expected is
                         just busy, not lucky.
                     </p>
+                    </details>
                 </div>
             </div>
 
@@ -276,11 +282,12 @@
                                 <th>Status</th>
                                 <th class="num" title="Round shares ÷ network difficulty. Under 100% = lucky.">Luck</th>
                                 <th>Found by</th>
+                                <th>Date (UTC)</th>
                                 <th class="num">Age</th>
                             </tr>
                         </thead>
                         <tbody id="blocks-tbody">
-                            <tr><td colspan="5">Loading…</td></tr>
+                            <tr><td colspan="6">Loading…</td></tr>
                         </tbody>
                     </table>
                     </div>

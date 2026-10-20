@@ -115,6 +115,35 @@ class PagesManager {
     return r.changes > 0;
   }
 
+  // The HTML the toolkit ships for `slug` (pool-settings.js defaults.pages), trimmed the way
+  // db.js seeds it, or null when nothing non-empty ships for that slug. Matched by SLUG: a
+  // page the operator re-slugged has no default. Required lazily, as db.js does, to stay out
+  // of a load-order cycle.
+  static shippedDefault(slug) {
+    const pages = (require('./pool-settings').defaults || {}).pages || {};
+    if (!Object.prototype.hasOwnProperty.call(pages, slug)) return null;
+    const html = String(pages[slug] || '').trim();
+    return html || null;
+  }
+
+  // Slugs that have a shipped default, for the admin form to decide whether to offer a reset.
+  static shippedDefaultSlugs() {
+    const pages = (require('./pool-settings').defaults || {}).pages || {};
+    return Object.keys(pages).filter(s => PagesManager.shippedDefault(s));
+  }
+
+  // Replace ONLY the page body with the shipped default — title, slug, link location, order,
+  // SEO and published state are the operator's and stay. Written server-side on purpose: a
+  // round trip through the Quill editor would strip the default's classes (`.muted`, `.callout`).
+  resetToDefault(id) {
+    const page = this.get(id);
+    if (!page) throw new Error('not found');
+    const html = PagesManager.shippedDefault(page.slug);
+    if (!html) throw new Error(`no shipped default exists for the slug "${page.slug}"`);
+    this.db.prepare('UPDATE pages SET html = ?, updated_at = unixepoch() WHERE id = ?').run(html, id);
+    return this.get(id);
+  }
+
   // Public: full content for one published page by slug (for /api/public/page/:key).
   getPublic(slug) {
     const row = this.db.prepare(

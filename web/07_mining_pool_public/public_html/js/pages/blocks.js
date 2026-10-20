@@ -27,7 +27,8 @@
             if (!a || a === 'unknown') return '—';
             return a.length > 16 ? a.slice(0, 9) + '…' + a.slice(-4) : a;
         }
-        function fmtTs(t) { return t ? new Date(t * 1000).toLocaleString() : '—'; }
+        // UTC "YYYY-MM-DD HH:MM" — the page states UTC once in its header, so never local time here.
+        function fmtTs(t) { return t ? new Date(t * 1000).toISOString().slice(0, 16).replace('T', ' ') : '—'; }
         function timeAgo(t) {
             if (!t) return '—';
             const s = Math.max(0, Math.floor(Date.now() / 1000) - t);
@@ -109,7 +110,7 @@
 
         async function loadBlocks() {
             const tbody = document.getElementById('blocks-tbody');
-            tbody.innerHTML = '<tr><td colspan="5">Loading…</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6">Loading…</td></tr>';
             try {
                 const q = '?limit=' + PAGE_SIZE + '&offset=' + (_page * PAGE_SIZE) +
                           (_filter ? '&status=' + encodeURIComponent(_filter) : '');
@@ -117,7 +118,7 @@
                 const rows = Array.isArray(blocks) ? blocks : [];
                 _lastFull = rows.length === PAGE_SIZE;
                 if (!rows.length) {
-                    tbody.innerHTML = '<tr><td colspan="5">' +
+                    tbody.innerHTML = '<tr><td colspan="6">' +
                         (_page === 0 ? 'No blocks found yet — the pool is still searching.' : 'No more blocks.') +
                         '</td></tr>';
                 } else {
@@ -133,12 +134,13 @@
                             // never-pruned table, which was the cheapest full-address walk there
                             // was. shortAddr() stays as a guard; it is a no-op on a masked value.
                             '<td>' + escHtml(shortAddr(b.found_by)) + '</td>' +
-                            '<td class="num" title="' + escHtml(fmtTs(b.found_at)) + '">' + escHtml(timeAgo(b.found_at)) + '</td>' +
+                            '<td>' + escHtml(fmtTs(b.found_at)) + '</td>' +
+                            '<td class="num">' + escHtml(timeAgo(b.found_at)) + '</td>' +
                             '</tr>';
                     }).join('');
                 }
             } catch (e) {
-                tbody.innerHTML = '<tr><td colspan="5">Block data unavailable</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6">Block data unavailable</td></tr>';
                 _lastFull = false;
             }
             updatePager();

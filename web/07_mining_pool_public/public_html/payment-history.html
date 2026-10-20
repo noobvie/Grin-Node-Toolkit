@@ -213,7 +213,9 @@
                         <canvas id="ph-chart-flow" aria-label="GRIN credited to miner balances against GRIN paid out to miners, per period over the selected timeframe" role="img"></canvas>
                         <div class="chart-empty" id="ph-empty-flow">NO LEDGER ACTIVITY IN THIS WINDOW</div>
                     </div>
-                    <p class="dim" style="margin:10px 0 0;font-size:12px;line-height:1.6;max-width:90ch;">
+                    <details class="chart-explain">
+                    <summary>How to read this chart</summary>
+                    <p class="dim">
                         <b>Credited</b> is what miners' balances received: block rewards after the pool fee,
                         plus giveaways, minus any share miners chose to donate. <b>Sent</b> is what the pool
                         actually paid out, after the flat withdrawal fee. The two rarely match in a single
@@ -223,6 +225,7 @@
                         waiting to be withdrawn &mdash; or, after a long idle period, swept to the prize
                         pool as described under abandoned balances.
                     </p>
+                    </details>
                 </div>
             </div>
 

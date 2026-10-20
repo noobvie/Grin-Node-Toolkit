@@ -786,6 +786,16 @@
   "handler": "anon"
  },
  {
+  "method": "post",
+  "path": "/api/admin/pages/:id/reset-default",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
   "method": "delete",
   "path": "/api/admin/pages/:id",
   "chain": [

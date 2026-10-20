@@ -17,6 +17,17 @@
         function fmtGrin(v) {
             return Number(v || 0).toLocaleString('en-US', { maximumFractionDigits: 3 }) + ' ツ';
         }
+        // Value-axis labels for the GRIN charts (P-01, P-04): one k / M / B unit for the whole
+        // axis, picked from its max, so the labels stay narrow. Tooltips keep fmtGrin's exact figure.
+        fmtGrin.axis = function (v, max) {
+            const scale = Math.abs(Number(max)) || Math.abs(Number(v)) || 0;
+            const n = Number(v) || 0;
+            if (n === 0) return '0';
+            const u = scale >= 1e9 ? [1e9, 'B'] : scale >= 1e6 ? [1e6, 'M'] : scale >= 1e3 ? [1e3, 'k'] : [1, ''];
+            // Under 1 ツ the ticks are hundredths or finer; 2 dp would print them all as "0".
+            const dp = scale < 1 ? 4 : 2;
+            return parseFloat((n / u[0]).toFixed(dp)).toLocaleString('en-US', { maximumFractionDigits: dp }) + u[1] + ' ツ';
+        };
         function fmtInt(v) { return Number(v || 0).toLocaleString('en-US'); }
 
         function truncAddr(addr) {

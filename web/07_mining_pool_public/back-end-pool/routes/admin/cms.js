@@ -103,7 +103,11 @@ module.exports = function createAdminCmsRoutes(ctx, guards) {
   // Dynamic content pages (the CMS that replaced the fixed 5-slot config). secureAdmin.
   router.get('/api/admin/pages', secureAdmin, (req, res) => {
     try {
-      res.json({ pages: pagesManager.list(), nav_locations: PagesManager.NAV_LOCATIONS });
+      res.json({
+        pages: pagesManager.list(),
+        nav_locations: PagesManager.NAV_LOCATIONS,
+        shipped_defaults: PagesManager.shippedDefaultSlugs()
+      });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -116,6 +120,17 @@ module.exports = function createAdminCmsRoutes(ctx, guards) {
   router.post('/api/admin/pages/:id', secureAdmin, (req, res) => {
     try {
       res.json({ page: pagesManager.update(parseInt(req.params.id, 10), req.body || {}) });
+    } catch (err) {
+      res.status(err.message === 'not found' ? 404 : 400).json({ error: err.message });
+    }
+  });
+
+  // Overwrite a page's body with the text the toolkit ships for its slug. 9) Deploy new code
+  // never reaches stored pages (they live in pool.db), so this is how an updated default gets
+  // onto an installed pool. Body only — see PagesManager.resetToDefault.
+  router.post('/api/admin/pages/:id/reset-default', secureAdmin, (req, res) => {
+    try {
+      res.json({ page: pagesManager.resetToDefault(parseInt(req.params.id, 10)) });
     } catch (err) {
       res.status(err.message === 'not found' ? 404 : 400).json({ error: err.message });
     }

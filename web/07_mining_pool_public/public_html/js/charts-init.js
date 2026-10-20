@@ -876,7 +876,14 @@
     if (_charts[canvasId]) {
       const ch = _charts[canvasId];
       ch.data.labels = labels;
-      ch.data.datasets = built;
+      // MERGE into the live dataset objects, never replace them: Chart.js keys legend-hidden
+      // state by object identity, so a replaced set re-shows a series the visitor hid on every
+      // 60 s poll (same rule as renderIntervalChart).
+      built.forEach((d, i) => {
+        if (ch.data.datasets[i]) Object.assign(ch.data.datasets[i], d);
+        else ch.data.datasets[i] = d;
+      });
+      ch.data.datasets.length = built.length;
       ch.options.plugins.tooltip.callbacks.label = (ctx) => ctx.dataset.label + ': ' + valueFmt(ctx.parsed.y);
       ch.options.scales.x = xAxis(canvas, labels);
       ch.options.scales.y = yAxis(allValues, valueFmt, { zeroBase: true });

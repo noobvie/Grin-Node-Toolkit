@@ -61,6 +61,32 @@
         // Timestamps are unix SECONDS.
         // ═════════════════════════════════════════════════════════════════
 
+        function num(v) { const n = Number(v); return isFinite(n) ? n : 0; }
+
+        // The API returns only buckets that had activity. Rebuild the full grid the server
+        // bucketed on (unix-epoch aligned, CAST(t / bucket) * bucket) so empty periods keep their
+        // slot. Spans mirror getPaymentsHistory; 'all' starts at the first point. The grid is
+        // widened to every point it was handed, so a client clock off from the server's drops
+        // nothing, and capped so a bad bucket size cannot spin the loop.
+        const RANGE_SPAN = { day: 86400, week: 7 * 86400, month: 30 * 86400, year: 365 * 86400 };
+        function denseBuckets(points, bucket, range) {
+            const b = Number(bucket);
+            if (!(b > 0) || !points.length) return points;
+            const now = Math.floor(Date.now() / 1000);
+            const span = RANGE_SPAN[range];
+            let start = span ? Math.floor((now - span) / b) * b : points[0].t;
+            let end = Math.floor(now / b) * b;
+            start = Math.min(start, points[0].t);
+            end = Math.max(end, points[points.length - 1].t);
+            if ((end - start) / b > 1000) return points;
+            const byT = new Map(points.map(p => [p.t, p]));
+            const out = [];
+            for (let t = start; t <= end; t += b) {
+                out.push(byT.get(t) || { t, payout: 0, to_miners: 0, fee: 0, donations: 0, giveaways: 0 });
+            }
+            return out;
+        }
+
         let phRange = 'month';
         const RANGE_NOTE = {
             day:   'last 24h · hourly',
@@ -100,13 +126,22 @@
                 setGrinStat('ph-donations', totals.donations_all);
                 setGrinStat('ph-operator', totals.operator_withdrawn_all);
 
-                // ── P-01 · cumulative GRIN paid (running sum of per-bucket payouts) ──
-                let run = 0;
-                const cumulative = points.map(p => ({ t: p.t, v: (run += (Number(p.payout) || 0)) }));
-                const hasPayout = points.some(p => (Number(p.payout) || 0) > 0);
-                toggleEmpty('ph-empty-cumulative', !hasPayout);
-                PoolCharts.renderTrendLine('ph-chart-cumulative', cumulative,
-                    { label: 'Cumulative paid', bucketSeconds: bucket, valueFmt: fmtGrin });
+                // ── P-01 · credited vs sent per bucket (see the panel comment in the page) ──
+                // On the dense grid: a quiet day is a zero-height slot, not a missing axis label.
+                const flow = denseBuckets(points, bucket, phRange);
+                // Rounded to the API's 9 decimals: the sum of three rounded floats can land on 5e-17
+                // where the ledger says 0, which would hide the empty state over a blank chart.
+                // `|| 0` turns the -0 that rounding a tiny negative leaves into 0 ("-0 ツ" otherwise).
+                const credited = flow.map(p => +(num(p.to_miners) + num(p.giveaways) - num(p.donations)).toFixed(9) || 0);
+                const sent = flow.map(p => num(p.payout));
+                const hasFlow = credited.some(v => v !== 0) || sent.some(v => v !== 0);
+                toggleEmpty('ph-empty-flow', !hasFlow);
+                // Blue / amber: the CVD-safe pair miners-stats P-02 uses. Not #d29922 — that is
+                // "Pool fee" in P-03 below, and "sent to miners" must not read as the fee.
+                PoolCharts.renderGroupedBarChart('ph-chart-flow', periodLabels(flow, bucket), [
+                    { label: 'Credited to miners', data: credited, color: '#58a6ff' },
+                    { label: 'Sent to miners',     data: sent,     color: '#c98500' }
+                ], { valueFmt: fmtGrin });
 
                 // ── P-02 · payout size distribution ──
                 const distTotal = dist.reduce((s, d) => s + (Number(d.count) || 0), 0);
@@ -139,7 +174,7 @@
                     periodLabels(points, bucket), points.map(p => p.giveaways),
                     { label: 'Given away', valueFmt: fmtGrin });
             } catch (e) {
-                toggleEmpty('ph-empty-cumulative', true);
+                toggleEmpty('ph-empty-flow', true);
                 toggleEmpty('ph-empty-distribution', true);
                 toggleEmpty('ph-empty-split', true);
                 toggleEmpty('ph-empty-giveaways', true);

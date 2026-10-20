@@ -921,7 +921,7 @@ class HashrateTracker {
   // raw for created_at >= H. Ranges day/week/month span ≤30d < the 45d raw floor, so they
   // read raw only; year/all merge both sources additively per bucket. One call feeds the page:
   //   points        time-bucketed { payout, to_miners, fee, donations, giveaways } (drives the
-  //                 cumulative-paid area, reward-split doughnut and giveaways-over-time bar)
+  //                 credited-vs-sent bars, reward-split doughnut and giveaways-over-time bar)
   //   distribution  payout-size histogram over the window (fixed GRIN buckets)
   //   totals        LIFETIME figures for the transparency tiles (range-independent), incl. an
   //                 effective fee % derived from the ledger itself (fee ÷ (fee+to-miners)) so it

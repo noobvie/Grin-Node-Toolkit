@@ -1877,7 +1877,7 @@ write their `admin_audit_log` row inside it, as §18.4):
 | admin approves | → `approved`; the previous `approved` → `replaced`. No file side-effect. |
 | admin rejects `{reason}` | → `rejected`; the reason is SHOWN to the donor (the account page is address-addressable — the admin UI says so beside the field). |
 | donor **Withdraw** | drops the `pending` one → `withdrawn`. |
-| donor **Remove from wall** | live → `removed`, immediate, no review; allowed with donations off and while blocked. |
+| donor **Remove from Contribute page** | live → `removed`, immediate, no review; allowed with donations off and while blocked. |
 | admin removes `{reason}` | live → `removed`, reason shown to the donor. |
 | block | every pending link of the address → `withdrawn` (as §18.6). |
 | **name change** | see below |

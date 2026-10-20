@@ -684,7 +684,9 @@
             const minePend = b.pending_at && dpMine.banner && dpMine.addr === currentAddr && dpMine.banner.at === b.pending_at ? dpMine.banner : null;
             if (b.pending_at) {
                 bl.push(dpLine('warn', 'Waiting for review', (minePend ? 'Your ' + minePend.width + ' × ' + minePend.height + ' px banner (preview below), submitted ' : 'A banner submitted ') +
-                    fmtWhen(b.pending_at) + '. Nothing shows on the wall until the pool approves it.'));
+                    fmtWhen(b.pending_at) + '. Nothing shows on the wall until the pool approves it.' +
+                    // A new submit replaces the waiting one (script07_design.md §18.4), so "change" is just Save.
+                    (canSubmit && slots > 0 ? ' To change it, choose another image and press Save — it replaces this one.' : '')));
             }
             bl.push(dpVerdict('banner', 'rejected', b.rejected));
             bl.push(dpVerdict('banner', 'removed', b.removed));
@@ -733,7 +735,8 @@
             if (lk.pending_at) {
                 ll.push(dpLine('warn', 'Waiting for review', (minePend ? 'Your link (below), submitted ' : 'A link submitted ') + fmtWhen(lk.pending_at) +
                     '. Nothing shows on the wall until the pool approves it.' +
-                    (minePend ? '' : ' Its address is not shown here after a reload, because anyone who knows your address can open this page.')));
+                    (minePend ? '' : ' Its address is not shown here after a reload, because anyone who knows your address can open this page.') +
+                    (canSubmit ? ' To change it, enter another link and press Save — it replaces this one.' : '')));
             }
             ll.push(dpVerdict('link', 'rejected', lk.rejected));
             ll.push(dpVerdict('link', 'removed', lk.removed));
@@ -1077,7 +1080,7 @@
             if (!dpArmed) return;
             clearTimeout(dpArmed.timer);
             const btn = $id('dp-' + dpArmed.kind + '-remove');
-            if (btn) btn.textContent = 'Remove from wall';
+            if (btn) btn.textContent = 'Remove from Contribute page';
             dpArmed = null;
         }
         async function dpDelete(kind, which) {
@@ -1091,7 +1094,7 @@
                 dpDisarm();
                 btn.textContent = 'Click again to remove';
                 dpArmed = { kind: kind, timer: setTimeout(dpDisarm, 6000) };
-                setMsg(msg, 'This takes your ' + kind + ' off the donor wall. Click again to confirm.', true);
+                setMsg(msg, 'This takes your ' + kind + ' off the Contribute page. Click again to confirm.', true);
                 return;
             }
             dpDisarm();
@@ -1108,11 +1111,11 @@
                 if (r.ok && json && json.success) {
                     if (which === 'pending' && dpMine.addr === addr) dpMine[kind] = null;
                     setMsg(msg, which === 'pending'
-                        ? 'Withdrawn. The ' + kind + ' that was waiting will not be reviewed.'
-                        : 'Removed. Your ' + kind + ' is off the donor wall.', true);
+                        ? 'Deleted. The ' + kind + ' that was waiting will not be reviewed.'
+                        : 'Removed. Your ' + kind + ' is off the Contribute page.', true);
                     await dpRefresh(addr);
                 } else {
-                    setMsg(msg, dpErr(json, r.status, which === 'pending' ? 'The request could not be withdrawn' : 'The ' + kind + ' could not be removed'), false);
+                    setMsg(msg, dpErr(json, r.status, which === 'pending' ? 'The submission could not be deleted' : 'The ' + kind + ' could not be removed'), false);
                 }
             } catch (e) {
                 setMsg(msg, 'Failed: ' + e.message, false);

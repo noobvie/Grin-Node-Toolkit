@@ -4394,7 +4394,12 @@ older backend without `reward_24h` renders "—".
 
 **Status:** copy reviewed against the code 2026-10-15; corrected defaults written, not on any live pool
 
-The footer of every public page (`public_html/js/public-shell.js`) links Resources, About and Legal.
+The footer of every public page (`public_html/js/public-shell.js`) is a brand strip (name · tagline ·
+socials), four link columns — Pool and Community (both built from the header's `NAV`, so labels, icons
+and gates match it), Resources, Help & Legal — and a copyright row. CMS pages land in Resources or in
+Help & Legal by a slug prefix match (`LEGAL_SLUG` in `js/branding.js`). Community and Help & Legal are
+`data-footer-gated`: `applyFooterCols` hides one left with no shown link and writes `data-cols` on the
+grid so the rest span the width (4 → 2×2 under 600 px).
 Where each item's TEXT comes from decides how a correction reaches a pool:
 
 | Footer item | Text lives in | Can it drift from the code? |
@@ -4403,6 +4408,9 @@ Where each item's TEXT comes from decides how a correction reaches a pool:
 | Blog | `posts` table; the shipped post is `seedStarterPost()` in `lib/posts.js` | Yes |
 | API Docs | endpoint LIST from the live route table; per-row notes from `API_DOC_META` in `routes/public.js` | List no; notes yes — §1b in the Runbook |
 | Contact | not a page: a `mailto:` from `branding.contact_email` (`js/branding.js`), hidden when that is blank | Ships set (`support@grinium.com`), so it shows by default |
+| Security, PGP key | not pages: a lazy `mailto:` from `pool.security_contact` + `pool.pgp_key_url` (Pool Info settings); PGP shows only with a security contact | No — hidden when blank |
+| Forum (Community column) | `pool.support_forum_url` (Pool Info settings) | Ships set (`forum.grin.mw/u/hellogrin`), so it shows by default |
+| Powered by Grin Node Toolkit | hardcoded in `public-shell.js`; `branding.show_attribution` hides it | Ships ON, so it shows by default |
 
 - **⚠ The CMS pages are seeded ONCE — editing `defaults.pages` reaches fresh installs only.**
   `lib/db.js migratePagesFromConfig` (marker `_migrations.pages_seeded`) seeds the original five

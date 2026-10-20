@@ -156,7 +156,7 @@ the stratum, share, block, reward or payout paths.
   **pool.json keys, not settings** (§19.15 *Part 2*). A bad value in pool.json disables the link and
   logs one line; it never blocks the pool's boot.
 - **Nav:** `public-shell.js` NAV gained `{ href:'/play/', label:'Play', icon:'🎮', games:true }`,
-  rendered with `data-games="1" style="display:none"` in the header and the footer Pool column.
+  rendered with `data-games="1" style="display:none"` in the header and the footer Community column.
   `branding.js applyGamesNav` shows it only on `cfg.games.mode === 'on'`.
 - **Admin page:** NEW `admin-panel/settings-games.html` (a `<select id="mode">`, because the
   harvester does not handle radios, plus `#chat_enabled` and the health line), linked under
@@ -1366,8 +1366,9 @@ games service, the admin panel and the menu-P bash lib. What the build added to,
     flag function touches the group any more. Side effect, wanted: Community is now the nav's **last** child, so
     the existing ≤ 640 px rule `.nav-group:last-child > .nav-dropdown { right: 0 }` opens it leftward on a phone.
     The active state needs no change: on `/play/`, `fileOf('/play/') === '/play/'`, so the group lights.
-    Footer: Play stays in the Pool column with its `data-games` (Fortune Board + Contribute were already skipped
-    there and live in the brand column with `data-incentives`).
+    Footer: the Community group's children render as the footer's own Community column (NAV
+    `footerCol: 'community'`), each with its gate; `branding.js applyFooterCols` hides that column when
+    none of its links is shown.
 12. **Menu P (bash, display only — no bash writes a pool setting).** The post-install hint now says a new games
     DB starts in preview and points at Go live; P → 5 Status labels the pool's value *Pool mode* and adds a
     *Launch* line parsed from the health answer it already fetched. `bash -n` clean.

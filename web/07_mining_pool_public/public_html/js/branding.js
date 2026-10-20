@@ -641,17 +641,7 @@
       });
     }
 
-    // A pool with no legal pages authored and no contact email would leave the Legal column
-    // as a lone heading over empty space — drop the whole column instead. Runs after the
-    // contact link above so its display state is already settled.
-    document.querySelectorAll('.footer-legal').forEach(function (col) {
-      var links = Array.prototype.filter.call(col.querySelectorAll('a'), function (a) {
-        return a.style.display !== 'none';
-      });
-      if (!links.length) col.style.display = 'none';
-    });
-
-    // Footer "Community" alternative — an email-free public channel (e.g. Grin forum).
+    // Footer Community column's "Forum" — an email-free public channel (e.g. Grin forum).
     var forumHref = safeHref(pool.support_forum_url);
     if (forumHref) {
       document.querySelectorAll('[data-brand="forum-link"]').forEach(function (el) {
@@ -660,11 +650,12 @@
       });
     }
 
-    // Footer security/abuse contact (lazy mailto) + optional PGP link.
+    // Footer security/abuse contact (lazy mailto, labelled like Contact so the address stays
+    // out of the DOM until click) + optional PGP link.
     var secEmail = decodeEmail(pool.security_contact_enc);
     if (secEmail) {
       document.querySelectorAll('[data-brand="security-link"]').forEach(function (el) {
-        wireMailto(el, secEmail, secEmail);
+        wireMailto(el, secEmail, el.textContent || 'Security');
       });
       var pgpHref = safeHref(pool.pgp_key_url);
       if (pgpHref) {
@@ -802,13 +793,14 @@
     applyLogoVariant();
   }
 
-  // Hide the prize-pool chrome (the header's Fortune Board + Contribute links inside the
-  // Community group, and the footer Donate / Fortune Board — all marked data-incentives by
+  // Hide the prize-pool chrome (the Fortune Board + Contribute links in the header's
+  // Community group and in the footer's Community column — all marked data-incentives by
   // public-shell.js) when the operator has incentives off. Links only, never the group:
-  // applyNavGroups decides the group from what is left in it (script07_design_games.md §19.17.8).
+  // applyNavGroups decides the group from what is left in it (script07_design_games.md §19.17.8),
+  // and applyFooterCols does the same for the footer column.
   // Shown by default and hidden only on an explicit `enabled: false`: incentives ship ON,
   // and a failed/partial config fetch should not strip working links off the page.
-  // style.display, not the `hidden` attribute — .nav-group / .footer-donate set their own
+  // style.display, not the `hidden` attribute — .nav-group / .nav-link set their own
   // display in CSS, which beats the UA [hidden] rule.
   function applyIncentivesNav(cfg) {
     var off = !!(cfg.incentives && cfg.incentives.enabled === false);
@@ -843,6 +835,28 @@
         if (links[i].style.display !== 'none') { any = true; break; }
       }
       g.style.display = any ? '' : 'none';
+    });
+  }
+
+  // The footer's gated link columns (public-shell.js marks Community and Help & Legal
+  // data-footer-gated) hide when none of their links is shown — a lone heading over empty
+  // space reads as broken. The grid then gets data-cols = the columns left, so the survivors
+  // still span the width instead of leaving an empty track (dashboard.css). Reads each
+  // link's own inline display, like applyNavGroups, so it must run after applyContent
+  // (contact / security / forum / CMS links) and after the two nav gates.
+  function applyFooterCols() {
+    document.querySelectorAll('.footer-cols').forEach(function (grid) {
+      var shown = 0;
+      Array.prototype.forEach.call(grid.querySelectorAll('.footer-col'), function (col) {
+        if (col.hasAttribute('data-footer-gated')) {
+          var any = Array.prototype.some.call(col.querySelectorAll('a'), function (a) {
+            return a.style.display !== 'none';
+          });
+          col.style.display = any ? '' : 'none';
+        }
+        if (col.style.display !== 'none') shown++;
+      });
+      grid.setAttribute('data-cols', String(shown));
     });
   }
 
@@ -1060,6 +1074,7 @@
     try { applySeo(cfg); } catch (e) {}
     try { applyContent(cfg); } catch (e) {}
     try { enhanceHeader(cfg); } catch (e) {}
+    try { applyFooterCols(); } catch (e) {}
     try { applyIncentives(cfg.incentives || {}); } catch (e) {}
     try { renderBanners(cfg.announcements || []); } catch (e) {}
     try { loadChatBubble(cfg); } catch (e) {}

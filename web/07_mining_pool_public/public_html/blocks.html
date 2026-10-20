@@ -12,7 +12,7 @@
 
   <!-- ===== DESCRIPTION & KEYWORDS ===== -->
   <title>Found Blocks — Grin Mining Pool</title>
-  <meta name="description" content="Live list of blocks found by the pool with historical luck, found vs expected blocks, the busiest UTC hours, status and cumulative reward trends. Full transparency — every block is verifiable on the Grin chain explorer.">
+  <meta name="description" content="Live list of blocks found by the pool with historical luck, found vs expected blocks, the time between blocks, the busiest UTC hours and status trends. Full transparency — every block is verifiable on the Grin chain explorer.">
   <meta name="keywords" content="grin blocks found, mining pool luck, block cadence, orphan rate, pool rewards, Grin pool, block explorer">
 
   <!-- ===== OPEN GRAPH ===== -->
@@ -26,7 +26,7 @@
   <!-- ===== TWITTER CARD ===== -->
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Found Blocks — Grin Mining Pool">
-  <meta name="twitter:description" content="Live blocks, historical luck, cadence, status and reward trends.">
+  <meta name="twitter:description" content="Live blocks, historical luck, time between blocks, cadence and status trends.">
   <meta name="twitter:domain" content="pool.grin.money">
 
   <!-- ===== CANONICAL ===== -->
@@ -112,9 +112,11 @@
     .bk-heat-key .k3 { background: color-mix(in srgb, var(--accent) 72%, var(--bg)); }
     .bk-heat-key .k4 { background: var(--accent); }
     .bk-heat-readout { color: var(--text-dim, #9aa4b2); margin-left: auto; font-variant-numeric: tabular-nums; }
-    .bk-heat-summary { margin: 0 0 10px; font-size: 13px; color: var(--text-dim, #9aa4b2); }
-    .bk-heat-summary:empty { display: none; }
-    .bk-heat-summary b { color: var(--text, #e6edf3); }
+    .bk-heat-summary, .bk-gap-summary { margin: 0 0 10px; font-size: 13px; color: var(--text-dim, #9aa4b2); }
+    .bk-heat-summary:empty, .bk-gap-summary:empty { display: none; }
+    .bk-heat-summary b, .bk-gap-summary b { color: var(--text, #e6edf3); }
+    /* A gap still running past 3× expected — the same rule, and the same --warn ink, as P-04's triangles. */
+    .bk-gap-summary .bk-gap-long, .bk-gap-summary .bk-gap-long b { color: var(--warn, #d29922); }
     .bk-heat-panel .chart-empty { position: static; min-height: 120px; }
     .rangebar .rng-note {
       color: var(--text-mute, #6b7480); font-family: var(--mono, monospace);
@@ -154,10 +156,13 @@
 
         <!-- ═══ Spec placard: compact live tiles ═══ -->
         <div class="placard figures" aria-label="Live block figures">
-            <span><i>Blocks found</i><b id="kpi-total">—</b></span>
-            <span class="tone-ok"><i>Matured</i><b id="kpi-confirmed">—</b></span>
-            <span class="tone-warn"><i>Maturing</i><b id="kpi-immature">—</b></span>
-            <span class="tone-info"><i>Found · 24h / 7d</i><b id="kpi-recent">—</b></span>
+            <!-- The ツ sub-lines are each block's recorded reward (coinbase + fees), summed — not
+                 count × 60. Blocks found counts orphans, but its ツ leaves them out: an orphan's
+                 reward never arrived. -->
+            <span title="Reward of the matured and maturing blocks; an orphaned block's reward never arrived, so it is not counted."><i>Blocks found</i><b id="kpi-total">—</b><small class="fig-sub" id="kpi-total-grin">—</small></span>
+            <span class="tone-ok"><i>Matured</i><b id="kpi-confirmed">—</b><small class="fig-sub" id="kpi-confirmed-grin">—</small></span>
+            <span class="tone-warn"><i>Maturing</i><b id="kpi-immature">—</b><small class="fig-sub" id="kpi-immature-grin">—</small></span>
+            <span class="tone-info"><i>Found · 24h / 7d</i><b id="kpi-recent">—</b><small class="fig-sub" id="kpi-recent-grin">—</small></span>
         </div>
 
         <div class="deck">
@@ -202,13 +207,27 @@
                 </div>
             </div>
 
-            <!-- ═══ P-04 · CUMULATIVE REWARD ═══ -->
+            <!-- ═══ P-04 · TIME BETWEEN BLOCKS (log axis, one dot per block) ═══ -->
             <div class="panel"><span class="screws"></span>
-                <h2 class="panel-title"><span class="tag">P-04</span> Ledger recorder — cumulative reward
-                    <span class="right">block rewards mined over the window</span></h2>
-                <div class="panel-body chart-wrap">
-                    <canvas id="bk-chart-reward" aria-label="Cumulative block reward over the selected timeframe" role="img"></canvas>
-                    <div class="chart-empty" id="bk-empty-reward">NO LEDGER DATA YET</div>
+                <h2 class="panel-title"><span class="tag">P-04</span> Interval recorder — time between blocks
+                    <span class="right" id="bk-gap-note">per block · dashed = expected · log scale</span></h2>
+                <div class="panel-body">
+                    <p class="bk-gap-summary" id="bk-gap-summary"></p>
+                    <div class="chart-wrap">
+                        <canvas id="bk-chart-gap" aria-label="Time since the previous pool block, for the blocks in the selected timeframe (at most the latest 500), against the gap expected from the pool's hashrate share" role="img"></canvas>
+                        <div class="chart-empty" id="bk-empty-gap">NOT ENOUGH BLOCKS YET</div>
+                    </div>
+                    <p class="dim" style="margin:10px 0 0;font-size:12px;line-height:1.6;max-width:90ch;">
+                        Each dot is one block: how long after the pool's previous block it was found.
+                        <b>Expected</b> is the average gap the pool's share of network hashrate predicts.
+                        Gaps are random, so even at exactly that rate about two in three dots fall below
+                        the line and one in twenty sits above three times it &mdash; those are drawn as amber
+                        triangles, and the summary says how many to expect by chance. It is the same randomness
+                        P-01 shows as luck: a dot three times above the line is roughly a block at 300% luck.
+                        Orphaned blocks are drawn hollow: the pool found them, but their reward never arrived.
+                        Dots are spaced one per block, not by time, so the gap still running shows in the
+                        summary as <b>now</b>.
+                    </p>
                 </div>
             </div>
 
@@ -247,7 +266,7 @@
                     </div>
 
                     <!-- No Reward column (the 60 ツ coinbase + fees repeated near-identically on
-                         every row; P-04 carries the totals) and no Chain column (the Height cell
+                         every row; the placard carries the totals) and no Chain column (the Height cell
                          already links the same explorer page). Both were dropped to fit a phone. -->
                     <div class="table-wrap">
                     <table class="data-table bk-table" aria-label="Found blocks">

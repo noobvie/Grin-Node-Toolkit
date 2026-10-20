@@ -60,6 +60,34 @@
     return (Number(v) / div).toFixed(decimalsFor(tickStep(ticks, v) / div)) + unit;
   };
 
+  // Network difficulty (per-block, chain units). Same K/M/G suffixes as the homepage spec plate,
+  // plus T; three significant figures per value ("29.3 G").
+  var DIFF_UNITS = [[1e12, ' T'], [1e9, ' G'], [1e6, ' M'], [1e3, ' K']];
+
+  function diffUnit(scale) {
+    for (var i = 0; i < DIFF_UNITS.length; i++) if (scale >= DIFF_UNITS[i][0]) return DIFF_UNITS[i];
+    return [1, ''];
+  }
+
+  function fmtDiff(d) {
+    if (!isFinite(d)) return '—';
+    var u = diffUnit(Math.abs(d));
+    var n = d / u[0];
+    return n.toFixed(u[0] === 1 ? 0 : (Math.abs(n) < 10 ? 2 : (Math.abs(n) < 100 ? 1 : 0))) + u[1];
+  }
+
+  // Axis labels: three significant figures from the axis max ("28.6 G"), plus just enough extra
+  // decimals that adjacent ticks never round to the same label. Its ticks are usually the locked
+  // re-label of a round left axis, so they are not round themselves — more digits only widen it.
+  fmtDiff.axis = function (v, max, ticks) {
+    var u = diffUnit(Math.abs(Number(max)) || Math.abs(Number(v)) || 0);
+    var m = Math.abs(Number(max) || Number(v) || 0) / u[0];
+    var sig = u[0] === 1 ? 0 : (m < 10 ? 2 : (m < 100 ? 1 : 0));
+    var step = tickStep(ticks, v) / u[0];
+    var distinct = step >= 10 ? 0 : Math.max(0, Math.floor(-Math.log10(step)) + 1);
+    return (Number(v) / u[0]).toFixed(Math.min(3, Math.max(sig, distinct))) + u[1];
+  };
+
   // Plain integer formatter (miner counts, block counts, payout counts).
   function fmtInt(v) { return Number(v || 0).toLocaleString('en-US'); }
 
@@ -258,6 +286,39 @@
     return _charts[canvasId];
   }
 
+  // A LOCKED second scale on the right: a pure re-label of the left axis in another unit (°C/°F),
+  // never a second series. Its bounds and ticks are the left axis's FINAL bounds and ticks × factor,
+  // so it cannot disagree with the left axis — that is why this is not the dual-axis pattern the
+  // rest of this file refuses. Copied in afterBuildTicks, which in Chart.js 4 runs before
+  // configure() maps values to pixels; the layout fits left boxes before right ones on every pass,
+  // so `scales.y` is already final for that pass (grace, zero-basing and tick snapping included).
+  // bounds:'data' is belt-and-braces: Chart.js snaps min/max to ticks inside buildTicks, which runs
+  // before this hook overwrites them.
+  // No grid lines of its own: the left axis's grid is the one both scales are read against.
+  function lockedScale(sec) {
+    const factor = Number(sec.factor);
+    const fmt = sec.fmt;
+    return {
+      axis: 'y',
+      position: 'right',
+      bounds: 'data',
+      grid: { drawOnChartArea: false },
+      title: { display: !!sec.title, text: sec.title || '' },
+      afterBuildTicks: function (scale) {
+        const y = scale.chart.scales.y;
+        if (!y) return;
+        scale.min = y.min * factor;
+        scale.max = y.max * factor;
+        scale.ticks = y.ticks.map(function (t) { return { value: t.value * factor }; });
+      },
+      ticks: {
+        callback: function (v, i, all) {
+          return typeof fmt.axis === 'function' ? fmt.axis(v, this.max, all) : fmt(v);
+        }
+      }
+    };
+  }
+
   // A theme text token (for neutral reference marks), read from BODY like accent().
   function textToken(name, fallback) {
     try {
@@ -422,6 +483,11 @@
   // opts.compact = sparkline mode: the trace is a companion to a full chart directly above it that
   // already carries the x axis, so drop the duplicate time labels and thin the y ticks to 3. Shape
   // stays readable in ~70px; exact values come from the (still active) hover tooltip.
+  // opts.gaps = a null/undefined `v` stays a GAP in the line (and out of the axis range) instead of
+  // plotting as 0 — for series where null means "not sampled".
+  // opts.secondaryScale = { factor, fmt, title, label } adds a locked right-hand scale (see
+  // lockedScale) and appends "· <label> <fmt(v × factor)>" to the tooltip. Only for a quantity that
+  // IS the plotted one times a constant.
   function renderTrendLine(canvasId, series, opts) {
     opts = opts || {};
     const canvas = document.getElementById(canvasId);
@@ -430,8 +496,31 @@
     const valueFmt = typeof opts.valueFmt === 'function' ? opts.valueFmt : fmtGps;
     const fmtLabel = timeLabeler(series.map(p => p.t), opts.bucketSeconds);
     const labels = series.map(p => fmtLabel(p.t));
-    const data = series.map(p => Number(p.v) || 0);
+    const data = opts.gaps
+      ? series.map(p => (p.v === null || p.v === undefined) ? null : (Number(p.v) || 0))
+      : series.map(p => Number(p.v) || 0);
+    // yAxis() maps through Number(), which turns a null into a real 0 — keep gaps out of the range.
+    const rangeData = opts.gaps ? data.filter(v => v !== null) : data;
     const col = opts.color || accent();
+    const sec = (opts.secondaryScale && typeof opts.secondaryScale.fmt === 'function'
+                 && isFinite(Number(opts.secondaryScale.factor))) ? opts.secondaryScale : null;
+    const tipLabel = sec
+      ? (ctx) => {
+          const v = ctx.parsed.y;
+          if (v === null || !isFinite(v)) return null;
+          return valueFmt(v) + ' · ' + (sec.label ? sec.label + ' ' : '') + sec.fmt(v * Number(sec.factor));
+        }
+      : opts.gaps
+        ? (ctx) => (ctx.parsed.y === null ? null : valueFmt(ctx.parsed.y))
+        : (ctx) => valueFmt(ctx.parsed.y);
+    // With gaps, a sample with null on both sides draws no segment — give exactly that point a dot,
+    // or a lone sample (first hour after an outage) leaves a blank panel with no empty state.
+    const pointRadius = opts.gaps
+      ? (c) => {
+          const d = c.dataset.data, i = c.dataIndex;
+          return d[i] != null && d[i - 1] == null && d[i + 1] == null ? 2.5 : 0;
+        }
+      : 0;
 
     const scaleOpts = {
       zeroBase: opts.zeroBase,
@@ -445,11 +534,18 @@
       ch.data.datasets[0].data = data;
       ch.data.datasets[0].borderColor = col;
       ch.data.datasets[0].backgroundColor = col + '22';
-      ch.options.plugins.tooltip.callbacks.label = (ctx) => valueFmt(ctx.parsed.y);
-      applyScales(ch, canvas, labels, data, valueFmt, scaleOpts);
+      ch.options.plugins.tooltip.callbacks.label = tipLabel;
+      applyScales(ch, canvas, labels, rangeData, valueFmt, scaleOpts);
+      if (sec) ch.options.scales.y2 = lockedScale(sec);
       ch.update('none');
       return ch;
     }
+
+    const scales = {
+      x: xAxis(canvas, labels, scaleOpts.xExtra),
+      y: yAxis(rangeData, valueFmt, scaleOpts)
+    };
+    if (sec) scales.y2 = lockedScale(sec);
 
     _charts[canvasId] = new global.Chart(canvas.getContext('2d'), {
       type: 'line',
@@ -461,7 +557,7 @@
           borderColor: col,
           backgroundColor: col + '22',
           borderWidth: 2,
-          pointRadius: 0,
+          pointRadius,
           pointHoverRadius: 3,
           tension: 0.25,
           fill: true
@@ -473,12 +569,186 @@
         interaction: { intersect: false, mode: 'index' },
         plugins: {
           legend: { display: false },
-          tooltip: { callbacks: { label: (ctx) => valueFmt(ctx.parsed.y) } }
+          tooltip: { callbacks: { label: tipLabel } }
         },
-        scales: {
-          x: xAxis(canvas, labels, scaleOpts.xExtra),
-          y: yAxis(data, valueFmt, scaleOpts)
-        }
+        scales
+      }
+    });
+    return _charts[canvasId];
+  }
+
+  // A duration in seconds, two largest units: "45s", "14m 3s", "2h 5m", "3d 4h". Round values
+  // print one unit ("5m", "2h"), so the same function labels the log axis below.
+  function fmtDuration(sec) {
+    var s = Math.max(0, Math.round(Number(sec) || 0));
+    var units = [[86400, 'd'], [3600, 'h'], [60, 'm'], [1, 's']];
+    for (var i = 0; i < units.length; i++) {
+      if (s >= units[i][0] || i === units.length - 1) {
+        var big = Math.floor(s / units[i][0]);
+        var rest = i < units.length - 1 ? Math.floor((s % units[i][0]) / units[i + 1][0]) : 0;
+        return big + units[i][1] + (rest ? ' ' + rest + units[i + 1][1] : '');
+      }
+    }
+    return '0s';
+  }
+
+  // Log-axis ticks a person reads as durations. Chart.js' own log ticks land on 1-2-5 × 10ⁿ
+  // SECONDS ("2000s"), which is no unit anyone thinks in. Neighbours sit ≥6× apart: at 2×
+  // (15m/30m/1h/2h) the labels collide on a 240px canvas. 365d is there because a small pool's
+  // long gap runs past a month; anything longer still gets headroom above the last tick.
+  var DURATION_TICKS = [1, 10, 60, 600, 3600, 21600, 86400, 604800, 2592000, 31536000];
+
+  // Time between events on a LOG axis — one dot per event, plus a dashed neutral reference line
+  // for the expected interval. `series` = [{ t, v, ref, title, hollow, note }] oldest→newest:
+  // v = seconds since the previous event, ref = expected seconds or null (a gap in the line),
+  // title = the tooltip heading (e.g. "Block 1,234,567"), hollow = draw the dot as a ring (e.g.
+  // an orphaned block), note = an extra tooltip line. Log, because intervals are exponential: on a
+  // linear axis one long drought flattens every other point onto the floor. A 0 s interval plots
+  // at 1 s (log has no zero); its tooltip still says 0s. A dot over opts.longFactor × ref
+  // (default 3, the ~5% tail at a steady rate) is drawn in opts.longColor (default the theme's
+  // --warn, which light themes re-pick for a white panel) AND as a triangle, so it does not rest
+  // on colour alone — "above the line" by itself is the ordinary 37% case, not news.
+  // The x axis is a category axis: dots are spaced per event, not by time.
+  // Returns the Chart or null.
+  function renderIntervalChart(canvasId, series, opts) {
+    opts = opts || {};
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || typeof global.Chart === 'undefined') return null;
+    series = Array.isArray(series) ? series : [];
+    const fmtLabel = timeLabeler(series.map(p => p.t));
+    const labels = series.map(p => fmtLabel(p.t));
+    const num = v => (v == null || !isFinite(Number(v))) ? null : Number(v);
+    const vals = series.map(p => num(p.v));
+    const refs = series.map(p => { const r = num(p.ref); return r != null && r > 0 ? r : null; });
+    const col = opts.color || accent();
+    const longCol = opts.longColor || textToken('--warn', '#d29922');
+    const longFactor = Number(opts.longFactor) > 0 ? Number(opts.longFactor) : 3;
+    const ink = textToken('--text-dim', '#9aa4b2');
+    const hasRef = refs.some(r => r != null);
+
+    // Axis bounds snap outward to the nearest duration ticks, so the top and bottom are labelled.
+    // A value past the last tick gets headroom instead: an explicit max clips at the chart area,
+    // so a max below the data would erase the longest drought — the one point that matters.
+    const plotted = vals.filter(v => v != null).map(v => Math.max(1, v))
+      .concat(refs.filter(v => v != null));
+    const lo = plotted.length ? Math.min.apply(null, plotted) : 60;
+    const hi = plotted.length ? Math.max.apply(null, plotted) : 3600;
+    const lastTick = DURATION_TICKS[DURATION_TICKS.length - 1];
+    let min = DURATION_TICKS[0], max = lastTick;
+    DURATION_TICKS.forEach(function (t) { if (t <= lo) min = t; });
+    for (let i = DURATION_TICKS.length - 1; i >= 0; i--) if (DURATION_TICKS[i] >= hi) max = DURATION_TICKS[i];
+    if (hi > lastTick) max = hi * 1.5;
+    if (max <= min) max = DURATION_TICKS[Math.min(DURATION_TICKS.indexOf(min) + 1, DURATION_TICKS.length - 1)];
+    const yScale = () => ({
+      type: 'logarithmic', min, max,
+      afterBuildTicks: function (scale) {
+        scale.ticks = DURATION_TICKS.filter(t => t >= min && t <= max).map(t => ({ value: t }));
+      },
+      ticks: { callback: v => fmtDuration(v), autoSkip: false }
+    });
+
+    const isLong = i => vals[i] != null && refs[i] != null && vals[i] > longFactor * refs[i];
+    const radius = series.length > 200 ? 2 : 3;
+    const pointColors = series.map((p, i) => isLong(i) ? longCol : col);
+    // Both datasets are rebuilt as plain property sets and MERGED into the live objects on an
+    // update: Chart.js keys a dataset's state (legend-hidden) by object identity, so replacing
+    // the objects re-shows a series the visitor hid on every refresh.
+    const datasets = () => [{
+      type: 'line',
+      label: opts.label || 'Interval',
+      data: vals.map(v => v == null ? null : Math.max(1, v)),
+      showLine: false,
+      borderColor: col,
+      backgroundColor: col,
+      pointStyle: series.map((p, i) => isLong(i) ? 'triangle' : 'circle'),
+      pointRadius: series.map((p, i) => isLong(i) ? radius + 2 : radius),
+      pointHoverRadius: 5,
+      pointBackgroundColor: series.map((p, i) => p.hollow ? 'transparent' : pointColors[i]),
+      pointBorderColor: pointColors,
+      pointBorderWidth: series.map(p => p.hollow ? 1.5 : 1),
+      // The bounds snap to ticks, so a dot ON the min or max would lose half its disc to the
+      // default zero clip an explicit min/max sets.
+      clip: 8,
+      order: 1
+    }, {
+      type: 'line',
+      label: opts.refLabel || 'Expected',
+      data: refs,
+      borderColor: ink,
+      backgroundColor: ink,
+      borderWidth: 2,
+      borderDash: [6, 4],
+      pointStyle: 'line',
+      pointRadius: 0,
+      pointHoverRadius: 0,
+      tension: 0,
+      spanGaps: false,
+      fill: false,
+      order: 2
+    }];
+    // The axis labels drop the date when the window is short; the tooltip never does.
+    const fullDate = t => utc(t, { month: 'short', day: 'numeric', year: 'numeric',
+                                   hour: '2-digit', minute: '2-digit', hour12: false }) + ' UTC';
+    const callbacks = {
+      title: items => {
+        const p = items.length ? series[items[0].dataIndex] : null;
+        return p ? [p.title || '', isFinite(Number(p.t)) ? fullDate(Number(p.t)) : ''].filter(Boolean) : '';
+      },
+      label: ctx => {
+        const i = ctx.dataIndex;
+        const v = ctx.datasetIndex === 0 ? vals[i] : refs[i];
+        if (v == null) return null;
+        const ratio = ctx.datasetIndex === 0 && refs[i] != null && v > 0
+          ? ' (' + (v / refs[i]).toFixed(1) + '× expected)' : '';
+        return ctx.dataset.label + ': ' + fmtDuration(v) + ratio;
+      },
+      footer: items => {
+        const p = items.length ? series[items[0].dataIndex] : null;
+        return p && p.note ? String(p.note) : '';
+      }
+    };
+    // Legend: the dot series' marker is a plain filled circle whatever its first point looks
+    // like (Chart.js draws the swatch from point 0), and "Expected" is listed only when drawn.
+    const legendLabels = {
+      usePointStyle: true, boxWidth: 8, boxHeight: 8, padding: 12,
+      generateLabels: chart => global.Chart.defaults.plugins.legend.labels.generateLabels(chart)
+        .map(item => item.datasetIndex === 0
+          ? Object.assign(item, { pointStyle: 'circle', fillStyle: col, strokeStyle: col })
+          : item),
+      filter: item => item.datasetIndex !== 1 || hasRef
+    };
+
+    if (_charts[canvasId]) {
+      const ch = _charts[canvasId];
+      const next = datasets();
+      ch.data.labels = labels;
+      next.forEach((d, i) => {
+        if (ch.data.datasets[i]) Object.assign(ch.data.datasets[i], d);
+        else ch.data.datasets[i] = d;
+      });
+      ch.options.plugins.tooltip.callbacks = callbacks;
+      ch.options.plugins.legend.labels = legendLabels;
+      ch.options.scales.x = xAxis(canvas, labels);
+      ch.options.scales.y = yScale();
+      // An open tooltip indexes the OLD series; after a range switch it would describe a block
+      // that is no longer drawn.
+      if (ch.tooltip) ch.tooltip.setActiveElements([], { x: 0, y: 0 });
+      ch.update('none');
+      return ch;
+    }
+
+    _charts[canvasId] = new global.Chart(canvas.getContext('2d'), {
+      type: 'line',
+      data: { labels, datasets: datasets() },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { intersect: false, mode: 'index' },
+        plugins: {
+          legend: { display: true, position: 'bottom', labels: legendLabels },
+          tooltip: { callbacks }
+        },
+        scales: { x: xAxis(canvas, labels), y: yScale() }
       }
     });
     return _charts[canvasId];
@@ -633,7 +903,7 @@
 
   global.PoolCharts = {
     renderHashrateChart, renderBarChart, renderDoughnutChart,
-    renderTrendLine, renderMultiTrendLine, renderGroupedBarChart,
-    fmtGps, fmtInt, timeLabels, timeLabeler, PALETTE
+    renderTrendLine, renderMultiTrendLine, renderGroupedBarChart, renderIntervalChart,
+    fmtGps, fmtInt, fmtDiff, fmtDuration, timeLabels, timeLabeler, PALETTE
   };
 })(window);

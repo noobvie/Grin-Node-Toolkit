@@ -20,7 +20,7 @@
         //   /api/stratum/top-miners         top miners by 24h hashrate (P-04)
         //   /api/pool/top-block-finders     top lucky miners by blocks found, 30d (P-05)
         //   /api/stratum/top-avg-hashrate   top miners by avg hashrate, 30d (P-06)
-        //   /api/pool/metrics/history       durable pool trend series → P-01/P-02/P-03
+        //   /api/pool/metrics/history       durable pool trend series → P-00/P-01/P-02/P-03
         // ═════════════════════════════════════════════════════════════════
 
         function fmtGpsLabel(gps) {
@@ -253,6 +253,35 @@
             if (el) el.style.display = show ? 'flex' : 'none';
         }
 
+        // network_hashrate_gps is derived server-side from per-block difficulty as
+        // diff × 42 / 60 / 16384, so difficulty = GPS × this factor exactly (also for an AVG
+        // over a bucket, since the relation is linear). P-00's right axis is locked to it.
+        const DIFF_PER_GPS = 60 * 16384 / 42;
+
+        // P-00 title readout: the newest bucket with a network sample, and the pool's share of
+        // the network in that SAME bucket. The share stays hidden unless both values are there
+        // (a missing network sample is not a 100% pool, an idle hour is not a share).
+        function renderNetworkReadout(points) {
+            const latest = document.getElementById('ms-net-latest');
+            const share = document.getElementById('ms-net-share');
+            let row = null;
+            for (let i = points.length - 1; i >= 0; i--) {
+                if (Number(points[i].network_hashrate_gps) > 0) { row = points[i]; break; }
+            }
+            const net = row ? Number(row.network_hashrate_gps) : 0;
+            const pool = row ? Number(row.hashrate_gps) : 0;
+            if (latest) {
+                latest.textContent = net
+                    ? PoolCharts.fmtGps(net) + ' · difficulty ' + PoolCharts.fmtDiff(net * DIFF_PER_GPS)
+                    : '—';
+            }
+            if (!share) return;
+            if (!(net > 0 && pool > 0)) { share.hidden = true; share.textContent = ''; return; }
+            const pct = pool / net * 100;
+            share.textContent = ' · pool ' + (pct >= 1 ? pct.toFixed(1) : (pct >= 0.1 ? pct.toFixed(2) : pct.toFixed(3))) + '% of network';
+            share.hidden = false;
+        }
+
         async function loadMetrics() {
             const note = document.getElementById('ms-range-note');
             if (note) note.textContent = RANGE_NOTE[msRange] || '';
@@ -267,6 +296,18 @@
                 toggleEmpty('ms-empty-hashrate', !has);
                 toggleEmpty('ms-empty-miners', !has);
                 toggleEmpty('ms-empty-ledger', !has);
+
+                // P-00: network hashrate, with difficulty as a locked right-hand scale. An hour the
+                // node was not sampled is null and draws as a gap; the empty state shows only when
+                // no bucket in the range has a sample.
+                const netPts = points.map(p => ({ t: p.t, v: p.network_hashrate_gps }));
+                toggleEmpty('ms-empty-network', !netPts.some(p => p.v != null));
+                PoolCharts.renderTrendLine('ms-chart-network', netPts, {
+                    label: 'Network hashrate', bucketSeconds: bucket, valueFmt: PoolCharts.fmtGps,
+                    color: PoolCharts.PALETTE[0], gaps: true,
+                    secondaryScale: { factor: DIFF_PER_GPS, fmt: PoolCharts.fmtDiff, title: 'difficulty', label: 'difficulty' }
+                });
+                renderNetworkReadout(points);
 
                 PoolCharts.renderTrendLine('ms-chart-hashrate',
                     points.map(p => ({ t: p.t, v: p.hashrate_gps })),
@@ -297,13 +338,15 @@
                 }
 
                 // Shared elastic UTC labeller (charts-init.js) — the same span-aware format the
-                // trend lines use, so all three panels read consistently at every range.
+                // trend lines use, so every panel reads consistently at every range.
                 const labels = PoolCharts.timeLabels(points.map(p => p.t), bucket);
                 PoolCharts.renderGroupedBarChart('ms-chart-ledger', labels, [
                     { label: 'Earnings', data: points.map(p => p.earnings), color: '#7cb342' },
                     { label: 'Payout',   data: points.map(p => p.payout),   color: '#d29922' }
                 ], { valueFmt: fmtGrin });
             } catch (e) {
+                toggleEmpty('ms-empty-network', true);
+                renderNetworkReadout([]);
                 toggleEmpty('ms-empty-hashrate', true);
                 toggleEmpty('ms-empty-miners', true);
                 toggleEmpty('ms-empty-ledger', true);
@@ -439,7 +482,7 @@
                 avgPage++; renderAvgPage();
             });
 
-            // Timeframe toggle → reload the three trend charts (leaderboards are unaffected).
+            // Timeframe toggle → reload every trend recorder (leaderboards are unaffected).
             const bar = document.getElementById('ms-rangebar');
             if (bar) {
                 bar.addEventListener('click', function (e) {

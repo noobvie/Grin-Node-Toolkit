@@ -4,10 +4,10 @@
 // The page loads it as a CLASSIC script at its original position. Never add defer / async /
 // type="module": the order and the shared global scope are what this code was written against.
         // Public blocks deck. All data comes from public endpoints:
-        //   /api/pool/stats                        summary KPIs (total/confirmed/immature/24h/7d)
+        //   /api/pool/stats                        summary KPIs (total/confirmed/immature/24h/7d) + their ツ
         //   /api/pool/blocks?limit&offset&status   paginated explorer rows (plain array; last page = short page)
         //   /api/pool/blocks/history?range         durable series → P-01 luck / P-02 found vs expected /
-        //                                          P-03 status / P-04 reward / P-05 UTC-hour heatmap
+        //                                          P-03 status / P-04 time between blocks / P-05 UTC-hour heatmap
         // Block deep-links are built by window.Explorer (js/branding.js) — the single source of
         // truth for explorer base + path scheme, which differs per explorer. This page only
         // primes the network cache Explorer reads (see the pool-info fetch below). All external
@@ -36,9 +36,10 @@
             if (s < 86400) return Math.floor(s / 3600) + 'h ago';
             return Math.floor(s / 86400) + 'd ago';
         }
-        // GRIN amount for the reward chart y-axis / tooltips (ツ = Grin symbol, matches the table).
+        // GRIN amount for the placard sub-lines (ツ = Grin symbol). Two decimals: a block's fees
+        // are a few hundredths, and the small print has no room for more.
         function fmtGrin(v) {
-            return Number(v || 0).toLocaleString('en-US', { maximumFractionDigits: 3 }) + ' ツ';
+            return Number(v || 0).toLocaleString('en-US', { maximumFractionDigits: 2 }) + ' ツ';
         }
 
         // Two success labels only: Maturing → Matured. 'paid' is a pool-internal step
@@ -89,6 +90,20 @@
                 g('kpi-confirmed', s.confirmed_blocks != null ? s.confirmed_blocks : '—');
                 g('kpi-immature', s.immature_blocks != null ? s.immature_blocks : '—');
                 g('kpi-recent', (s.blocks_24h != null ? s.blocks_24h : 0) + ' / ' + (s.blocks_7d != null ? s.blocks_7d : 0));
+                // ツ under each count: the recorded rewards, summed server-side. Blocks found
+                // counts orphans, but an orphan's reward never arrived, so its ツ is matured +
+                // maturing — never total_reward, which also sums orphans. The orphan count is
+                // printed beside it, because a tile's title tooltip never shows on a phone.
+                const has = v => v != null && isFinite(Number(v));
+                const orphans = has(s.total_blocks_found) && has(s.confirmed_blocks) && has(s.immature_blocks)
+                    ? Number(s.total_blocks_found) - Number(s.confirmed_blocks) - Number(s.immature_blocks) : 0;
+                g('kpi-total-grin', has(s.confirmed_reward) && has(s.immature_reward)
+                    ? fmtGrin(Number(s.confirmed_reward) + Number(s.immature_reward)) +
+                      (orphans > 0 ? ' · ' + orphans + ' orphaned' : '') : '—');
+                g('kpi-confirmed-grin', has(s.confirmed_reward) ? fmtGrin(s.confirmed_reward) : '—');
+                g('kpi-immature-grin', has(s.immature_reward) ? fmtGrin(s.immature_reward) : '—');
+                g('kpi-recent-grin', has(s.reward_24h) && has(s.reward_7d)
+                    ? Number(s.reward_24h).toLocaleString('en-US', { maximumFractionDigits: 2 }) + ' / ' + fmtGrin(s.reward_7d) : '—');
             } catch (e) { /* KPIs keep placeholders */ }
         }
 
@@ -154,6 +169,66 @@
         // a day (the 24h range buckets hourly, and the all-time range can bucket by month).
         function bucketLabels(points, bucket) {
             return PoolCharts.timeLabels(points.map(p => p.t), bucket);
+        }
+
+        // ── P-04 · time between blocks ─────────────────────────────────────────────────────────
+        // `intervals` = [{ height, t, gap, expected, orphaned }] oldest → newest (seconds;
+        // expected may be null). Every value put into markup goes through Number() and
+        // fmtDuration/toLocaleString — nothing from the API is inserted as text.
+        //
+        // The summary compares MEANS: the average gap against seconds ÷ expected blocks over the
+        // same stretches (time-weighted — the same ratio P-02 shows, and unbiased; a plain mean
+        // of the per-block expected values reads ~1.5% lucky when hashrate swings). Never the
+        // median: an exponential gap's median is ~69% of its mean, so it would read as luck that
+        // is not there. Outside 'all' the FIRST gap straddles the window start, and a gap picked
+        // that way runs ~2× expected on average (inspection paradox), so it is drawn but kept out
+        // of the averages; truncated, the list never starts with one.
+        const LONG_FACTOR = 3;
+        function renderGapSummary(intervals, truncated, range) {
+            const el = document.getElementById('bk-gap-summary');
+            const note = document.getElementById('bk-gap-note');
+            if (note) note.textContent = 'per block · dashed = expected · log scale' +
+                (truncated ? ' · latest ' + intervals.length + ' blocks in range' : '');
+            if (!el) return;
+            if (!intervals.length) { el.textContent = ''; return; }
+            const fd = PoolCharts.fmtDuration;
+            const num = v => Number(v) || 0;
+            const body = (!truncated && range !== 'all' && intervals.length > 1) ? intervals.slice(1) : intervals;
+            const paired = body.filter(x => x.expected != null && num(x.expected) > 0 && num(x.gap) > 0);
+            const sum = (a, f) => a.reduce((s, x) => s + f(x), 0);
+            let html;
+            if (paired.length) {
+                const sumGap = sum(paired, x => num(x.gap));
+                const sumLam = sum(paired, x => num(x.gap) / num(x.expected)); // expected blocks over those stretches
+                const long = paired.filter(x => num(x.gap) > LONG_FACTOR * num(x.expected)).length;
+                const chance = paired.length * Math.exp(-LONG_FACTOR);
+                html = 'Average gap <b>' + fd(sumGap / paired.length) + '</b> &middot; expected <b>' +
+                       fd(sumGap / sumLam) + '</b>' +
+                       (paired.length < intervals.length ? ' <span class="dim">(over ' + paired.length + ' of ' + intervals.length + ' blocks)</span>' : '') +
+                       ' &nbsp;|&nbsp; <b>' + long + '</b> above ' + LONG_FACTOR + '× expected <span class="dim">(about ' +
+                       (chance < 10 ? chance.toFixed(1) : Math.round(chance)) + ' by chance)</span>';
+            } else {
+                html = 'Average gap <b>' + fd(sum(body, x => num(x.gap)) / body.length) + '</b>';
+            }
+            let longest = intervals[0];
+            intervals.forEach(x => { if (num(x.gap) > num(longest.gap)) longest = x; });
+            html += ' &nbsp;|&nbsp; longest: <b>' + fd(longest.gap) + '</b> before block ' +
+                    num(longest.height).toLocaleString('en-US') +
+                    (num(longest.expected) > 0 ? ' <span class="dim">(' + (num(longest.gap) / num(longest.expected)).toFixed(1) + '× expected)</span>' : '');
+            // The gap still running. The chart plots only finished gaps, one per block, so time
+            // since the last block takes no space on it — a drought in progress is otherwise
+            // invisible.
+            const last = intervals[intervals.length - 1];
+            const since = Math.floor(Date.now() / 1000) - num(last.t);
+            let ref = null;
+            for (let i = intervals.length - 1; i >= 0 && ref == null; i--) if (num(intervals[i].expected) > 0) ref = num(intervals[i].expected);
+            if (since > 0) {
+                const dry = ref != null && since > LONG_FACTOR * ref;
+                html += ' &nbsp;|&nbsp; <span' + (dry ? ' class="bk-gap-long"' : '') + '>now: <b>' + fd(since) +
+                        '</b> since block ' + num(last.height).toLocaleString('en-US') + '</span>' +
+                        (ref != null ? ' <span class="dim">(expected about ' + fd(ref) + ')</span>' : '');
+            }
+            el.innerHTML = html;
         }
 
         function fmtExpected(v) {
@@ -247,12 +322,18 @@
             }
         }
 
+        // Only the newest request may draw: a slow 'all' answer landing after a quick switch back
+        // to 'week' would otherwise paint the wrong range under the active button.
+        let _histSeq = 0;
         async function loadBlockCharts() {
             const note = document.getElementById('bk-range-note');
             if (note) note.textContent = RANGE_NOTE[bkRange] || '';
             if (typeof PoolCharts === 'undefined') return;
+            const seq = ++_histSeq;
+            const range = bkRange;
             try {
-                const data = await getJson('/api/pool/blocks/history?range=' + encodeURIComponent(bkRange));
+                const data = await getJson('/api/pool/blocks/history?range=' + encodeURIComponent(range));
+                if (seq !== _histSeq) return;
                 const points = (data && Array.isArray(data.points)) ? data.points : [];
                 const luck = (data && Array.isArray(data.luck)) ? data.luck : [];
                 const status = (data && data.status) || { confirmed: 0, immature: 0, orphaned: 0 };
@@ -287,20 +368,28 @@
                     [status.confirmed || 0, status.immature || 0, status.orphaned || 0],
                     { colors: ['#3fb950', '#d29922', '#f85149'] });
 
-                // P-04 · cumulative reward area (running sum across the window).
-                let running = 0;
-                const cum = points.map(p => ({ t: p.t, v: (running += Number(p.reward) || 0) }));
-                toggleEmpty('bk-empty-reward', !hasPeriod);
-                PoolCharts.renderTrendLine('bk-chart-reward', cum,
-                    { label: 'Cumulative reward', bucketSeconds: bucket, valueFmt: fmtGrin, color: '#7cb342' });
+                // P-04 · time since the previous pool block, one dot per block, log axis, with the
+                // expected mean gap as a dashed line (null = a gap in the line, never 0).
+                // An orphan keeps its place (dropping it would merge two gaps) and is drawn hollow.
+                const intervals = (data && Array.isArray(data.intervals)) ? data.intervals : [];
+                toggleEmpty('bk-empty-gap', intervals.length === 0);
+                PoolCharts.renderIntervalChart('bk-chart-gap',
+                    intervals.map(x => ({ t: x.t, v: x.gap, ref: x.expected,
+                                          title: 'Block ' + Number(x.height).toLocaleString('en-US'),
+                                          hollow: x.orphaned === true,
+                                          note: x.orphaned === true ? 'Orphaned — no reward; still a block the pool found' : '' })),
+                    { label: 'Time since previous block', refLabel: 'Expected', longFactor: LONG_FACTOR });
+                renderGapSummary(intervals, !!(data && data.intervals_truncated), range);
 
                 // P-05 · UTC weekday × hour heatmap.
                 renderHeatmap(data && data.hours);
             } catch (e) {
+                if (seq !== _histSeq) return;
                 toggleEmpty('bk-empty-luck', true);
                 toggleEmpty('bk-empty-blocks', true);
                 toggleEmpty('bk-empty-status', true);
-                toggleEmpty('bk-empty-reward', true);
+                toggleEmpty('bk-empty-gap', true);
+                renderGapSummary([], false, range);
                 renderHeatmap(null);
             }
         }

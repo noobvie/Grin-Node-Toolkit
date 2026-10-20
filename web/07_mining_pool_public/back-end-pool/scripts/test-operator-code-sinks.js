@@ -265,10 +265,12 @@ for (const [re, label] of FORBIDDEN) {
 // SANDBOX them: both go through js/cms-frame.js (srcdoc, no allow-scripts) — pinned below
 // and in the srcdoc block above. page.html 3 → 2, post.html 4 → 3.
 //
-// blocks.html 7 (the P-05 heatmap): `wrap.innerHTML = ''` (empty
+// blocks.html 8. The P-05 heatmap: `wrap.innerHTML = ''` (empty
 // state), `wrap.innerHTML = html` (the weekday × hour table) and `summary.innerHTML` (busiest /
 // quietest hour). No API text reaches any of them: labels are the HEAT_DAYS constants, every count
 // goes through Number() || 0, hours are loop indexes, `expected` goes through fmtExpected().
+// The 8th is P-04's `bk-gap-summary` (renderGapSummary): every value goes through Number() and
+// then fmtDuration (digits + d/h/m/s), toLocaleString, toFixed or a count — no API string.
 //
 // account-settings 21: the page's script is js/pages/account-settings.js (keyed by that file, not
 // `…html#inline0`). The 21st is the P-09 link column's `dp-link-lines`: every string in it goes
@@ -276,7 +278,7 @@ for (const [re, label] of FORBIDDEN) {
 // property, and this tab's own pending URL is a textContent node (design §18.12).
 const INNER_HTML = {
   'public_html/js/pages/api-docs.js': 4,
-  'public_html/js/pages/blocks.js': 7,
+  'public_html/js/pages/blocks.js': 8,
   'public_html/js/pages/blog.js': 3,
   'public_html/js/pages/donate.js': 5,
   'public_html/js/pages/fortune-board.js': 5,

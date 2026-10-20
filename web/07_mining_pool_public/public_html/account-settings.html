@@ -126,9 +126,15 @@
     @media (prefers-reduced-motion: reduce) { .wled.on { animation: none; } }
     .wled-legend { margin: 10px 0 0; font-size: 12px; color: var(--text-dim); }
 
-    /* ── payout console: main row + ownership gate + two control columns ── */
-    .deck-row.acct-main { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); align-items: start; }
-    @media (max-width: 900px) { .deck-row.acct-main { grid-template-columns: minmax(0, 1fr); } }
+    /* ── payout console: ownership gate + withdraw form (amount | method) ── */
+    .withdraw-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 0 32px; align-items: start; }
+    .wd-method { padding-left: 32px; border-left: 1px solid var(--border-soft); }
+    .wd-note { margin: 16px 0 0; font-size: 12.5px; color: var(--text-mute); }
+    #acct-dest-goblin { max-width: 640px; }
+    @media (max-width: 900px) {
+      .withdraw-grid { grid-template-columns: minmax(0, 1fr); }
+      .wd-method { padding: 18px 0 0; margin-top: 18px; border-left: 0; border-top: 1px solid var(--border-soft); }
+    }
     .gate-block {
       border: 1px solid color-mix(in srgb, var(--info) 35%, var(--bg));
       background: color-mix(in srgb, var(--info) 5%, transparent);
@@ -151,8 +157,6 @@
     .net-preview b { color: var(--text); font-weight: 700; }
     .net-preview.is-short b { color: var(--danger, #f85149); }
 
-    /* single withdraw column (there is no per-account threshold) */
-    .withdraw-col { max-width: 560px; }
     /* h4 = one destination card inside the "Payout destinations" h3. Needs an explicit rule:
        an unstyled h4 renders bolder and LARGER than the 11px dim-mono h3 above it, which
        reads as the outer heading being the subordinate one. */
@@ -299,6 +303,20 @@
     .fx-table tr:last-child td { border-bottom: none; }
     .fx-table td.grin { color: var(--accent); }
     .fx-table td + td { padding-left: 12px; }
+
+    /* ── account details: two-column key/value list | earnings ───────────── */
+    .acct-details { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 0 36px; align-items: start; }
+    .acct-dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; }
+    /* Every cell keeps its rule: in two columns the last item is not the last row. */
+    .acct-dl li:last-child { border-bottom: 1px solid var(--border-soft); }
+    .acct-dl .v { text-align: right; min-width: 0; overflow-wrap: anywhere; }
+    #acct-donate-row { grid-column: 1 / -1; }
+    .acct-details .fx-head { margin-top: 0; padding-top: 0; border-top: 0; }
+    @media (max-width: 1100px) {
+      .acct-details { grid-template-columns: minmax(0, 1fr); }
+      .acct-details .fx-head { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border-soft); }
+    }
+    @media (max-width: 600px) { .acct-dl { grid-template-columns: minmax(0, 1fr); } }
 
     /* ── ledger pager + export row ───────────────────────────────────────── */
     .pager-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
@@ -571,7 +589,9 @@
                     </div>
                 </div>
 
-                <div class="deck-row acct-main">
+                <!-- P-04 and P-05 each own a full-width row: side by side, the long payout form
+                     left the short details card trailing a tall empty gap. -->
+                <div class="deck-row">
                     <!-- ═══ P-04 · PAYOUT CONTROLS (the ownership proof it reads sits in P-00) ═══ -->
                     <div class="panel"><span class="screws"></span>
                         <h2 class="panel-title"><span class="tag">P-04</span> Payout controls <span class="right"><span class="pstat" id="acct-payout-status" style="display:none"></span></span></h2>
@@ -589,6 +609,10 @@
                                     mining and want to withdraw what you have, contact the pool operator to arrange a manual payout.
                                     <a data-brand="contact-link" style="display:none">Contact support</a>
                                 </div>
+                                <!-- Two columns on a wide screen (how much | how it is paid), stacked in
+                                     that same order on a narrow one. -->
+                                <div class="withdraw-grid">
+                                <div class="wd-amount">
                                 <div class="form-group">
                                     <label for="acct-amount">Amount (GRIN) &middot;
                                         <a class="amt-chip" id="acct-amt-min" title="Fill the pool minimum">min <span id="acct-pool-min">—</span> ツ</a> &middot;
@@ -611,6 +635,26 @@
                                         &middot; you receive <b><span id="acct-net-val">—</span> ツ</b>
                                     </p>
                                 </div>
+
+                                <div class="pending-strip" id="acct-pending-strip">
+                                    <span id="acct-pending-text"></span>
+                                </div>
+
+                                <!-- Closing note is two sentences. What it leaves out:
+                                     · the fee economics → the title on the "Withdrawal fee" label (the live
+                                       fee → you-receive preview under the amount field stays VISIBLE; it is a
+                                       number, and hiding what a payout costs is the one cut not to make).
+                                     · "while one is in flight it shows above" → the pending strip says so itself.
+                                     · no manual cancel, because a payout that looks failed can still land
+                                       (memory project_pool_account_page).
+                                     · after a payout is returned, a short cooldown applies before the next
+                                       request on ANY rail — the server says so when it refuses one. -->
+                                <p class="note wd-note">
+                                    One payout at a time. One that can't be delivered returns to your balance automatically.
+                                </p>
+                                </div>
+
+                                <div class="wd-method">
                                 <!-- Radio ⇄ pane visibility is driven by the rail registry (js/payout-methods.js),
                                      not by hardcoded ids in this page. Each rail owns one label + one pane. -->
                                 <div class="radio-row" role="radiogroup" aria-label="Payout method">
@@ -712,25 +756,9 @@
                                     <button class="btn-save" id="acct-nostr-send" disabled>Send to my Goblin wallet</button>
                                     <div class="acct-msg" id="acct-nostr-send-msg"></div>
                                 </div>
+                                </div>
+                                </div>
                             </div>
-
-                            <div class="pending-strip" id="acct-pending-strip">
-                                <span id="acct-pending-text"></span>
-                            </div>
-
-                            <!-- Closing note is two sentences. What it leaves out:
-                                 · the fee economics → the title on the "Withdrawal fee" label (the live
-                                   fee → you-receive preview under the amount field stays VISIBLE; it is a
-                                   number, and hiding what a payout costs is the one cut not to make). The
-                                   #acct-fee-note span that carried it is gone with its JS.
-                                 · "while one is in flight it shows above" → the pending strip says so itself.
-                                 · no manual cancel, because a payout that looks failed can still land
-                                   (memory project_pool_account_page).
-                                 · after a payout is returned, a short cooldown applies before the next
-                                   request on ANY rail — the server says so when it refuses one. -->
-                            <p class="note" style="margin:16px 0 0;font-size:12.5px;color:var(--text-mute);">
-                                One payout at a time. One that can't be delivered returns to your balance automatically.
-                            </p>
 
                             <!-- ═══ PAYOUT DESTINATIONS ═══════════════════════════════════════════
                                  Only rails that pay somewhere OTHER than this address's own wallet appear
@@ -795,21 +823,26 @@
                             </div>
                         </div>
                     </div>
+                </div>
 
+                <div class="deck-row">
                     <!-- ═══ P-05 · ACCOUNT DETAILS + EARNINGS ═══ -->
                     <div class="panel"><span class="screws"></span>
                         <h2 class="panel-title"><span class="tag">P-05</span> Account details</h2>
-                        <div class="panel-body">
-                            <ul class="detail-list">
+                        <div class="panel-body acct-details">
+                            <!-- Wide: details (two columns, read in pairs) | earnings. Each pair answers
+                                 one question: alive? · how long? · shares · results · payout. Narrow: one
+                                 column, same order. -->
+                            <ul class="detail-list acct-dl">
                                 <li><span class="k">Status</span><span class="v" id="acct-status">—</span></li>
+                                <li><span class="k">Last seen</span><span class="v" id="acct-last-seen">—</span></li>
                                 <li><span class="k">First seen</span><span class="v" id="acct-since">—</span></li>
                                 <li><span class="k">Member for</span><span class="v" id="acct-age">—</span></li>
-                                <li><span class="k">Last seen</span><span class="v" id="acct-last-seen">—</span></li>
                                 <li><span class="k">Total shares submitted</span><span class="v" id="acct-shares">—</span></li>
-                                <li><span class="k">Blocks found</span><span class="v" id="acct-blocks">—</span></li>
                                 <li><span class="k">Last share</span><span class="v" id="acct-last-share">—</span></li>
-                                <li><span class="k">Pending withdrawal</span><span class="v" id="acct-pending">—</span></li>
+                                <li><span class="k">Blocks found</span><span class="v" id="acct-blocks">—</span></li>
                                 <li><span class="k">Payouts made</span><span class="v" id="acct-paid-count">—</span></li>
+                                <li><span class="k">Pending withdrawal</span><span class="v" id="acct-pending">—</span></li>
                                 <li><span class="k">Minimum payout (pool)</span><span class="v" id="acct-min">—</span></li>
                                 <!-- Donation row (design §18.8, renderDonationRow). A `donateN`
                                      tag in a rig's worker name donates N % of what THAT rig's
@@ -825,6 +858,7 @@
                                      under the amount field already discloses it where it matters. -->
                             </ul>
 
+                            <div class="fx-col">
                             <div class="fx-head">Earnings <span class="src" id="fx-src">est. &middot; spot price</span></div>
                             <table class="fx-table" aria-label="Earnings converted to BTC and USD">
                                 <thead><tr><th>Period</th><th>GRIN</th><th>BTC</th><th>USD</th></tr></thead>
@@ -835,6 +869,7 @@
                                     <tr><td>Last 30 days</td><td class="grin">—</td><td>—</td><td>—</td></tr>
                                 </tbody>
                             </table>
+                            </div>
                         </div>
                     </div>
                 </div>

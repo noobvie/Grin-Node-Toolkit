@@ -210,7 +210,8 @@ const NO_LIVE = Object.freeze({ rigs_online: 0, rigs_donating: 0, pct_min: 0, pc
 //            tagged rig mining NOW — rigs_donating > 0 — gated on `active` like the badges,
 //            and counting a tagged address that has no card yet), total_donated (lifetime Σ)
 //   ranking  the four settings the page turns into its one ranking sentence, plus
-//            banner_slots — N of the page's Top-N spotlight (0 = no spotlight, no banners)
+//            banner_slots — N of the page's Top-N spotlight (0 = no spotlight, no banners) —
+//            and name_change_days, the donor name change limit (0 = any time)
 //
 // opts:
 //   ds          donorSettings() — bounded (window ≥ 0, loyalty 0–100, cap ≥ 1, expiry ≥ 0,
@@ -333,7 +334,8 @@ function donorWall(db, opts = {}) {
       loyalty_percent_per_month: ds.loyaltyPercentPerMonth,
       loyalty_cap: ds.loyaltyCap,
       name_expiry_months: ds.nameExpiryMonths,
-      banner_slots: slots
+      banner_slots: slots,
+      name_change_days: ds.nameChangeDays
     }
   };
 }

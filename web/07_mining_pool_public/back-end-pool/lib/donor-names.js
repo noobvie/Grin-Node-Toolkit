@@ -108,7 +108,9 @@ function donorSettings(section, poolName) {
     loyaltyCap: boundNum(s.donor_loyalty_cap, 1, 100, 3),
     nameExpiryMonths: boundInt(s.donor_name_expiry_months, 0, 120, 12),
     // Design §18.6: how many league ranks show an approved banner. 0 = banners off.
-    bannerSlots: boundInt(s.donor_banner_slots, 0, 10, 5)
+    bannerSlots: boundInt(s.donor_banner_slots, 0, 10, 5),
+    // How many days apart a donor may change their name. 0 = any time.
+    nameChangeDays: boundInt(s.donor_name_change_days, 0, 90, 7)
   };
 }
 

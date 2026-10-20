@@ -751,6 +751,7 @@ PASS      any-password-you-choose</code>
       donor_name_expiry_months: 12,          // masked again this long after the last debit; 0 = never
       donor_banner_slots: 5,                 // design §18: top N league donors show their approved
                                              // banner; 0 = banners off (int 0-10)
+      donor_name_change_days: 7,             // one name change per N days; 0 = any time (int 0-90)
       // Join bonus — paid once per address, only after its first successful withdrawal
       join_bonus_enabled: 'false',
       join_bonus_amount: 0.1,                // GRIN
@@ -1396,6 +1397,7 @@ PASS      any-password-you-choose</code>
         },
         donor_name_expiry_months: intRange('donor_name_expiry_months', 0, 120),
         donor_banner_slots: intRange('donor_banner_slots', 0, 10),
+        donor_name_change_days: intRange('donor_name_change_days', 0, 90),
         join_bonus_amount: nonNeg('join_bonus_amount'),
         jackpot_amount: nonNeg('jackpot_amount'),
         streak_bonus_per_week_percent: percent('streak_bonus_per_week_percent'),

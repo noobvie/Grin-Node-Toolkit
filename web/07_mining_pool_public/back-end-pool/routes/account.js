@@ -1163,7 +1163,7 @@ module.exports = function createAccountRoutes(ctx) {
   // ─── Donor profile — nickname + banner + link (design §18.4–§18.6, §18.12) ──────────────
   // A donor sets a public name, a banner (shown only for the top N of the league) and one link.
   // A NAME is checked automatically and goes live at once (script07_design_games.md §19.17.6): the name rule with the donor
-  // shape, banned names, "taken", one change per 7 days. A BANNER and a LINK are PRE-MODERATED:
+  // shape, banned names, "taken", the name change limit. A BANNER and a LINK are PRE-MODERATED:
   // each becomes a pending donor_requests row that nothing public reads until an admin approves it.
   //
   // The writes need ONE proof (mining IP or rig password) aged past the payout-destination floor
@@ -1201,7 +1201,7 @@ module.exports = function createAccountRoutes(ctx) {
     name_not_allowed: [400, DonorProfiles.NAME_TEXT.name_not_allowed],
     name_unavailable: [409, DonorProfiles.NAME_TEXT.name_unavailable],
     unchanged: [409, DonorProfiles.NAME_TEXT.unchanged],
-    name_cooldown: [429, `A donor name can be changed once every ${DonorProfiles.NAME_CHANGE_DAYS} days.`],
+    name_cooldown: [429, 'Your donor name cannot be changed again yet.'],
   };
   const donorRefuse = (res, code, error, extra) => {
     const [status, text] = DONOR_REFUSAL[code] || [code === 'banner_too_large' ? 413 : 400, 'Refused'];
@@ -1226,16 +1226,17 @@ module.exports = function createAccountRoutes(ctx) {
       if (bad) return donorRefuse(res, bad);
       const v = DonorProfiles.validateName(req.body ? req.body.name : undefined);
       if (!v.ok) return donorRefuse(res, v.code, v.error);
-      // Before the proofs: unchanged, the 7-day limit, address-like. None reads a word list, and
+      // Before the proofs: unchanged, the change limit, address-like. None reads a word list, and
       // the account page already shows the live name and when it can change.
-      const pre = DonorProfiles.namePrecheck(db, addr, v.name);
+      const ds = donorSettings(poolSettings.getSection('incentives'), poolSettings.getSection('pool_info').pool_name);
+      const pre = DonorProfiles.namePrecheck(db, addr, v.name, { ds });
       if (pre) return donorRefuse(res, pre.code, pre.error, pre.available_at ? { available_at: pre.available_at } : null);
       // The word lists, banned names and "taken" are checked only AFTER the proof: a stranger
       // holding the address must not be able to probe the operator's list (the owner can, at the
       // `withdraw` rate — and every answer from a list is the same generic sentence).
       const proof = await requireAgedProof(addr, req.body, reqIp, 'donor_profile_submit');
       if (!proof.ok) return res.status(proof.code).json({ error: proof.error, reason: proof.reason });
-      const r = DonorProfiles.submitName(db, addr, v.name, { isDonor: true, rule: donorNameRule() });
+      const r = DonorProfiles.submitName(db, addr, v.name, { isDonor: true, rule: donorNameRule(), ds });
       if (!r.ok) {
         // The row is about the PROOF, which passed (`ok`); the name was refused. The refused text
         // is stored nowhere and `hit` (which list) never leaves the server.

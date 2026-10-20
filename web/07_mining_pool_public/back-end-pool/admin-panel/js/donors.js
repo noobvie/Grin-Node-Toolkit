@@ -557,7 +557,7 @@ async function removeLive(addr, kind, msgId) {
   const WORDS = {
     banner: ['Remove the live banner', `${addr}\n\nIt comes off the donor wall now. The donor can submit a new one, which goes through review again.`, 'Banner removed.'],
     link: ['Remove the live link', `${addr}\n\nIt comes off the donor wall now. The donor can submit a new one, which goes through review again.`, 'Link removed.'],
-    name: ['Remove the live name', `${addr}\n\nIt comes off the donor wall now. The donor can set another name when their 7-day change limit allows; it is checked automatically. To stop this name coming back in any spelling, ban it instead.`, 'Name removed.']
+    name: ['Remove the live name', `${addr}\n\nIt comes off the donor wall now. The donor can set another name when their name change limit allows; it is checked automatically. To stop this name coming back in any spelling, ban it instead.`, 'Name removed.']
   };
   const w = WORDS[kind] || WORDS.name;
   const reason = await askReason({

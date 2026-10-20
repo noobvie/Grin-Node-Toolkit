@@ -346,9 +346,11 @@ console.log('\n[9] §18.6 — donors.html');
   }
   ok('no input id in the form that is not an incentives key (or settings-skip)', stray.length === 0, stray.join(','));
   for (const k of ['allow_miner_donations', 'donation_address', 'donor_banner_slots',
-                   'donor_rank_window_days', 'donor_loyalty_percent_per_month', 'donor_loyalty_cap', 'donor_name_expiry_months']) {
+                   'donor_rank_window_days', 'donor_loyalty_percent_per_month', 'donor_loyalty_cap', 'donor_name_expiry_months',
+                   'donor_name_change_days']) {
     ok(`form carries ${k}`, present.has(k));
   }
+  ok('name change days carries the validator bounds (0–90)', /id="donor_name_change_days"[^>]*min="0" max="90"/.test(form));
   ok('the removed donor_censored_display is on no admin page', !panelFiles().some((f) => /donor_censored_display/.test(read(f))));
   ok('C4: the retired flag-word list is on no admin page (its words moved to Settings → Names)',
      !panelFiles().some((f) => /id="donor_name_blocklist"/.test(read(f))));

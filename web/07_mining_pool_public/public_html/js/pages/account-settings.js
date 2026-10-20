@@ -596,6 +596,13 @@
             return '<div class="dp-line' + (cls ? ' ' + cls : '') + '">' +
                 (label ? '<b>' + escHtml(label) + '</b> ' : '') + escHtml(text) + '</div>';
         }
+        // The name change limit in words, from the summary's name.change_days (the operator's
+        // setting): '' when there is no limit (0), so the caller's sentence simply ends earlier.
+        function dpChangeEvery(days, prefix) {
+            const d = Number.isSafeInteger(days) && days >= 0 ? days : 7;
+            if (d === 0) return '';
+            return prefix + (d === 1 ? 'once a day' : 'once every ' + d + ' days');
+        }
         // "Rejected" / "Removed" news, with the operator's reason when one was given. The reason
         // IS shown on this page by design (§18.9) — the admin form says so beside the field.
         function dpVerdict(kind, what, v) {
@@ -639,7 +646,7 @@
             } else {
                 lead = dpLine('', '', 'Choose the name the donor wall shows for this address' +
                     (slots > 0 ? ', and a banner for when you rank in the top ' + slots + '.' : '.') +
-                    ' A name is checked automatically and shows at once if it passes; you can change it once every 7 days. A banner or a link is reviewed by the pool before it appears. If the pool turns down a banner or a link, or takes anything off the wall, the reason is shown here, on a page anyone with your address can open.');
+                    ' A name is checked automatically and shows at once if it passes' + dpChangeEvery(dp.name.change_days, '; you can change it ') + '. A banner or a link is reviewed by the pool before it appears. If the pool turns down a banner or a link, or takes anything off the wall, the reason is shown here, on a page anyone with your address can open.');
             }
             $id('dp-lead').innerHTML = lead;
 
@@ -660,7 +667,7 @@
             nl.push(dpVerdict('name', 'rejected', n.rejected));
             nl.push(dpVerdict('name', 'removed', n.removed));
             if (Number.isFinite(n.change_available_at) && n.change_available_at > 0) {
-                nl.push(dpLine('', 'Next change', 'A donor name can be changed once every 7 days. You can change yours again from ' + fmtWhen(n.change_available_at) + '.'));
+                nl.push(dpLine('', 'Next change', dpChangeEvery(n.change_days, 'A donor name can be changed ') + '. You can change yours again from ' + fmtWhen(n.change_available_at) + '.'));
             }
             if (!nl.join('')) nl.push(dpLine('', '', 'No donor name yet. Until you set one, the wall shows your address, masked.'));
             $id('dp-name-lines').innerHTML = nl.join('');

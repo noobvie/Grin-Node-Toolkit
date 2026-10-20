@@ -129,7 +129,7 @@ function keys(v, out = new Set()) {
   check('shape: top level is league/past/totals/ranking (censored_display is gone, §18.6)',
         Object.keys(w).sort().join(',') === 'league,past,ranking,totals');
   check('shape: ranking echoes the five bounded settings (banner_slots default 5)',
-        JSON.stringify(w.ranking) === JSON.stringify({ window_days: 365, loyalty_percent_per_month: 10, loyalty_cap: 3, name_expiry_months: 12, banner_slots: 5 }));
+        JSON.stringify(w.ranking) === JSON.stringify({ window_days: 365, loyalty_percent_per_month: 10, loyalty_cap: 3, name_expiry_months: 12, banner_slots: 5, name_change_days: 7 }));
 }
 
 // ── window: drops a donor whose last debit is older; 0 = lifetime ────────────────────────

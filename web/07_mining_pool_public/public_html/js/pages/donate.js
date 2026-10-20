@@ -256,6 +256,13 @@
                         ? 'A name and banner stop showing ' + exp + ' ' + plural(exp, 'month', 'months') + ' after your last donation, and come back when you donate again.'
                         : 'A name and banner stay up for as long as the pool keeps them up.');
                 }
+                // The name change limit: the operator's donor_name_change_days, 0–90, 0 = any time.
+                var chg = Number(ranking.name_change_days);
+                if (isFinite(chg) && chg >= 0) {
+                    chg = Math.floor(chg);
+                    set('dn-name-change', chg === 0 ? 'You can change it at any time.'
+                        : 'You can change it ' + (chg === 1 ? 'once a day.' : 'once every ' + chg + ' days.'));
+                }
 
                 var grid = document.getElementById('donor-grid');
                 var empty = document.getElementById('donor-empty');

@@ -316,7 +316,7 @@ module.exports = function createAdminDonorsRoutes(ctx, guards) {
         state: req.query.state, q: typeof req.query.q === 'string' ? req.query.q : '', rule: donorNameRule()
       });
       if (!r.ok) return donorAdminRefuse(res, r);
-      res.json({ success: true, state: r.state, total: r.total, names: r.rows, change_days: DonorProfiles.NAME_CHANGE_DAYS });
+      res.json({ success: true, state: r.state, total: r.total, names: r.rows, change_days: DonorProfiles.nameChangeDays(donorAdminSettings()) });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

@@ -23,7 +23,7 @@
     /* Donor names: the name is set in the mono face, so a doubled space or an O-for-0 swap shows. */
     .name-cell { font-family: var(--font-mono); font-weight: 600; overflow-wrap: anywhere; }
     #ban-form input[type="text"] { font-size: .85rem; padding: .3rem .5rem; min-width: 12rem; }
-    /* settings.css's .form-row is a 2-column grid; the ranking card has three fields. */
+    /* settings.css's .form-row is a 2-column grid; the ranking and donor-profile rows have three fields. */
     .form-row.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
     @media (max-width: 900px) { .form-row.cols-3 { grid-template-columns: 1fr; } }
 
@@ -175,7 +175,7 @@
         blocked-word list — the built-in list plus your own words on
         <a href="settings-names.html">Settings → Names</a>; not a banned name; not a name another donor
         already uses, in any spelling (<code>Acme &amp; Co.</code> = <code>ACME-co</code>). A donor can
-        change it once every 7 days. <em>Remove</em> takes a name off the wall (the reason is shown to
+        change it as often as the <em>Name change limit</em> in Donation settings below allows. <em>Remove</em> takes a name off the wall (the reason is shown to
         the donor). <em>Ban name</em> removes it from everyone who holds it and stops every spelling of
         it from being set again. <em>Block</em> stops an address from setting a name, a banner or a link. A
         <strong>hint</strong> means the rule would refuse a live name today — for example because of a
@@ -304,7 +304,7 @@
               — one list for donor names and game nicknames. (The old "flag words" list here was retired;
               the words you had added to it were moved there once.)
             </div>
-            <div class="form-row">
+            <div class="form-row cols-3">
               <div class="form-group">
                 <label for="donor_banner_slots">Banner slots</label>
                 <input type="number" id="donor_banner_slots" name="donor_banner_slots" min="0" max="10" step="1">
@@ -314,6 +314,11 @@
                 <label for="donor_name_expiry_months">Profile expiry (months)</label>
                 <input type="number" id="donor_name_expiry_months" name="donor_name_expiry_months" min="0" max="120" step="1">
                 <div class="helper-text">An approved name or banner stops showing this many months after the later of the last donation and its approval. 0 = never.</div>
+              </div>
+              <div class="form-group">
+                <label for="donor_name_change_days">Name change limit (days)</label>
+                <input type="number" id="donor_name_change_days" name="donor_name_change_days" min="0" max="90" step="1">
+                <div class="helper-text">A donor may change their name once every this many days, counted from their last change (an admin removal does not reset it). 0 = any time. Maximum 90.</div>
               </div>
             </div>
           </div>

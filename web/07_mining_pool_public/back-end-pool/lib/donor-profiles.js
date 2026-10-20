@@ -10,7 +10,7 @@
 // NAMES are AUTO-CHECKED and live at once (games design D29): lib/name-rule.js with the donor shape (§18.5's
 // character set, §16.4's reserved words, the code seed + the operator's `names.blocked_words`),
 // then banned_donor_names, then "taken" (another address's approved name with the same matching
-// form), then a 7-day change limit. BANNERS and LINKS stay PRE-moderated — a word list can check
+// form), then the change limit (`donor_name_change_days`). BANNERS and LINKS stay PRE-moderated — a word list can check
 // text, never an image or where a URL goes.
 //
 // No dependency on index.js (it starts a server on require) and none on donor-ledger.js:
@@ -67,11 +67,17 @@ const KINDS = Object.freeze(['name', 'banner', 'link']);
 const NAME_MIN = NameRule.DONOR_MIN;
 const NAME_MAX = NameRule.DONOR_MAX;
 const NAME_RULE = NameRule.DONOR_RULE;
-// One change per 7 days, counted from the donor's own last change (an admin removal does not
-// reset it). A code constant on purpose (script07_design_games.md §19.17.6): a form field for a
-// knob nobody turns.
+// One change per N days, counted from the donor's own last change (an admin removal does not
+// reset it). N is the `donor_name_change_days` setting (Admin → Donors, 0 = any time, 0–90),
+// read through donorSettings(); NAME_CHANGE_DAYS is the default when no `ds` reaches a caller.
 const NAME_CHANGE_DAYS = 7;
-const NAME_CHANGE_SECS = NAME_CHANGE_DAYS * 86400;
+const nameChangeDays = (ds) => {
+  const d = ds && Number.isFinite(ds.nameChangeDays) ? Math.floor(ds.nameChangeDays) : NAME_CHANGE_DAYS;
+  return d >= 0 && d <= 90 ? d : NAME_CHANGE_DAYS;
+};
+const nameCooldownText = (days, at) =>
+  `A donor name can be changed ${days === 1 ? 'once a day' : `once every ${days} days`}. ` +
+  `Your next change is possible from ${new Date(at * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC.`;
 
 // The answers a refused name gets. The rule's own list (reserved / blocked) and the database's
 // (banned / taken) are deliberately GENERIC: which list hit, and whether a name is banned or
@@ -451,27 +457,29 @@ const isBannedNorm = (db, norm) => !!db.prepare('SELECT 1 FROM banned_donor_name
 // When this address may next change its name (unix), or null = now. Counted from its OWN last
 // change: the newest name row that was ever live or submitted (approved, replaced, removed) —
 // an admin removal keeps the row's submitted_at, so it does not reset the clock (the brake on
-// "set an offensive name, get it removed, set the next one").
-function nameChangeAvailableAt(db, address, now) {
+// "set an offensive name, get it removed, set the next one"). `days` 0 = no limit.
+function nameChangeAvailableAt(db, address, now, days = NAME_CHANGE_DAYS) {
+  if (!(days > 0)) return null;
   const r = db.prepare(`
     SELECT MAX(submitted_at) AS t FROM donor_requests
     WHERE grin_address = ? AND kind = 'name' AND status IN ('approved', 'replaced', 'removed')
   `).get(address);
-  const at = r && Number.isFinite(r.t) ? r.t + NAME_CHANGE_SECS : null;
+  const at = r && Number.isFinite(r.t) ? r.t + days * 86400 : null;
   return at !== null && at > now ? at : null;
 }
 
 // The checks that run BEFORE the route spends a proof attempt: none of them reads a word list,
 // so a stranger holding the address learns nothing from them that the account page does not
-// already show (the live name, and when it can change). → null | { ok:false, code, error?, available_at? }
+// already show (the live name, and when it can change). opts.ds = donorSettings() (the change
+// limit). → null | { ok:false, code, error?, available_at? }
 function namePrecheck(db, address, name, opts = {}) {
   const now = clock(opts);
   const live = liveNameRow(db, address);
   if (live && live.name === name) return { ok: false, code: 'unchanged', error: NAME_TEXT.unchanged };
-  const at = nameChangeAvailableAt(db, address, now);
+  const days = nameChangeDays(opts.ds);
+  const at = nameChangeAvailableAt(db, address, now, days);
   if (at !== null) {
-    return { ok: false, code: 'name_cooldown', available_at: at,
-             error: `A donor name can be changed once every ${NAME_CHANGE_DAYS} days. Your next change is possible from ${new Date(at * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC.` };
+    return { ok: false, code: 'name_cooldown', available_at: at, error: nameCooldownText(days, at) };
   }
   const lower = name.toLowerCase();
   if (lower.startsWith('grin1') || lower.startsWith('tgrin1')) {
@@ -496,7 +504,7 @@ function submitName(db, address, rawName, opts = {}) {
     return db.transaction(() => {
       const bad = gateSubmit(db, address, opts);
       if (bad) return { ok: false, code: bad };
-      const pre = namePrecheck(db, address, v.name, { now });
+      const pre = namePrecheck(db, address, v.name, { now, ds: opts.ds });
       if (pre) return pre;
       const r = NameRule.check(v.name, ctx);
       if (!r.ok) {
@@ -590,7 +598,7 @@ function bannedNames(db) {
 // ── migration: legacy pending names → the automatic check ─────────────────────────────────
 // Run at every start (index.js), after the blocked-word carry-over. Idempotent: nothing else
 // writes a pending name, so after the first run it finds none. Each pending name, oldest first,
-// goes through the same check a submit does, minus the 7-day limit (the request predates it):
+// goes through the same check a submit does, minus the change limit (the request predates it):
 // pass and available → approved (the address's previous approved → replaced), else → rejected
 // with a reason the donor can read. Already-APPROVED names are KEPT — a human approved them —
 // and the admin list flags any pair that now collides. Each decision writes one audit row
@@ -914,7 +922,7 @@ const READ_COLS = 'id, grin_address, kind, status, file, width, height, submitte
 //   lastDonatedAt  unix time of the last donation debit, null = never donated (the caller reads
 //                  the ledger; see the header)
 //   slotRank       the address's league rank, null when not in the league
-//   ds             donorSettings() (nameExpiryMonths, bannerSlots)
+//   ds             donorSettings() (nameExpiryMonths, bannerSlots, nameChangeDays)
 //   now
 // Never carries the pending name, the pending URL, any image bytes, decided_by, or who removed
 // an item.
@@ -995,8 +1003,10 @@ function profileFor(db, address, opts = {}) {
       pending_at: namePend ? namePend.submitted_at : null,
       rejected: nameWord.rejected,
       removed: nameWord.removed,
-      // When the 7-day change limit lets this address set a name again; null = now.
-      change_available_at: nameChangeAvailableAt(db, address, now)
+      // When the change limit lets this address set a name again; null = now. change_days is
+      // the limit itself (0 = none), so the page's wording follows the setting.
+      change_available_at: nameChangeAvailableAt(db, address, now, nameChangeDays(opts.ds)),
+      change_days: nameChangeDays(opts.ds)
     },
     banner: {
       live_url: liveUrl,
@@ -1298,7 +1308,7 @@ module.exports = {
   NAME_MIN, NAME_MAX, NAME_RULE, NAME_CHANGE_DAYS, NAME_TEXT,
   MAX_BANNER_BYTES, BANNER, BANNER_RULE,
   LINK_MAX, LINK_RULE, LINK_TEXT, linksSupported,
-  validateName, nameRuleContext, namePrecheck, nameChangeAvailableAt,
+  validateName, nameRuleContext, namePrecheck, nameChangeAvailableAt, nameChangeDays,
   sniffBanner, parseDimensions, validateBanner,
   validateLink, linkPrecheck, readLink,
   cleanReason,

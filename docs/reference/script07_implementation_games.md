@@ -1626,7 +1626,7 @@ the build added to, or changed against, the contract and the prompt:
    nickname rule gains the same three (fixture cases).
 4. **Order — what runs before the proofs and what after.** Before (cheap, reads no list): donations off → account →
    blocked → not a donor → shape → `409 unchanged` → the 7-day limit (`429 name_cooldown` + `available_at`) →
-   `400 name_address`. After both proofs: reserved / pool name / seed / `names.blocked_words` → `400 name_not_allowed`;
+   `400 name_address`. After the proof: reserved / pool name / seed / `names.blocked_words` → `400 name_not_allowed`;
    banned or taken → `409 name_unavailable` (one body for both). §18.11 Part 2 #4 put the input before the proofs so a
    typo never spends a proof attempt — still true for every refusal that explains itself — but a word-list answer
    before the proofs would let anyone holding the (public) address probe the operator's list. The owner can probe it

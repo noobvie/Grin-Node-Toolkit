@@ -22,8 +22,9 @@
         // (No public cancel. A Tor payout is tried ONCE: paid, refunded at once when the pool can
         //  prove it did not go out, or Held while it confirms; slatepack refunds when its window
         //  passes. Whenever Tor says no, the Tor pane OFFERS Slatepack — one button, never automatic.)
-        // Every payout action sends `proof` — a recent mining IP (v4/v6) or the rig's stratum
-        // password — from the single ownership-gate input (one gate, all actions).
+        // Every payout action and every P-09 donor-profile change sends `proof` — a recent mining
+        // IP (v4/v6) or the rig's stratum password — from the single ownership-gate input in P-00
+        // (one gate, all actions). Only the Goblin destination register asks for both, in P-04.
         // All DOM writes use textContent or escHtml — addresses/events are external data.
         //
         // Demo mode: the address below renders a built-in sample dataset with no API calls,
@@ -165,6 +166,7 @@
 
                 renderSummary(a);
                 $id('acct-view').style.display = '';
+                $id('acct-gate').style.display = '';
                 setMsg(msg, '', true);
                 ledger.in.page = 0; ledger.out.page = 0; wd.page = 0;
                 // Drop any revealed kernels — they belong to whichever address was looked up
@@ -187,6 +189,7 @@
                 resetTorStatus();
             } catch (e) {
                 $id('acct-view').style.display = 'none';
+                $id('acct-gate').style.display = 'none';
                 $id('acct-lamp').style.display = 'none';
                 setMsg(msg, e.message === 'Account not found'
                     ? 'No mining account for this address yet — point a miner at the pool first.'
@@ -201,7 +204,7 @@
         // address B's form — and one rig mining to both makes A's IP a VALID proof for B, so a
         // click paid out an amount typed for the other address.
         function forgetPreviousAddress() {
-            dpReset();                                   // P-09's proofs, file and pending text
+            dpReset();                                   // P-09's typed fields, file and pending text
             torNo = null;                                // another address's Tor answer and offer
             setMsg($id('acct-withdraw-msg'), '', true);
             const proof = $id('acct-ip-proof');
@@ -329,7 +332,7 @@
                 // deleted (audit §J3-4), and still verifies. "Nothing recorded" would be a lie
                 // to the one miner who most needs to know they can still reach their wallet.
                 return (p.anchor || a.has_recorded_ip || a.has_recorded_pass)
-                    ? 'Only your original recorded proof is still on record for this address — it works for payouts. Mine a share to put a current one back on record.'
+                    ? 'Only your original recorded proof is still on record for this address — it works for payouts, but not for your donor profile. Mine a share to put a current one back on record.'
                     : NO_PROOF_HINT;
             }
             const parts = [];
@@ -545,16 +548,18 @@
         // donations_off / nothing_* refusals already arrive as sentences in `error`, so only the
         // codes whose `error` is terse, or absent, need a line here.
         const DP_REASONS = {
-            // A proof that verified, but as the OTHER kind: an IP typed into the password box, or
-            // the password into the IP box (requireBothProofs checks each leg's method).
-            wrong_kind: 'That proof is valid, but it is in the wrong box. Proof 1 takes a mining IP, and Proof 2 takes your rig password.',
-            ip_no_match: 'That mining IP is not on record for this address.',
-            password_no_match: 'That rig password is not on record for this address.',
-            no_match: 'That proof did not match this address\'s records. Proof 1 is a recent mining IP, and Proof 2 is the password your rig logs in with.',
+            no_match: 'That ownership proof did not match this address\'s records. Enter a recent mining IP or the password your rig logs in with at the top of the page.',
             too_many_attempts: 'Too many failed attempts. Wait 5 minutes, then try again.',
             no_recorded_proof: 'Nothing is on record for this address yet. Mine at least one accepted share first.',
             bad_upload: 'The upload could not be read. Choose the image again and retry.'
         };
+        // Refusals that would refuse every field alike — the proof, the throttle, or a fact about
+        // the address or the pool. dpSave stops at the first one rather than spend the same
+        // refused proof on the next field (each failure counts toward the lockout).
+        const DP_STOP = new Set(['proof_required', 'no_match', 'too_many_attempts', 'proof_too_recent',
+            'anchor_not_accepted_here', 'trivial_password', 'password_too_short', 'password_too_long',
+            'password_charset', 'password_invalid', 'no_recorded_proof', 'account_not_found', 'lookup_failed',
+            'not_found', 'blocked', 'not_a_donor', 'donations_off']);
         function dpErr(json, status, fallback) {
             if (!json) return fallback + (status ? ' (HTTP ' + status + ')' : '') + '.';
             const r = json.reason;
@@ -571,16 +576,17 @@
         let dpFile = null;         // the chosen banner file + its client-side reading
         let dpPickSeq = 0;         // drops a slow read of a file that was since replaced
 
-        // A new address (or the demo) must not inherit the previous one's proofs, file or
-        // pending text. Called by lookup() only when the address actually changes.
+        // A new address (or the demo) must not inherit the previous one's typed fields, file or
+        // pending text. Called by lookup() only when the address actually changes. (The proof
+        // box is P-00's; forgetPreviousAddress clears it.)
         function dpReset() {
             dpMine = { addr: '', name: null, banner: null, link: null };
             dpFile = null;
             dpPickSeq++;
-            ['dp-ip-proof', 'dp-pass-proof', 'dp-name', 'dp-banner-file', 'dp-link'].forEach(function (id) {
+            ['dp-name', 'dp-banner-file', 'dp-link'].forEach(function (id) {
                 const el = $id(id); if (el) el.value = '';
             });
-            ['dp-name-msg', 'dp-banner-msg', 'dp-link-msg'].forEach(function (id) { const el = $id(id); if (el) setMsg(el, '', true); });
+            ['dp-name-msg', 'dp-banner-msg', 'dp-link-msg', 'dp-save-msg'].forEach(function (id) { const el = $id(id); if (el) setMsg(el, '', true); });
             ['dp-name-hint', 'dp-banner-hint', 'dp-link-hint'].forEach(function (id) { const el = $id(id); if (el) { el.textContent = ''; el.className = 'dp-hint'; } });
             dpShowPreview(null);
             dpDisarm();
@@ -659,8 +665,6 @@
             if (!nl.join('')) nl.push(dpLine('', '', 'No donor name yet. Until you set one, the wall shows your address, masked.'));
             $id('dp-name-lines').innerHTML = nl.join('');
             $id('dp-name-form').style.display = canSubmit ? '' : 'none';
-            $id('dp-name-submit').style.display = canSubmit ? '' : 'none';
-            $id('dp-name-submit').textContent = dpHasLive(n) ? 'Change the name' : 'Set this name';
             $id('dp-name-withdraw').style.display = n.pending_at ? '' : 'none';
             $id('dp-name-remove').style.display = dpHasLive(n) ? '' : 'none';
 
@@ -706,8 +710,6 @@
 
             const bannerForm = canSubmit && slots > 0;
             $id('dp-banner-form').style.display = bannerForm ? '' : 'none';
-            $id('dp-banner-submit').style.display = bannerForm ? '' : 'none';
-            $id('dp-banner-submit').textContent = b.pending_at ? 'Replace the banner waiting' : (dpHasLive(b) ? 'Submit a new banner' : 'Submit banner for review');
             $id('dp-banner-withdraw').style.display = b.pending_at ? '' : 'none';
             $id('dp-banner-remove').style.display = dpHasLive(b) ? '' : 'none';
 
@@ -715,6 +717,9 @@
             const linkCol = document.querySelector('.dp-col-link');
             if (linkCol) linkCol.style.display = lk ? '' : 'none';
             if (lk) renderDonorLink(lk, canSubmit);
+
+            // One Save for whichever of the three forms is showing.
+            $id('dp-save-row').style.display = canSubmit ? '' : 'none';
         }
 
         // The link column. The live link is public on the wall anyway, so it is shown; a pending
@@ -755,8 +760,6 @@
             }
 
             $id('dp-link-form').style.display = canSubmit ? '' : 'none';
-            $id('dp-link-submit').style.display = canSubmit ? '' : 'none';
-            $id('dp-link-submit').textContent = lk.pending_at ? 'Replace the link waiting' : (dpHasLive(lk) ? 'Submit a new link' : 'Submit link for review');
             $id('dp-link-withdraw').style.display = lk.pending_at ? '' : 'none';
             $id('dp-link-remove').style.display = dpHasLive(lk) ? '' : 'none';
         }
@@ -914,18 +917,6 @@
             }
         }
 
-        // Both proofs, from P-09's own two boxes (never the P-04 single-proof gate).
-        function dpProofs(msgEl) {
-            const ip = ($id('dp-ip-proof').value || '').trim();
-            const pass = $id('dp-pass-proof').value || '';
-            if (!ip || !pass) {
-                setMsg(msgEl, 'Fill in both proofs above: a recent mining IP and your rig password.', false);
-                return null;
-            }
-            return { proof: ip, password_proof: pass };
-        }
-        // After every change that went through: the rig password must not sit in the page.
-        function dpClearProofs() { $id('dp-ip-proof').value = ''; $id('dp-pass-proof').value = ''; }
         // Re-read the summary for the SAME address and repaint (not lookup(): that resets the
         // ledger pagers and reloads every panel for a change that touched only this one).
         async function dpRefresh(addr) {
@@ -935,119 +926,148 @@
             } catch (e) { /* the panel keeps its last state; the message above says what happened */ }
         }
 
-        async function dpSubmitName() {
-            if (!currentAddr) return;
-            const msg = $id('dp-name-msg'), btn = $id('dp-name-submit');
-            if (demoBlock(msg)) return;
-            const v = dpCheckName($id('dp-name').value);
-            if (!v.ok) { setMsg(msg, v.text || 'Type the name you want on the donor wall.', false); return; }
-            const p = dpProofs(msg);
-            if (!p) return;
-            const addr = currentAddr;
-            btn.disabled = true;
-            setMsg(msg, 'Checking your proofs and submitting…', true);
+        // One field's request. The answer lands in that field's own message line, except a
+        // refusal that would refuse every field (DP_STOP, or the 429 throttle): that one is
+        // returned as `stop` for dpSave to show once and end the save on.
+        async function dpSendOne(kind, addr, init, fallback, onOk) {
+            let r, json;
             try {
-                const r = await fetch('/api/account/' + encodeURIComponent(addr) + '/donor-profile/name', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
-                    body: JSON.stringify({ name: v.name, proof: p.proof, password_proof: p.password_proof })
-                });
-                const json = await r.json().catch(() => null);
-                if (addr !== currentAddr) return;
-                if (r.ok && json && json.success) {
-                    // A name that passes is live at once — the summary re-read shows it.
-                    dpClearProofs();
-                    $id('dp-name').value = '';
-                    dpNameHint();
-                    setMsg(msg, 'Done — “' + String(json.name || v.name) + '” is on the donor wall now.' +
-                        (json.link_review ? ' Your link went back to review so it is judged beside the new name; it is off the wall until the pool approves it.' : ''), true);
-                    await dpRefresh(addr);
-                } else {
-                    setMsg(msg, dpErr(json, r.status, 'The name could not be submitted'), false);
-                }
+                r = await fetch('/api/account/' + encodeURIComponent(addr) + '/donor-profile/' + kind,
+                    Object.assign({ method: 'POST', credentials: 'same-origin' }, init));
+                json = await r.json().catch(() => null);
             } catch (e) {
-                setMsg(msg, 'The name could not be submitted: ' + e.message, false);
-            } finally { btn.disabled = false; }
+                return { ok: false, stop: fallback + ': ' + e.message + '.' };
+            }
+            if (addr !== currentAddr) return { ok: false, stop: '' };
+            if (r.ok && json && json.success) {
+                setMsg($id('dp-' + kind + '-msg'), onOk(json), true);
+                return { ok: true };
+            }
+            const text = kind === 'banner' && r.status === 413 && !json
+                ? 'That upload is too large for the pool to accept. A banner can be at most 300 KB.'
+                : dpErr(json, r.status, fallback);
+            if (r.status === 429 || (json && DP_STOP.has(json.reason))) return { ok: false, stop: text };
+            setMsg($id('dp-' + kind + '-msg'), text, false);
+            return { ok: false };
         }
 
-        async function dpSubmitBanner() {
-            if (!currentAddr) return;
-            const msg = $id('dp-banner-msg'), btn = $id('dp-banner-submit');
-            if (demoBlock(msg)) return;
-            if (!dpFile || !dpFile.file) { setMsg(msg, 'Choose an image first.', false); return; }
-            if (dpFile.block) { setMsg(msg, $id('dp-banner-hint').textContent || 'That file cannot be used as a banner.', false); return; }
-            const p = dpProofs(msg);
-            if (!p) return;
-            const addr = currentAddr, picked = dpFile;
-            const fd = new FormData();
-            fd.append('proof', p.proof);
-            fd.append('password_proof', p.password_proof);
-            // A fixed filename: the server never reads the client's, so there is no reason to
-            // send the one from the donor's disk.
-            fd.append('file', picked.file, 'banner');
-            btn.disabled = true;
-            setMsg(msg, 'Uploading and checking your proofs…', true);
-            try {
-                const r = await fetch('/api/account/' + encodeURIComponent(addr) + '/donor-profile/banner', {
-                    method: 'POST', credentials: 'same-origin', body: fd
+        // The three senders, keyed by kind. Each clears its own input on success and returns
+        // the sentence for its column.
+        const DP_SEND = {
+            name: function (addr, proof, job) {
+                return dpSendOne('name', addr, {
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: job.v.name, proof: proof })
+                }, 'The name could not be saved', function (json) {
+                    // A name that passes is live at once — the summary re-read shows it.
+                    $id('dp-name').value = '';
+                    dpNameHint();
+                    return 'Done — “' + String(json.name || job.v.name) + '” is on the donor wall now.' +
+                        (json.link_review ? ' Your link went back to review so it is judged beside the new name; it is off the wall until the pool approves it.' : '');
                 });
-                const json = await r.json().catch(() => null);
-                if (addr !== currentAddr) return;
-                if (r.ok && json && json.success) {
+            },
+            banner: function (addr, proof, job) {
+                const picked = job.picked;
+                const fd = new FormData();
+                fd.append('proof', proof);
+                // A fixed filename: the server never reads the client's, so there is no reason to
+                // send the one from the donor's disk.
+                fd.append('file', picked.file, 'banner');
+                return dpSendOne('banner', addr, { body: fd }, 'The banner could not be submitted', function (json) {
                     dpMine = { addr: addr, name: dpMine.addr === addr ? dpMine.name : null,
                                link: dpMine.addr === addr ? dpMine.link : null,
                                banner: picked.src ? { src: picked.src, width: json.width, height: json.height, at: json.submitted_at } : null };
-                    dpClearProofs();
                     dpFile = null;
                     $id('dp-banner-file').value = '';
                     $id('dp-banner-hint').textContent = '';
                     dpShowPreview(null);
-                    setMsg(msg, 'Submitted (' + json.width + ' × ' + json.height + ' px). The pool reviews it before it appears' +
-                        (json.replaced_pending ? '; it replaced the banner that was waiting.' : '.'), true);
-                    await dpRefresh(addr);
-                } else {
-                    setMsg(msg, r.status === 413 && !json
-                        ? 'That upload is too large for the pool to accept. A banner can be at most 300 KB.'
-                        : dpErr(json, r.status, 'The banner could not be submitted'), false);
-                }
-            } catch (e) {
-                setMsg(msg, 'The banner could not be submitted: ' + e.message, false);
-            } finally { btn.disabled = false; }
-        }
-
-        async function dpSubmitLink() {
-            if (!currentAddr) return;
-            const msg = $id('dp-link-msg'), btn = $id('dp-link-submit');
-            if (demoBlock(msg)) return;
-            const v = dpCheckLink($id('dp-link').value);
-            if (!v.ok) { setMsg(msg, v.text || 'Type the link you want on your donor wall card.', false); return; }
-            const p = dpProofs(msg);
-            if (!p) return;
-            const addr = currentAddr;
-            btn.disabled = true;
-            setMsg(msg, 'Checking your proofs and submitting…', true);
-            try {
-                const r = await fetch('/api/account/' + encodeURIComponent(addr) + '/donor-profile/link', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
-                    body: JSON.stringify({ url: v.link, proof: p.proof, password_proof: p.password_proof })
+                    return 'Submitted (' + json.width + ' × ' + json.height + ' px). The pool reviews it before it appears' +
+                        (json.replaced_pending ? '; it replaced the banner that was waiting.' : '.');
                 });
-                const json = await r.json().catch(() => null);
-                if (addr !== currentAddr) return;
-                if (r.ok && json && json.success) {
+            },
+            link: function (addr, proof, job) {
+                return dpSendOne('link', addr, {
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: job.v.link, proof: proof })
+                }, 'The link could not be submitted', function (json) {
                     // The normalised form the pool stored is what the reviewer will see; show that.
                     dpMine = { addr: addr, name: dpMine.addr === addr ? dpMine.name : null, banner: dpMine.addr === addr ? dpMine.banner : null,
-                               link: { url: String(json.url || v.link), at: json.submitted_at } };
-                    dpClearProofs();
+                               link: { url: String(json.url || job.v.link), at: json.submitted_at } };
                     $id('dp-link').value = '';
                     dpLinkHint();
-                    setMsg(msg, 'Submitted. The pool reviews it before it appears' +
-                        (json.replaced_pending ? '; it replaced the link that was waiting.' : '.'), true);
-                    await dpRefresh(addr);
-                } else {
-                    setMsg(msg, dpErr(json, r.status, 'The link could not be submitted'), false);
+                    return 'Submitted. The pool reviews it before it appears' +
+                        (json.replaced_pending ? '; it replaced the link that was waiting.' : '.');
+                });
+            }
+        };
+
+        // ONE save for name, banner and link. Only the fields filled in are sent, each to its own
+        // route, name first — a new name sends a live link back to review, so a link saved in the
+        // same click is judged beside it. Every filled field is checked here BEFORE any request,
+        // so a typo in one never leaves the other two half-applied.
+        async function dpSave() {
+            if (!currentAddr) return;
+            const msg = $id('dp-save-msg'), btn = $id('dp-save');
+            // Enter in the name or link box reaches here past the disabled button.
+            if (btn.disabled) return;
+            if (demoBlock(msg)) return;
+            ['dp-name-msg', 'dp-banner-msg', 'dp-link-msg'].forEach(function (id) { setMsg($id(id), '', true); });
+            const shown = (id) => $id(id).style.display !== 'none';
+            const jobs = [];
+            const refuse = (kind, text) => {
+                setMsg($id('dp-' + kind + '-msg'), text, false);
+                setMsg(msg, 'Nothing was sent — fix the ' + kind + ' above, then save again.', false);
+            };
+            if (shown('dp-name-form') && $id('dp-name').value.trim()) {
+                const v = dpCheckName($id('dp-name').value);
+                if (!v.ok) return refuse('name', v.text);
+                jobs.push({ kind: 'name', v: v });
+            }
+            // dpPickFile clears dpFile and fills it after an async read, so a file can be chosen
+            // with nothing in dpFile yet — never skip it silently.
+            const picked = $id('dp-banner-file').files;
+            if (shown('dp-banner-form') && picked && picked.length && !dpFile) {
+                return refuse('banner', 'Still reading the image — try again in a moment.');
+            }
+            if (shown('dp-banner-form') && dpFile && dpFile.file) {
+                if (dpFile.block) return refuse('banner', $id('dp-banner-hint').textContent || 'That file cannot be used as a banner.');
+                jobs.push({ kind: 'banner', picked: dpFile });
+            }
+            // The link column is hidden whole on an older backend (renderDonor), and its form
+            // then keeps whatever display it last had — so the column is the test, too.
+            const linkCol = document.querySelector('.dp-col-link');
+            if (shown('dp-link-form') && !(linkCol && linkCol.style.display === 'none') && $id('dp-link').value.trim()) {
+                const v = dpCheckLink($id('dp-link').value);
+                if (!v.ok) return refuse('link', v.text);
+                jobs.push({ kind: 'link', v: v });
+            }
+            if (!jobs.length) {
+                setMsg(msg, 'Nothing to save yet — type a name or a link, or choose a banner image.', false);
+                return;
+            }
+            const proof = getProof(msg);
+            if (!proof) return;
+            const addr = currentAddr;
+            btn.disabled = true;
+            setMsg(msg, 'Checking your proof and saving…', true);
+            const saved = [], failed = [];
+            let stop = null;
+            try {
+                for (const job of jobs) {
+                    const out = await DP_SEND[job.kind](addr, proof, job);
+                    if (addr !== currentAddr) return;
+                    (out.ok ? saved : failed).push(job.kind);
+                    if (out.stop !== undefined) { stop = out.stop; break; }
                 }
-            } catch (e) {
-                setMsg(msg, 'The link could not be submitted: ' + e.message, false);
             } finally { btn.disabled = false; }
+            if (stop !== null) {
+                setMsg(msg, stop + (saved.length ? ' (Saved before that: ' + saved.join(', ') + '.)' : ' Nothing was saved.'), false);
+            } else if (failed.length) {
+                setMsg(msg, (saved.length ? 'Saved: ' + saved.join(', ') + '. ' : '') + 'Not saved: ' + failed.join(', ') + ' — see the message under each.', false);
+            } else {
+                setMsg(msg, 'Saved — the result for each field is shown above.', true);
+            }
+            if (saved.length) await dpRefresh(addr);
         }
 
         // Taking the live item off the wall is a public change: the button arms on the first
@@ -1065,8 +1085,8 @@
             const msg = $id('dp-' + kind + '-msg');
             const btn = $id('dp-' + kind + (which === 'pending' ? '-withdraw' : '-remove'));
             if (demoBlock(msg)) return;
-            const p = dpProofs(msg);
-            if (!p) return;
+            const proof = getProof(msg);
+            if (!proof) return;
             if (which === 'live' && !(dpArmed && dpArmed.kind === kind)) {
                 dpDisarm();
                 btn.textContent = 'Click again to remove';
@@ -1077,16 +1097,15 @@
             dpDisarm();
             const addr = currentAddr;
             btn.disabled = true;
-            setMsg(msg, 'Checking your proofs…', true);
+            setMsg(msg, 'Checking your proof…', true);
             try {
                 const r = await fetch('/api/account/' + encodeURIComponent(addr) + '/donor-profile/' + kind, {
                     method: 'DELETE', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
-                    body: JSON.stringify({ which: which, proof: p.proof, password_proof: p.password_proof })
+                    body: JSON.stringify({ which: which, proof: proof })
                 });
                 const json = await r.json().catch(() => null);
                 if (addr !== currentAddr) return;
                 if (r.ok && json && json.success) {
-                    dpClearProofs();
                     if (which === 'pending' && dpMine.addr === addr) dpMine[kind] = null;
                     setMsg(msg, which === 'pending'
                         ? 'Withdrawn. The ' + kind + ' that was waiting will not be reviewed.'
@@ -2428,6 +2447,7 @@
             currentAddr = DEMO_ADDR;   // demo is never saved to localStorage
             renderSummary(DEMO.summary);
             $id('acct-view').style.display = '';
+            $id('acct-gate').style.display = '';
             setMsg($id('acct-msg'), 'Demo account — sample data, no API calls. Actions are disabled.', true);
             ledger.in.page = 0; ledger.out.page = 0; wd.page = 0;
             renderChart(DEMO.series(acctRange));
@@ -2534,13 +2554,20 @@
 
             // P-09 donor profile
             $id('dp-name').addEventListener('input', dpNameHint);
-            $id('dp-name').addEventListener('keydown', function (e) { if (e.key === 'Enter') dpSubmitName(); });
-            $id('dp-name-submit').addEventListener('click', dpSubmitName);
+            $id('dp-name').addEventListener('keydown', function (e) { if (e.key === 'Enter') dpSave(); });
             $id('dp-banner-file').addEventListener('change', dpPickFile);
-            $id('dp-banner-submit').addEventListener('click', dpSubmitBanner);
             $id('dp-link').addEventListener('input', dpLinkHint);
-            $id('dp-link').addEventListener('keydown', function (e) { if (e.key === 'Enter') dpSubmitLink(); });
-            $id('dp-link-submit').addEventListener('click', dpSubmitLink);
+            $id('dp-link').addEventListener('keydown', function (e) { if (e.key === 'Enter') dpSave(); });
+            $id('dp-save').addEventListener('click', dpSave);
+            // "Ownership proof at the top ↑" (P-04, P-09): centre the gate, so the sticky header
+            // never covers it, and put the cursor in the box.
+            document.querySelectorAll('.gate-ptr a[href="#acct-gate"]').forEach(function (a) {
+                a.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    $id('acct-gate').scrollIntoView({ block: 'center', behavior: 'smooth' });
+                    $id('acct-ip-proof').focus({ preventScroll: true });
+                });
+            });
             ['name', 'banner', 'link'].forEach(function (kind) {
                 $id('dp-' + kind + '-withdraw').addEventListener('click', function () { dpDelete(kind, 'pending'); });
                 $id('dp-' + kind + '-remove').addEventListener('click', function () { dpDelete(kind, 'live'); });

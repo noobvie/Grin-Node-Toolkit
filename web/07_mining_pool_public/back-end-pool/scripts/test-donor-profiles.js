@@ -610,8 +610,8 @@ try {
   const rBan = route('post', '/api/account/:addr/donor-profile/banner');
   const rDel = route('delete', '/api/account/:addr/donor-profile/:kind');
   check('routes: all three exist, rate-limited as withdraw', [rName, rBan, rDel].every((r) => r && r.includes("rateLimiter.middleware('withdraw')")));
-  check("routes: all three pass the BOTH-proofs gate with the 'donor_profile' wording",
-        [rName, rBan, rDel].every((r) => r.includes('requireBothProofs(addr, req.body, reqIp, ') && r.includes(", 'donor_profile');")));
+  check('routes: all three pass the ONE-aged-proof gate (requireAgedProof), never the both-proofs gate',
+        [rName, rBan, rDel].every((r) => r.includes('requireAgedProof(addr, req.body, reqIp, ') && !r.includes('requireBothProofs(')));
   check('routes: the banner route refuses BEFORE multer reads the body',
         rBan.indexOf('donorSubmitRefusal(addr)') > 0 && rBan.indexOf('donorSubmitRefusal(addr)') < rBan.indexOf('donorBannerUpload.single('));
   check('routes: the banner route maps LIMIT_FILE_SIZE to banner_too_large', (() => {
@@ -622,13 +622,13 @@ try {
   check('routes: the upload is capped by multer at MAX_BANNER_BYTES + 1, one file',
         src.includes('limits: { fileSize: DonorProfiles.MAX_BANNER_BYTES + 1, files: 1,'));
   check('routes: the submits validate the input BEFORE spending a proof attempt',
-        rName.indexOf('validateName') > 0 && rName.indexOf('validateName') < rName.indexOf('requireBothProofs') &&
-        rBan.indexOf('validateBanner') > 0 && rBan.indexOf('validateBanner') < rBan.indexOf('requireBothProofs'));
+        rName.indexOf('validateName') > 0 && rName.indexOf('validateName') < rName.indexOf('requireAgedProof') &&
+        rBan.indexOf('validateBanner') > 0 && rBan.indexOf('validateBanner') < rBan.indexOf('requireAgedProof'));
   // C4 (§19.17.6 (script07_design_games.md)): the checks that read no word list run before the proofs; the lists, banned
   // and taken only after them, so a stranger holding the address cannot probe the operator's list.
   check('routes: C4 — namePrecheck BEFORE the proofs, submitName (with the rule context) AFTER',
-        rName.indexOf('DonorProfiles.namePrecheck(') > 0 && rName.indexOf('DonorProfiles.namePrecheck(') < rName.indexOf('requireBothProofs') &&
-        rName.indexOf('DonorProfiles.submitName(db, addr, v.name, { isDonor: true, rule: donorNameRule() })') > rName.indexOf('requireBothProofs'));
+        rName.indexOf('DonorProfiles.namePrecheck(') > 0 && rName.indexOf('DonorProfiles.namePrecheck(') < rName.indexOf('requireAgedProof') &&
+        rName.indexOf('DonorProfiles.submitName(db, addr, v.name, { isDonor: true, rule: donorNameRule() })') > rName.indexOf('requireAgedProof'));
   check('routes: C4 — the name route answers status approved, and never sends `hit` (which list matched)',
         rName.includes("status: 'approved'") && !/hit/.test(rName.replace(/\/\/[^\n]*/g, '').replace(/r\.hit|`hit`/g, '')));
   check('routes: C4 — the generic answers are 400 not_allowed / 409 unavailable, one text each',
@@ -643,10 +643,20 @@ try {
         acct.includes('donor_profile: donorProfile') && acct.includes('DonorProfiles.profileFor(') && !acct.includes('donor_requests'));
   check('the Goblin route still calls the gate with the default (destination) wording',
         src.includes("requireBothProofs(addr, req.body, reqIp, 'nostr_destination_register');"));
+  {
+    const aged = src.slice(src.indexOf('const requireAgedProof = async'), src.indexOf('const alertPreviousDestination'));
+    check('gate: requireAgedProof applies the SAME age floor and anchor rule as the destination gate',
+          aged.includes('const minAgeSec = proofMinAgeSec();') && aged.includes('proofLegFails(p, minAgeSec)') &&
+          aged.includes('verifyOwnerProof(db, addr, raw, reqIp)') && aged.includes("'donor_profile'"));
+    check('gate: requireBothProofs reads the same shared floor and leg rule',
+          src.slice(src.indexOf('const requireBothProofs = async'), src.indexOf('const requireAgedProof = async'))
+            .includes('const minAgeSec = proofMinAgeSec();') &&
+          /const proofLegFails = \(p, minAgeSec\) => \{\s*if \(p\.slot === 'anchor'\) return 'anchor_not_accepted_here';/.test(src));
+  }
   // A proof that VERIFIED as the other kind (an IP in the password box, or the reverse) is
   // refused as `wrong_kind`, never with the verifier's own success code `match` (which would
   // read `ok:false, reason:'match'` in the response and the owner-proof audit row).
-  const gate = src.slice(src.indexOf('const requireBothProofs = async'), src.indexOf('const alertPreviousDestination'));
+  const gate = src.slice(src.indexOf('const requireBothProofs = async'), src.indexOf('const requireAgedProof = async'));
   check("gate: a proof verified as the OTHER kind is refused as 'wrong_kind', never with the success code 'match'",
         gate.includes("deny('ip', ipProof.ok ? 'wrong_kind' : (ipProof.reason || 'ip_no_match'))") &&
         gate.includes("deny('password', passProof.ok ? 'wrong_kind' : (passProof.reason || 'password_no_match'))"));
@@ -875,8 +885,10 @@ try {
   check('page: dpCheckName sends the same normalised name the server stores',
     !!page && page.dpCheckName('  Acme \t  Mining ').name === DP.validateName('  Acme \t  Mining ').name);
   const reasons = grab(/const DP_REASONS = \{[\s\S]*?\n        \};/);
-  check("page: DP_REASONS maps the gate's 'wrong_kind' refusal, and no longer a 'match' key",
-    /\n\s+wrong_kind: '/.test(reasons) && !/\n\s+match: '/.test(reasons));
+  // The donor gate is one proof (requireAgedProof), so it never answers the two-box gate's
+  // wrong_kind / ip_no_match / password_no_match; a stale line for them would be dead text.
+  check("page: DP_REASONS maps no_match, no two-box-only code, and no 'match' key",
+    /\n\s+no_match: '/.test(reasons) && !/\n\s+(wrong_kind|ip_no_match|password_no_match|match): '/.test(reasons));
 }
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);

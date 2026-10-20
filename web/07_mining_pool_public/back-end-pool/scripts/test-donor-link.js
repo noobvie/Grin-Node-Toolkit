@@ -598,8 +598,9 @@ try {
   const rLink = routeSource('post', '/api/account/:addr/donor-profile/link');
   const rName = routeSource('post', '/api/account/:addr/donor-profile/name');
   const rDel = routeSource('delete', '/api/account/:addr/donor-profile/:kind');
-  check('route: POST …/donor-profile/link exists, rate-limited as withdraw, BOTH proofs with the donor_profile wording',
-        rLink.includes("rateLimiter.middleware('withdraw')") && rLink.includes("requireBothProofs(addr, req.body, reqIp, 'donor_profile_submit', 'donor_profile')"));
+  check('route: POST …/donor-profile/link exists, rate-limited as withdraw, ONE aged proof (requireAgedProof), never the both-proofs gate',
+        rLink.includes("rateLimiter.middleware('withdraw')") && rLink.includes("requireAgedProof(addr, req.body, reqIp, 'donor_profile_submit')") &&
+        !rLink.includes('requireBothProofs('));
   check('route: the link POST answers status pending and echoes only what the caller sent (normalised)',
         rLink.includes("status: 'pending', url: r.url, host: r.host, link_kind: r.link_kind"));
   check('route: DELETE …/:kind takes its closed enum from DonorProfiles.KINDS (link included)',
@@ -625,7 +626,7 @@ try {
           adminJs.includes('approveRequest(el.dataset.id, el.dataset.msg)') && adminJs.includes('rejectRequest(el.dataset.id, el.dataset.msg)'));
   }
   check('route: links_unavailable is answered BEFORE the proofs (a pool fact, not an address fact)',
-        rLink.indexOf('linksSupported(db)') > 0 && rLink.indexOf('linksSupported(db)') < rLink.indexOf('requireBothProofs('));
+        rLink.indexOf('linksSupported(db)') > 0 && rLink.indexOf('linksSupported(db)') < rLink.indexOf('requireAgedProof('));
   check('route: a link withdraw/remove audit row carries the host, never the URL',
         rDel.includes("kind === 'link' ? { kind, request_id: r.id, host: r.host,") && !/details[^\n]*url/.test(rDel));
   // A rebuild that failed at startup leaves the old CHECK: the donor must not be told "saved at the same moment".

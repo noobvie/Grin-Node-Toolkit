@@ -483,11 +483,11 @@ ok('§18.9 the public routes that touch donor_requests are exactly the reviewed 
 {
   const linkRoute = handlerSrc('post', '/api/account/:addr/donor-profile/link');
   const at = (s) => linkRoute.indexOf(s);
-  ok('§18.12 the link route: refusal → shape → live-only precheck → BOTH proofs → submitLink, in that order',
+  ok('§18.12 the link route: refusal → shape → live-only precheck → the proof → submitLink, in that order',
     at('donorSubmitRefusal(addr)') > 0 && at('donorSubmitRefusal(addr)') < at('DonorProfiles.validateLink(') &&
     at('DonorProfiles.validateLink(') < at('DonorProfiles.linkPrecheck(') &&
-    at('DonorProfiles.linkPrecheck(') < at("requireBothProofs(addr, req.body, reqIp, 'donor_profile_submit', 'donor_profile')") &&
-    at("requireBothProofs(addr, req.body, reqIp, 'donor_profile_submit', 'donor_profile')") < at('DonorProfiles.submitLink(db, addr, v.url, { isDonor: true })'));
+    at('DonorProfiles.linkPrecheck(') < at("requireAgedProof(addr, req.body, reqIp, 'donor_profile_submit')") &&
+    at("requireAgedProof(addr, req.body, reqIp, 'donor_profile_submit')") < at('DonorProfiles.submitLink(db, addr, v.url, { isDonor: true })'));
   ok('§18.12 the link route audits the host, never the full URL',
     /details: \{ kind: 'link', request_id: r\.id, host: r\.host,/.test(linkRoute) && !/details: \{[^}]*\burl\b/.test(linkRoute));
 }
@@ -532,8 +532,8 @@ ok('§18.3 the account api-docs row no longer documents the dropped aliases',
 
 // The page (design §18.8). account-settings.html renders the donor's own view:
 // no v1 copy, no dropped alias read, a live banner only through the exact-shape URL fence,
-// previews from data: URLs (the public CSP's img-src has no blob:), and the two proof boxes
-// cleared after every change that went through.
+// previews from data: URLs (the public CSP's img-src has no blob:), and no proof box of its own:
+// every donor-profile change reads the page's one ownership proof (P-00, getProof).
 const acctHtml5 = readPageSource(path.join(WEB, 'public_html/account-settings.html'));
 const acctPageJs = acctHtml5.replace(/<!--[\s\S]*?-->/g, '').replace(/^\s*\/\/[^\n]*$/gm, '');
 ok('§18.8 account-settings.html carries no v1 donation copy (ceremony / yourbrand / donate0-first / censored)',
@@ -546,9 +546,12 @@ ok('§18.9 the page shows a live banner only through DP_BANNER_URL_RE, the serve
 ok('§18.8 banner previews are data: URLs — createObjectURL appears only in the proof-file download',
   /readAsDataURL/.test(acctPageJs) && (acctPageJs.match(/createObjectURL/g) || []).length === 1 &&
   /function downloadPaymentProof[\s\S]*?createObjectURL/.test(acctPageJs));
-ok('§18.8 every donor-profile success clears both proof boxes (name, banner, link, delete)',
-  (acctPageJs.match(/dpClearProofs\(\);/g) || []).length === 4 &&
-  /function dpClearProofs\(\) \{ \$id\('dp-ip-proof'\)\.value = ''; \$id\('dp-pass-proof'\)\.value = ''; \}/.test(acctPageJs));
+ok('§18.8 P-09 has no proof box of its own: save and delete read the P-00 ownership proof (getProof), and send no password_proof',
+  !/dp-ip-proof|dp-pass-proof|dpClearProofs|dpProofs/.test(acctPageJs) &&
+  /async function dpSave\(\)[\s\S]*?const proof = getProof\(msg\);/.test(acctPageJs) &&
+  /async function dpDelete\(kind, which\)[\s\S]*?const proof = getProof\(msg\);/.test(acctPageJs) &&
+  /id="acct-gate"[\s\S]*?id="acct-ip-proof"/.test(acctHtml5) &&
+  !/donor-profile[\s\S]{0,400}password_proof/.test(acctPageJs));
 // §18.12 rendering rules, pinned in the three front-end files: a link reaches the DOM as an href
 // PROPERTY (never markup), always with the full rel, with no target on nostr:, and never on the
 // past-donors strip; the admin queue shows the URL as text and never as an anchor.
@@ -583,7 +586,7 @@ ok('§18.8 every donor-profile success clears both proof boxes (name, banner, li
 // ("Done — “X” is on the donor wall now") and otherwise reads the LIVE name from the summary.
 ok('§18.6 the page never reads a pending name or image from the API (only its own POST response)',
   !/pending_name|pending_image|\.pending\.name|name\.pending\b/.test(acctPageJs) &&
-  /'Done — “' \+ String\(json\.name \|\| v\.name\)/.test(acctPageJs));
+  /'Done — “' \+ String\(json\.name \|\| job\.v\.name\)/.test(acctPageJs));
 
 // §18.12 behaviour, on an in-memory copy of the real schema: a PENDING URL never reaches the
 // donor's own view (GET /api/account/:addr → profileFor) or the wall (GET /api/pool/donors →

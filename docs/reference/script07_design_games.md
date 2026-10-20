@@ -1425,7 +1425,7 @@ counting as "whole", which refusals wait for the proofs, the migration's reason 
 - **State machine change, names only:** submit → check → `approved` at once (the previous approved →
   `replaced`), or a 400 with the rule message (generic for list and reserved hits). `pending` is no longer
   written for `kind='name'`, and a refused name's text is not stored. The request log, the audit rows and
-  `requireBothProofs` stay. **One change per 7 days** — a code constant, not a setting (one more form field
+  the proof gate (now `requireAgedProof`, one aged proof — design §18.1 #5) stay. **One change per 7 days** — a code constant, not a setting (one more form field
   for a knob nobody turns; promote it if asked).
 - **Dots stay** (the operator kept the set): a donor name can still spell a domain. Links are never made
   clickable, and post-moderation removes a scam; recorded as accepted.

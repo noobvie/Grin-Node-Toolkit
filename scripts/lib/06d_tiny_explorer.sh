@@ -193,16 +193,24 @@ tinyx_install() {
         [[ "${c,,}" == "n" ]] && { info "Cancelled."; pause; return; }
     fi
 
-    # Node.js (>= 18 is plenty — no node:sqlite needed here).
+    # Node.js 24+ — the toolkit-wide floor. The app itself needs no node:sqlite,
+    # but an end-of-life line (18/20) gets no security fixes.
     local node_major=0
     if command -v node &>/dev/null; then
         node_major=$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)
     fi
-    if [[ "${node_major:-0}" -ge 18 ]]; then
+    [[ "$node_major" =~ ^[0-9]+$ ]] || node_major=0
+    if [[ "$node_major" -ge 24 ]]; then
         success "Node.js $(node --version) ✓"
     else
-        info "Installing Node.js 20.x via NodeSource…"
-        curl -fsSL https://deb.nodesource.com/setup_20.x | bash - || { die "NodeSource setup failed."; return; }
+        if [[ "$node_major" -gt 0 ]]; then
+            warn "Node.js v${node_major} found — toolkit standard is v24+. Upgrading via NodeSource 24.x…"
+            # Distro nodejs/npm packages conflict with NodeSource — remove them first.
+            apt-get remove -y nodejs npm 2>/dev/null || true
+        else
+            info "Installing Node.js 24.x via NodeSource…"
+        fi
+        curl -fsSL https://deb.nodesource.com/setup_24.x | bash - || { die "NodeSource setup failed."; return; }
         apt-get install -y nodejs -qq || { die "Node.js install failed."; return; }
         success "Node.js installed: $(node --version)"
     fi

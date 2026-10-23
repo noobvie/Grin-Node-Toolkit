@@ -161,8 +161,8 @@ Honest list of what a reader will look for and not find, so nobody re-derives it
 This folder holds what generalises. Product internals that only matter while working on that
 product (pool admin panel rules, GrinScan archive behaviour, solo block-finder attribution,
 Accio patch policy) live in local memory, indexed in `MEMORY.md`, and are pointed at from the
-design docs above. `.claude/CLAUDE.md` holds general Grin architecture and toolkit-wide
-conventions only.
+design docs above. `.claude/CLAUDE.md` holds only the rules most tasks need; toolkit-wide
+detail (API, secrets, nginx, menus, doc rules) lives in `.claude/context/`, which it indexes.
 
 ## Session plans
 

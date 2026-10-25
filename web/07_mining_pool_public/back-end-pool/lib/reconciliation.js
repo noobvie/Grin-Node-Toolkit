@@ -284,6 +284,15 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
  * Each pool withdrawal is consumed by at most one wallet tx, so N identical payouts need N rows.
  * Self-spends/consolidations net ~0 and are skipped.
  *
+ * Every slate match is made before any amount match, and rows are read row_slack_secs further back
+ * than sends. A send is windowed by the wallet's confirmation time, a row by the pool's own
+ * timestamps, and the pool stamps a payout when it sends or posts it, before the chain mines it.
+ * Under one shared cutoff a send just inside the window loses its row, and in a single pass its
+ * amount fallback takes the next row with the same net, which a later send owns by slate; that
+ * later send then reads as out-of-band and freezes payouts (seen on mainnet: a send 7 s inside
+ * the window took a later payout's row, and that payout's own send was flagged). The amount fallback is bounded
+ * to the same slack, so the older rows read for that margin cannot absorb a new send.
+ *
  * NET, not gross: the pool sends amount − fee_charged — the flat withdrawal fee stays behind —
  * and the wallet's entry records exactly that (debited − credited − fee). Comparing the GROSS row
  * amount at ±0.05 GRIN works only while the fee is under 0.05: withdrawal_fee accepts up to 1
@@ -298,6 +307,7 @@ async function auditWalletSends(db, wallet, opts = {}) {
   const amount_tol = opts.amount_tol != null ? opts.amount_tol : 0.000001; // GRIN — pool-built rows
   const manual_tol = opts.manual_tol != null ? opts.manual_tol : 0.05;     // GRIN — hand-recorded rows
   const min_grin = opts.min_grin != null ? opts.min_grin : 0.001;      // ignore dust/self-spends
+  const row_slack_secs = opts.row_slack_secs != null ? opts.row_slack_secs : 7 * 86400;
   if (!wallet || typeof wallet.getTransactions !== 'function') {
     return { reachable: false, matched: 0, unrecorded: [], total_unrecorded: 0 };
   }
@@ -344,34 +354,37 @@ async function auditWalletSends(db, wallet, opts = {}) {
     SELECT id, amount, fee, fee_charged, method, slate_id, created_at, confirmed_at, status FROM withdrawals
     WHERE status IN ('confirmed','tor_sending','tor_held','cancelled','slatepack_pending','finalizing')
       AND (created_at >= ? OR COALESCE(confirmed_at,0) >= ?)
-  `).all(cutoff, cutoff);
+  `).all(cutoff - row_slack_secs, cutoff - row_slack_secs);
   const consumed = new Set();
   const netOf = (r) => Number(r.amount) - (Number(r.fee_charged) || 0);
   const tolOf = (r) => (r.method === 'manual' ? manual_tol : amount_tol);
 
-  const matchOne = (send) => {
-    // 1) slate_id exact (slatepack).
-    if (send.slate_id) {
-      const bySlate = rows.find((r) => !consumed.has(r.id) && r.slate_id && r.slate_id === send.slate_id);
-      if (bySlate) { consumed.add(bySlate.id); return true; }
-    }
-    // 2) the row's NET within its tolerance, nearest in time. Generous ±window on either side.
+  // 1) slate_id exact, for every send, before any amount match.
+  const bySlate = (send) => {
+    if (!send.slate_id) return false;
+    const r = rows.find((x) => !consumed.has(x.id) && x.slate_id && x.slate_id === send.slate_id);
+    if (r) { consumed.add(r.id); return true; }
+    return false;
+  };
+  // 2) the row's NET within its tolerance, nearest in time, at most row_slack_secs away.
+  const byAmount = (send) => {
     let best = null, bestDt = Infinity;
     for (const r of rows) {
       if (consumed.has(r.id)) continue;
       if (Math.abs(netOf(r) - send.amount) > tolOf(r)) continue;
       const rt = r.confirmed_at || r.created_at || send.when;
       const dt = Math.abs(rt - send.when);
-      if (dt < bestDt) { best = r; bestDt = dt; }
+      if (dt <= row_slack_secs && dt < bestDt) { best = r; bestDt = dt; }
     }
     if (best) { consumed.add(best.id); return true; }
     return false;
   };
 
+  const rest = sends.filter((s) => !bySlate(s));
+  let matched = sends.length - rest.length;
   const unrecorded = [];
-  let matched = 0;
-  for (const s of sends) {
-    if (matchOne(s)) matched++;
+  for (const s of rest) {
+    if (byAmount(s)) matched++;
     else unrecorded.push(s);
   }
   const total_unrecorded = parseFloat(unrecorded.reduce((a, s) => a + s.amount, 0).toFixed(9));

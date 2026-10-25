@@ -2948,6 +2948,34 @@ async function reviewFixesSection() {
     reset();
   }
 
+  // ── the audit window edge: a send whose row is just outside never takes another send's row ──
+  // A mainnet false freeze, replayed: two 25.1 GRIN slatepack payouts (net 25.06).
+  // The pool stamped the older one 11 s before the 30-day cutoff, the wallet confirmed it 7 s after.
+  {
+    const { auditWalletSends } = require(path.join(APP, 'lib/reconciliation.js'));
+    const edge = nowS() - 30 * 86400;
+    const tx = (id, slate, when) => ({ id, tx_type: 'TxSent', confirmed: true, tx_slate_id: slate,
+      creation_ts: new Date((when - 300) * 1000).toISOString(), confirmation_ts: new Date(when * 1000).toISOString(),
+      amount_debited: '60000000000', amount_credited: '34917000000', fee: '23000000' });
+    const slatepackRow = db.prepare(`INSERT INTO withdrawals (grin_address, amount, fee_charged, status, method, slate_id, created_at, confirmed_at)
+                VALUES (?, 25.1, 0.04, 'confirmed', ?, ?, ?, ?)`);
+    reset();
+    slatepackRow.run(ADDR, 'slatepack', 'EDGE-OLD', edge - 77, edge - 11);
+    slatepackRow.run(ADDR, 'slatepack', 'EDGE-NEW', edge + 2 * 86400, edge + 2 * 86400 + 94);
+    const a1 = await auditWalletSends(db, { async getTransactions() {
+      return [tx(19, 'EDGE-OLD', edge + 7), tx(29, 'EDGE-NEW', edge + 2 * 86400 + 400)];
+    } }, {});
+    ok('F5e. a send 7 s inside the window whose row is 11 s outside matches its OWN row — the later same-net send is not flagged',
+      a1.matched === 2 && a1.unrecorded.length === 0, JSON.stringify(a1));
+
+    reset();
+    slatepackRow.run(ADDR, 'tor', null, nowS() - 36 * 86400, nowS() - 36 * 86400 + 60);
+    const a2 = await auditWalletSends(db, { async getTransactions() { return [tx(40, 'FRESH', nowS() - 600)]; } }, {});
+    ok('F5e. control: a row read only for that margin cannot absorb a NEW send of the same net by amount',
+      a2.matched === 0 && a2.unrecorded.length === 1, JSON.stringify(a2));
+    reset();
+  }
+
   // ── #6 — the send timeout default ──
   {
     const s = new WithdrawalScheduler({ network: 'testnet' }, null);

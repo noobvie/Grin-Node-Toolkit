@@ -939,9 +939,11 @@ disagree; and the fee-revenue CSV priced every past block at today's rate.
   says its fee is the rate for blocks found from now on); `blocks.html` P-06 has a Fee column
   (`—` for orphans and unknown rows) and the intro explains it.
 
-**Unchanged on purpose.** The dashboard tile and `/api/config/pool-info` show the live rate; the
-Payments page "Effective pool fee" is ledger-derived, so it drifts toward the promo rate rather than
-jumping. A 0% fee also sends nothing to the prize pool through `prize_fee_cut_percent` (the cut is
+**Public fee display.** The dashboard tile and `/api/config/pool-info` show the live rate. The
+Payments page "Current pool fee" tile shows the live rate too (`loadFeeRate`, re-read on every
+60 s poll). The page does not show the ledger-derived lifetime rate (`totals.fee_percent`, still
+in the API): it only drifts toward a new rate block by block, so it would show a 0% promotion as
+"1.00 %" for weeks, and beside the live rate it read as a second, conflicting fee. A 0% fee also sends nothing to the prize pool through `prize_fee_cut_percent` (the cut is
 a share of the fee).
 
 - Tests: `test-block-ledger.js` 85 → 101 (§11: stamp at find, a fee saved during the node

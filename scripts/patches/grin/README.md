@@ -15,6 +15,12 @@ upstream release you build contains the fix.
 | `0001-init-output-pos-index-search-forward.patch` | Chain compaction's output_pos repair reads every block header since genesis (4M+ random reads). Replaced with a forward galloping + binary search that places each output at the same height. | v5.5.1, master (= v5.5.1), staging `b66e188` |
 | `0002-log-compaction-timings.patch` | Logs compaction start, finish and per-phase timings at `Info`, and promotes the output_pos repair counts from `debug` to `info`. Observability only. Needs 0001 first. | same |
 
+**Upstream fix in review:** mimblewimble/grin PR #3939 (`fix archive compaction performance`,
+fixes issue #3938) rewrites the same `init_output_pos_index` code, skips repeated archive
+compactions, and logs `compact: starting` / `compact: finished in …ms` itself. To test it, enter
+ref `pr/3939` at key G → 1 and answer **N** to the toolkit patches: they target the unpatched
+function and will not apply on top of the PR. Once the fix ships in a release, drop 0001 and 0002.
+
 ## Why 0001 exists — the archive-node compaction stall
 
 `chain.compact()` runs about once a day at random (a 1/1440 chance per block, in a "compactor"

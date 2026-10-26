@@ -257,7 +257,10 @@ _gsb_check_resources() {
 # -----------------------------------------------------------------------------
 # _gsb_fetch_source <ref> — clone or update $GSB_SRC_DIR and check out <ref>.
 # A branch is pinned to origin/<ref> with a hard reset so a re-run always builds
-# what upstream has now, not a stale local branch. Tags/commits are checked out
+# what upstream has now, not a stale local branch. A pull request (`pr/<N>`) is
+# fetched from GitHub's refs/pull/<N>/head into origin/pr/<N> and then handled as
+# a branch: `fetch --all` never fetches pull refs, and a PR opened from a fork
+# has no branch or commit in this repo at all. Tags/commits are checked out
 # detached. target/ is never cleaned — that cache is what makes a rebuild minutes
 # instead of an hour.
 # -----------------------------------------------------------------------------
@@ -277,6 +280,13 @@ _gsb_fetch_source() {
         info "Cloning $GSB_REPO ..."
         git clone "$GSB_REPO" "$GSB_SRC_DIR" \
             || { error "git clone failed. Check internet access."; return 1; }
+    fi
+
+    if [[ "$ref" =~ ^pr/([0-9]+)$ ]]; then
+        local pr="${BASH_REMATCH[1]}"
+        info "Fetching pull request #$pr ..."
+        git -C "$GSB_SRC_DIR" fetch --quiet origin "+refs/pull/$pr/head:refs/remotes/origin/pr/$pr" \
+            || { error "Could not fetch pull request #$pr from $GSB_REPO."; return 1; }
     fi
 
     # Discard local modifications so a checkout can never fail on a dirty tree —
@@ -325,6 +335,7 @@ _gsb_list_patches() {
 # the full set or plain upstream — never a half-patched binary.
 # -----------------------------------------------------------------------------
 _gsb_apply_patches() {
+    local dflt="${1:-y}"
     GSB_APPLIED_PATCHES=()
     local -a patches=()
     local p
@@ -340,7 +351,7 @@ _gsb_apply_patches() {
     done
     echo -e "  ${DIM}Workarounds carried until upstream ships a fix — see README.md there.${RESET}"
     echo ""
-    if ! _gsb_confirm "Apply them to this build?" y; then
+    if ! _gsb_confirm "Apply them to this build?" "$dflt"; then
         info "Building plain upstream — no toolkit patches."
         return 0
     fi
@@ -898,6 +909,7 @@ _gsb_build() {
     echo -e "    ${DIM}master${RESET}       — upstream stable branch"
     echo -e "    ${DIM}v5.5.1${RESET}       — a tag, when no linux binary was published for it"
     echo -e "    ${DIM}<commit sha>${RESET} — an exact commit"
+    echo -e "    ${DIM}pr/3939${RESET}      — a GitHub pull request (also #3939), to test a proposed fix"
     if [[ -n "$(_gsb_list_patches)" ]]; then
         echo -e "  ${DIM}Toolkit patches are offered after the checkout; the ref they target is${RESET}"
         echo -e "  ${DIM}listed in $GSB_PATCH_DIR/README.md.${RESET}"
@@ -909,6 +921,10 @@ _gsb_build() {
     # "0" is a valid git ref by the character check below, so it must be caught first.
     if [[ "$ref" == "0" ]]; then return "${S01_RC_BACK:-1}"; fi
     [[ -z "$ref" ]] && ref="$GSB_DEFAULT_REF"
+    # Every spelling of a pull request becomes pr/<N>: one artifact name, one fetch path.
+    if [[ "${ref,,}" =~ ^(#|pr/?|pull/)([0-9]+)$ ]]; then
+        ref="pr/${BASH_REMATCH[2]}"
+    fi
 
     # Refs go straight into git commands; keep the character set boring.
     if [[ ! "$ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]; then
@@ -930,7 +946,14 @@ _gsb_build() {
     cver=$(grep -m1 '^version' "$GSB_SRC_DIR/Cargo.toml" 2>/dev/null | cut -d'"' -f2 || true)
     info "At commit $sha — Cargo.toml declares version ${cver:-unknown}."
 
-    _gsb_apply_patches || return 1
+    # A PR is often the upstream form of a toolkit workaround, so stacking the
+    # patches on it would conflict or double-fix. Still offered, but default No.
+    local patch_dflt=y
+    if [[ "$ref" == pr/* && -n "$(_gsb_list_patches)" ]]; then
+        warn "Building a pull request: if it changes the same code as a toolkit patch, answer N."
+        patch_dflt=n
+    fi
+    _gsb_apply_patches "$patch_dflt" || return 1
     if [[ ${#GSB_APPLIED_PATCHES[@]} -gt 0 ]]; then
         info "Building $ref + ${#GSB_APPLIED_PATCHES[@]} toolkit patch(es)."
     fi

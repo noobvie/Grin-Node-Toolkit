@@ -239,7 +239,7 @@
         }
 
         // ── Historical trend charts (P-01/P-02/P-03), driven by the shared range toggle ──────
-        let msRange = 'day';
+        let msRange = 'month';
         const RANGE_NOTE = {
             day:   'last 24h · hourly',
             week:  'last 7 days · hourly',

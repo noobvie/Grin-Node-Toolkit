@@ -529,13 +529,13 @@
                         <h2 class="panel-title"><span class="tag">P-01</span> Chart recorder — your hashrate <span class="right">history kept 100 days</span></h2>
                         <div class="panel-body">
                             <div class="rangebar" id="acct-rangebar" role="tablist" aria-label="Chart timeframe">
-                                <button class="rng-btn active" data-range="day"   role="tab">Day</button>
+                                <button class="rng-btn"        data-range="day"   role="tab">Day</button>
                                 <button class="rng-btn"        data-range="week"  role="tab">Week</button>
-                                <button class="rng-btn"        data-range="month" role="tab">Month</button>
+                                <button class="rng-btn active" data-range="month" role="tab">Month</button>
                                 <button class="rng-btn" disabled title="Beyond per-miner retention (100 days)">Year</button>
                                 <button class="rng-btn" disabled title="Beyond per-miner retention (100 days)">All</button>
                                 <span class="rng-spacer"></span>
-                                <span class="rng-note" id="acct-range-note">last 24h</span>
+                                <span class="rng-note" id="acct-range-note">last 30 days</span>
                             </div>
                             <div class="chart-wrap" style="position:relative;height:240px">
                                 <canvas id="acct-hashrate-chart" aria-label="Your hashrate over the selected timeframe" role="img"></canvas>

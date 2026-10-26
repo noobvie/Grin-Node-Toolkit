@@ -412,8 +412,8 @@ module.exports = function createPoolRoutes(ctx, app) {
     }
   });
 
-  // Durable pool-wide trend series (hashrate · miners · earnings · payout) from pool_metrics_hourly.
-  // One fetch feeds all three miners-stats.html charts; ?range selects span + bucket size.
+  // Durable pool-wide trend series (hashrate · miners · network · earnings · payout) from pool_metrics_hourly.
+  // One fetch feeds every miners-stats.html trend chart (P-00 to P-03); ?range selects span + bucket size.
   router.get('/api/pool/metrics/history', rateLimiter.middleware('public'), (req, res) => {
     try {
       const allowed = ['day', 'week', 'month', 'year', 'all'];

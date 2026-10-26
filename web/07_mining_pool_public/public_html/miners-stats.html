@@ -228,13 +228,31 @@
                 </div>
             </div>
 
-            <!-- ═══ P-03 · EARNINGS vs PAYOUT ═══ -->
+            <!-- ═══ P-03 · POOL SHARE OF THE NETWORK ═══
+                 Pool hashrate ÷ network hashrate, per bucket, from the same metrics response as
+                 P-00/P-01. The right axis is LOCKED to the left (share × 1,440 blocks a day), so it
+                 is a re-label like P-00's difficulty, never a second measure. Money flows live on
+                 payment-history P-01 (credited vs sent), which nets the fee out correctly. -->
             <div class="panel"><span class="screws"></span>
-                <h2 class="panel-title"><span class="tag">P-03</span> Ledger recorder — earnings vs payout
-                    <span class="right">block rewards confirmed vs paid to miners</span></h2>
-                <div class="panel-body chart-wrap">
-                    <canvas id="ms-chart-ledger" aria-label="Pool earnings and payouts over the selected timeframe" role="img"></canvas>
-                    <div class="chart-empty" id="ms-empty-ledger">NO LEDGER DATA YET</div>
+                <h2 class="panel-title"><span class="tag">P-03</span> Chart recorder — pool share
+                    <span class="right">% of network hashrate</span></h2>
+                <div class="panel-body">
+                    <div class="chart-wrap">
+                        <canvas id="ms-chart-share" aria-label="The pool's percentage of total Grin network hashrate, with the blocks per day that share is expected to find, over the selected timeframe" role="img"></canvas>
+                        <div class="chart-empty" id="ms-empty-share">NO NETWORK DATA YET</div>
+                    </div>
+                    <details class="chart-explain">
+                    <summary>How to read this chart</summary>
+                    <p class="dim">
+                        The left axis is the pool's share of all Grin mining: its hashrate divided by
+                        the whole network's, as a percentage. The right axis turns that share into the
+                        blocks per day the pool should find on average &mdash; the network makes about
+                        1,440 blocks a day (one per minute), so a 1% share expects about 14.4. Blocks
+                        actually found vary around that figure by luck (see the Blocks page). On the
+                        daily and longer views each point is the average over the period, idle hours
+                        included. A gap means the pool's node was not sampled for that period.
+                    </p>
+                    </details>
                 </div>
             </div>
 

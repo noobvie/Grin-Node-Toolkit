@@ -4649,6 +4649,24 @@ Two never-pruned hourly rollup tables (kept out of `lib/retention.js`), written 
   unless both are > 0. Pool hashrate stays on P-01 (network ≈ 100× pool would flatten it).
   On a phone the right axis costs the plot roughly a third of its width (no horizontal scroll).
   **Uncommitted, not VPS-tested.**
+- **miners-stats P-03** "Chart recorder — pool share", `.right` "% of network hashrate" (kept
+  short so the title wraps to two lines on a phone, like P-02) (2026-10-26; it replaced the
+  "earnings vs payout" ledger bars, which charted the GROSS block reward against payouts and
+  duplicated payment-history P-01, the fee-correct credited-vs-sent view). Line = `hashrate_gps ÷
+  network_hashrate_gps × 100` per bucket from the same `/api/pool/metrics/history` response, no
+  backend change. Both are bucket AVGs (pool over every rollup hour, idle as 0; network over its
+  sampled hours), so a day point is that day's average share. Null network = GAP (`gaps: true`),
+  never a 100% pool; sampled network + zero pool = a real 0%. Right axis is a LOCKED
+  `secondaryScale` (factor `1440 / 100`): expected blocks per day at the 60 s target, the same
+  re-label rule as P-00. Formatters live in `miners-stats.js`: `fmtShare` (tooltip 3 significant
+  figures, no exponent; axis decimals from the tick step so every tick shares one count) and
+  `fmtBlocksDay` (axis 3 significant figures from the axis max, more only if adjacent ticks would
+  collide; unit in the axis title). Tooltip: `0.000160% · expected 0.00230 blocks/day`. Shared
+  fix found while checking it: `xAxis()` sets `autoSkipPadding: 12`. `xTickLimit` measures the
+  whole canvas, so on a phone the narrower plot of a right-scaled chart (P-00 too) butted its
+  dates together ("Oct 15Oct 21"). Checked with a Node formatter harness and headless-Edge
+  screenshots of stub data (375 px iframe and 1280 px, shares ~0.0005% and ~2%); **uncommitted,
+  not VPS-tested.**
 - **miners-stats P-02b** "Chart recorder — miners by gateway": multi-line per region via new
   `PoolCharts.renderMultiTrendLine()` (union-of-timestamps alignment, gaps NOT interpolated,
   legend for ≥2 series, single y-axis). Colors from `PoolCharts.PALETTE` — 8 fixed slots,

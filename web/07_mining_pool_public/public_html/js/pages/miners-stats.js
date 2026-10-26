@@ -20,7 +20,7 @@
         //   /api/stratum/top-miners         top miners by 24h hashrate (P-04)
         //   /api/pool/top-block-finders     top lucky miners by blocks found, 30d (P-05)
         //   /api/stratum/top-avg-hashrate   top miners by avg hashrate, 30d (P-06)
-        //   /api/pool/metrics/history       durable pool trend series → P-00/P-01/P-02/P-03
+        //   /api/pool/metrics/history       durable pool trend series → P-00/P-01/P-02/P-03 (share)
         // ═════════════════════════════════════════════════════════════════
 
         function fmtGpsLabel(gps) {
@@ -33,10 +33,56 @@
         const G1_MINI_GPS  = 1.2;         // IPOLLO G1 mini, manufacturer spec
         const DAY_COINBASE = 60 * 1440;   // 86,400 ツ mined network-wide per day
 
-        // GRIN amount for the ledger chart y-axis / tooltips (ツ = Grin symbol, matches the tables).
-        function fmtGrin(v) {
-            return Number(v || 0).toLocaleString('en-US', { maximumFractionDigits: 3 }) + ' ツ';
+        const BLOCKS_PER_DAY = 1440;      // 60 s target block time
+
+        // Decimals that print every multiple of `step` exactly (0.25 → 2, 0.05 → 2, 5 → 0).
+        // Chart.js places linear ticks on multiples of a 1/2/5 × 10ⁿ step, so adjacent axis
+        // labels never round to the same text. Capped at 8: a step finer than that is noise.
+        function stepDecimals(step) {
+            if (!(step > 0) || !isFinite(step)) return 2;
+            let d = 0;
+            while (d < 8) {
+                const s = step * Math.pow(10, d);
+                if (Math.abs(s - Math.round(s)) <= 1e-6 * s) break;
+                d++;
+            }
+            return d;
         }
+
+        // Three significant figures with no exponent notation, for a single hovered value:
+        // 12.3, 1.23, 0.123, 0.000160. Zero prints as "0".
+        function sig3(v) {
+            v = Number(v);
+            if (!isFinite(v)) return '—';
+            if (v === 0) return '0';
+            const d = Math.min(8, Math.max(0, 2 - Math.floor(Math.log10(Math.abs(v)))));
+            return v.toFixed(d);
+        }
+
+        // P-03 left axis: pool share of network hashrate, in percent (the value is already × 100).
+        // Every tick shares one decimal count, set by the tick step, so the axis reads 0.00%,
+        // 0.05%, 0.10% rather than 0%, 0.05%, 0.1%.
+        function fmtShare(v) { return sig3(v) + '%'; }
+        fmtShare.axis = function (v, max, ticks) {
+            const step = (Array.isArray(ticks) && ticks.length > 1)
+                ? Math.abs(ticks[1].value - ticks[0].value) : Math.abs(Number(v)) || 1;
+            return Number(v).toFixed(stepDecimals(step)) + '%';
+        };
+
+        // P-03 right axis: expected blocks per day (share% ÷ 100 × 1,440). Its ticks are the left
+        // ticks × 14.4, so they are not round: three significant figures from the axis max (as
+        // P-00's difficulty axis), more only if adjacent ticks would still round together.
+        // The unit sits in the axis title, so axis labels are bare numbers.
+        function fmtBlocksDay(v) { return sig3(v) + ' blocks/day'; }
+        fmtBlocksDay.axis = function (v, max, ticks) {
+            const m = Math.abs(Number(max)) || Math.abs(Number(v)) || 0;
+            const sig = m > 0 ? Math.max(0, 2 - Math.floor(Math.log10(m))) : 0;
+            const step = (Array.isArray(ticks) && ticks.length > 1)
+                ? Math.abs(ticks[1].value - ticks[0].value) : 0;
+            const distinct = step >= 10 || !(step > 0) ? 0 : Math.floor(-Math.log10(step)) + 1;
+            const d = Math.min(8, Math.max(sig, distinct));
+            return Number(v).toFixed(d);
+        };
 
         // Full miner address rendered as a link into the account view.
         // Plain text, NOT a link to /account-settings.html?addr= (audit §J11-1).
@@ -238,7 +284,7 @@
             updatePager('avg', avgPage, pages);
         }
 
-        // ── Historical trend charts (P-01/P-02/P-03), driven by the shared range toggle ──────
+        // ── Historical trend charts (P-00–P-03), driven by the shared range toggle ──────
         let msRange = 'month';
         const RANGE_NOTE = {
             day:   'last 24h · hourly',
@@ -295,7 +341,6 @@
 
                 toggleEmpty('ms-empty-hashrate', !has);
                 toggleEmpty('ms-empty-miners', !has);
-                toggleEmpty('ms-empty-ledger', !has);
 
                 // P-00: network hashrate, with difficulty as a locked right-hand scale. An hour the
                 // node was not sampled is null and draws as a gap; the empty state shows only when
@@ -337,19 +382,27 @@
                         : bucket <= 7 * 86400 ? 'peak hour per week' : 'peak hour per month';
                 }
 
-                // Shared elastic UTC labeller (charts-init.js) — the same span-aware format the
-                // trend lines use, so every panel reads consistently at every range.
-                const labels = PoolCharts.timeLabels(points.map(p => p.t), bucket);
-                PoolCharts.renderGroupedBarChart('ms-chart-ledger', labels, [
-                    { label: 'Earnings', data: points.map(p => p.earnings), color: '#7cb342' },
-                    { label: 'Payout',   data: points.map(p => p.payout),   color: '#d29922' }
-                ], { valueFmt: fmtGrin });
+                // P-03: pool share of the network, in percent. Both inputs are bucket averages
+                // (hashrate_gps over every rollup hour, idle ones as 0; network over its sampled
+                // hours), so a day reads as that day's average share. No network sample = a gap,
+                // never a 100% pool; a sampled bucket with no pool hashrate is a real 0%.
+                const sharePts = points.map(p => {
+                    const net = Number(p.network_hashrate_gps);
+                    const pool = Number(p.hashrate_gps) || 0;
+                    return { t: p.t, v: net > 0 ? pool / net * 100 : null };
+                });
+                toggleEmpty('ms-empty-share', !sharePts.some(p => p.v != null));
+                PoolCharts.renderTrendLine('ms-chart-share', sharePts, {
+                    label: 'Pool share', bucketSeconds: bucket, valueFmt: fmtShare,
+                    color: PoolCharts.PALETTE[6], gaps: true,
+                    secondaryScale: { factor: BLOCKS_PER_DAY / 100, fmt: fmtBlocksDay, title: 'expected blocks / day', label: 'expected' }
+                });
             } catch (e) {
                 toggleEmpty('ms-empty-network', true);
                 renderNetworkReadout([]);
                 toggleEmpty('ms-empty-hashrate', true);
                 toggleEmpty('ms-empty-miners', true);
-                toggleEmpty('ms-empty-ledger', true);
+                toggleEmpty('ms-empty-share', true);
             }
 
             // P-02b: miners per gateway region (multi-line, same range). The whole panel stays

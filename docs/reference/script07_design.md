@@ -510,6 +510,10 @@ frontend grin_stratum_in
   (3) a later `pool_fee_percent` change would apply retroactively to GRIN mined under the old
   rate; (4) displayed balances stay equal to what the miner receives, so `min_withdrawal` and
   every account/ledger surface mean exactly what they say.
+- **The rate is the one in force when the block was FOUND** (`blocks.fee_percent`), not the one at
+  maturity a day later: a fee change — e.g. the end of a 0% promotion — never re-prices a block
+  already found. The admin setting is live on save, and each block's rate is public
+  (`/api/pool/blocks`, the blocks page Fee column). As-built → impl §10.22.
 - **Orphan reversal** reads the *actual* credited amounts from `balance_log` and reverses those
   exact values (PPLNS-weighted, including the fee credit); never pushes a balance below 0.
 - **Payout threshold:** default `min_withdrawal` = **25 GRIN** (raised from 5.0 on 2026-07-13; agrees

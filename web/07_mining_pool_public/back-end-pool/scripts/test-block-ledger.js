@@ -335,6 +335,8 @@ const detector = new OrphanDetector(config, node);
      compareBlockToHeader({ hash: 'not-hex', nonce: '' }, { hash: 'not-hex', nonce: 5 }).verdict === 'unknown');
   ok("J5-1 that row still verifies by HASH, which survived intact",
      compareBlockToHeader(migrated[2], { hash: '93'.repeat(32), nonce: 5 }).verdict === 'match');
+  ok("J5-1 the rebuild keeps fee_percent (migrateBlocks adds it before the copy)",
+     db.prepare("PRAGMA table_info(blocks)").all().some(c => c.name === 'fee_percent'));
   ok("J5-1 the indexes are rebuilt with the table",
      db.prepare("SELECT COUNT(*) AS c FROM sqlite_master WHERE type='index' AND tbl_name='blocks' AND name LIKE 'idx_block_%'").get().c === 3);
   ok("J5-1 foreign keys are back ON after the rebuild",
@@ -569,6 +571,111 @@ const detector = new OrphanDetector(config, node);
   const c4 = bm.getBlocksHistoryCached('month');
   ok('crediting a block clears the cache at once',
      c4 !== c3 && c4.intervals.some(x => x.height === 3007), JSON.stringify(c4.intervals.map(x => x.height)));
+
+  // ═══ 11. The fee a block is split at is the rate when it was FOUND ═══
+  console.log("\n[11] blocks.js + rewards.js — a fee change never re-prices a found block");
+
+  db.prepare("DELETE FROM blocks").run();
+  db.prepare("INSERT OR IGNORE INTO miner_accounts (grin_address, balance) VALUES ('grin1fee', 0)").run();
+  const savedFee = config.pool_fee_percent;
+  const feeHashes = new Map();
+  const feeNode = { async getHeader(h) { return { height: h, hash: feeHashes.get(h), nonce: 1 }; } };
+  const feeRd = new RewardDistributor(config, feeNode);
+  const shareAt = (h) => db.prepare(`INSERT INTO shares (grin_address, worker_name, difficulty, block_height, share_hash)
+                                     VALUES ('grin1fee', 'rig', 1, ?, ?)`).run(h, 'fs' + h);
+  const feeCredit = (h) => db.prepare(
+    "SELECT COALESCE(SUM(amount), 0) AS s FROM balance_log WHERE reference_type = 'pool_fee' AND reference_id = ?"
+  ).get(h).s;
+  const minerCredit = (h) => db.prepare(
+    "SELECT COALESCE(SUM(amount), 0) AS s FROM balance_log WHERE grin_address = 'grin1fee' AND reference_type = 'block' AND reference_id = ?"
+  ).get(h).s;
+  const feeOf = (h) => db.prepare('SELECT fee_percent FROM blocks WHERE height = ?').get(h).fee_percent;
+  const mature = async (h) => {
+    db.prepare("UPDATE blocks SET status = 'confirmed' WHERE height = ?").run(h);
+    return feeRd.distributeRewards(db.prepare('SELECT id FROM blocks WHERE height = ?').get(h).id);
+  };
+
+  config.pool_fee_percent = 0;
+  feeHashes.set(4100, 'f1'.repeat(32));
+  await bm.creditBlock(4100, feeHashes.get(4100), '1', 60, 'grin1fee');
+  ok('a block found during a 0% promotion records fee_percent 0', feeOf(4100) === 0, String(feeOf(4100)));
+
+  config.pool_fee_percent = 1;
+  feeHashes.set(4200, 'f2'.repeat(32));
+  await bm.creditBlock(4200, feeHashes.get(4200), '2', 60, 'grin1fee');
+  ok('a block found at 1% records fee_percent 1', feeOf(4200) === 1, String(feeOf(4200)));
+
+  // A fee saved while creditBlock awaits the node (up to 10 s on a slow one) must not land on
+  // the block: the rate is taken before those fetches, or passed in from the submit.
+  const slowBm = new BlockManager(config);
+  slowBm._fetchNetworkDifficulty = async () => { config.pool_fee_percent = 0; return null; };
+  config.pool_fee_percent = 1;
+  await slowBm.creditBlock(4250, 'f5'.repeat(32), '5', 60, 'grin1fee');
+  ok('a fee saved during the node fetches does not re-price the block being credited',
+     feeOf(4250) === 1, String(feeOf(4250)));
+  config.pool_fee_percent = 1;
+  await slowBm.creditBlock(4260, 'f6'.repeat(32), '6', 60, 'grin1fee', 0);
+  ok('the rate snapshotted at submit wins over the live rate at credit time',
+     feeOf(4260) === 0, String(feeOf(4260)));
+  await slowBm.creditBlock(4270, 'f7'.repeat(32), '7', 60, 'grin1fee', null);
+  ok('a missing rate is stored NULL ("not on record"), never as a 0% block',
+     feeOf(4270) === null, String(feeOf(4270)));
+  config.pool_fee_percent = 1;
+  db.prepare('DELETE FROM blocks WHERE height IN (4250, 4260, 4270)').run();
+
+  // The promotion ended (fee back to 1%) while 4100 was still maturing.
+  shareAt(4100);
+  const r4100 = await mature(4100);
+  ok('a 0% block that matures after the fee went back to 1% is still split at 0%',
+     r4100.success === true && r4100.fee_percent === 0 && feeCredit(4100) === 0 &&
+     Math.abs(minerCredit(4100) - 60) < 1e-9, JSON.stringify({ r4100, fee: feeCredit(4100), miner: minerCredit(4100) }));
+
+  // And the other way: a 1% block that matures after the fee dropped to 0% keeps its 1%.
+  config.pool_fee_percent = 0;
+  shareAt(4200);
+  const r4200 = await mature(4200);
+  ok('a 1% block that matures after the fee dropped to 0% is still split at 1%',
+     r4200.success === true && Math.abs(feeCredit(4200) - 0.6) < 1e-9 &&
+     Math.abs(minerCredit(4200) - 59.4) < 1e-9, JSON.stringify({ fee: feeCredit(4200), miner: minerCredit(4200) }));
+
+  // A row from before the column: the live rate, and that rate is written onto the row.
+  config.pool_fee_percent = 2;
+  feeHashes.set(4300, 'f3'.repeat(32));
+  db.prepare(`INSERT INTO blocks (height, hash, nonce, reward, status, found_by, found_at)
+              VALUES (4300, ?, '3', 60, 'immature', 'grin1fee', unixepoch())`).run(feeHashes.get(4300));
+  shareAt(4300);
+  await mature(4300);
+  ok('a legacy block with no recorded rate is split at the live rate, and the rate is recorded',
+     Math.abs(feeCredit(4300) - 1.2) < 1e-9 && feeOf(4300) === 2,
+     JSON.stringify({ fee: feeCredit(4300), pct: feeOf(4300) }));
+  config.pool_fee_percent = savedFee;
+
+  // The one-time backfill when the column is first added: a settled block's rate is recovered
+  // from its booked pool-fee credit; anything it cannot prove stays NULL.
+  db.prepare("UPDATE blocks SET fee_percent = NULL").run();
+  db.prepare(`INSERT INTO blocks (height, hash, nonce, reward, status, found_by, found_at)
+              VALUES (4400, ?, '4', 60, 'immature', 'grin1fee', unixepoch())`).run('f4'.repeat(32));
+  db.exec('ALTER TABLE blocks DROP COLUMN fee_percent');
+  createSchema();
+  ok('backfill: a paid 1% block gets 1 back from its pool-fee credit', feeOf(4200) === 1, String(feeOf(4200)));
+  ok('backfill: a paid 2% block gets 2 back from its pool-fee credit', feeOf(4300) === 2, String(feeOf(4300)));
+  ok('backfill: a paid block with no pool-fee credit stays NULL (0% and "not recorded" look the same)',
+     feeOf(4100) === null, String(feeOf(4100)));
+  ok('backfill: an unsettled block stays NULL', feeOf(4400) === null, String(feeOf(4400)));
+
+  // The next boot records the boot rate on that unsettled legacy block, so a fee saved live
+  // afterwards (a 0% promotion switched on right after the deploy) cannot re-price it.
+  config.pool_fee_percent = 1;
+  new BlockManager(config);
+  ok('boot: an unsettled legacy block records the rate the process booted with', feeOf(4400) === 1, String(feeOf(4400)));
+  ok('boot: a settled block with no recovered rate is not stamped', feeOf(4100) === null, String(feeOf(4100)));
+  config.pool_fee_percent = 0;
+  shareAt(4400);
+  feeHashes.set(4400, 'f4'.repeat(32));
+  await mature(4400);
+  ok('boot: that block is split at its recorded 1% after the fee is saved as 0',
+     Math.abs(feeCredit(4400) - 0.6) < 1e-9, String(feeCredit(4400)));
+  config.pool_fee_percent = savedFee;
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   cleanup();

@@ -1,5 +1,10 @@
 const { getDb } = require('./db');
 
+// A pool fee % as a number, or NaN when there is none. Not bare Number(): Number(null) and
+// Number('') are 0, which would record a missing rate as a 0% block (no fee, and published as
+// such). NaN is stored as NULL, which rewards.js treats as "not on record".
+const feeRate = (v) => (v === null || v === undefined || v === '' ? NaN : Number(v));
+
 class BlockManager {
   // Newest block intervals one history response carries (_blockIntervals). One point per
   // block, so the cap bounds both the payload and the chart's point count.
@@ -13,6 +18,30 @@ class BlockManager {
     this.lastBlockHeight = 0;
     this.nodeApi = null; // optional GrinNodeAPI for capturing per-block network difficulty
     this._historyCache = new Map(); // range → { at, value }
+    this._stampUnsettledFeeRate();
+  }
+
+  // A block still maturing with no recorded fee was found before fee_percent existed. Its real
+  // find-time rate is not on record: the boot rate differs from it after a fee change + restart
+  // during maturation (~1 day), or a fee saved in the admin panel that the previous process
+  // never applied. The boot rate is what a pool without fee_percent charges at maturity (the
+  // live rate, which only a restart moves), so stamping it keeps that charge, and stops a fee
+  // saved live after this boot from re-pricing the block.
+  // /api/pool/blocks publishes this stamped rate like any other. Settled and orphaned rows are
+  // left alone (db.js backfills settled ones from the ledger).
+  _stampUnsettledFeeRate() {
+    const pct = feeRate(this.config.pool_fee_percent);
+    if (!Number.isFinite(pct)) return;
+    try {
+      const r = this.db.prepare(`
+        UPDATE blocks SET fee_percent = ?
+        WHERE fee_percent IS NULL AND status IN ('immature', 'confirmed')
+      `).run(pct);
+      if (r.changes > 0) console.warn(`[BlockManager] recorded fee ${pct}% on ${r.changes} maturing block(s) found before the rate was recorded`);
+    } catch (err) {
+      // rewards.js still charges an unrecorded block the live rate, so this is not fatal.
+      console.error(`[BlockManager] fee_percent stamp for maturing blocks skipped: ${err.message}`);
+    }
   }
 
   // Wire a GrinNodeAPI so creditBlock can record the block's network difficulty. Optional —
@@ -92,7 +121,14 @@ class BlockManager {
 
   // `reward` is the flat emission (60). The value actually stored is that plus the block's
   // transaction fees when they can be read from the chain — see _fetchBlockFees.
-  async creditBlock(height, hash, nonce, reward, minerAddress) {
+  //
+  // `feePercent` is the pool fee the miners were mining under when this block was found;
+  // rewards.js splits the reward at it at maturity, so a fee change never re-prices a found
+  // block. stratum-server.js snapshots it when the submit ARRIVES, before the node round-trip;
+  // without one, the rate is read here, before the node fetches below — read after them, a fee
+  // saved during those up-to-10 s would be stamped on a block found under the old rate.
+  async creditBlock(height, hash, nonce, reward, minerAddress, feePercent = this.config.pool_fee_percent) {
+    const feePct = feeRate(feePercent);
     try {
       // Capture round/network stats BEFORE inserting (round = shares since the previous block).
       const prev = this.getLastBlock();
@@ -107,13 +143,14 @@ class BlockManager {
       const total = fees === null ? reward : reward + fees;
 
       const stmt = this.db.prepare(`
-        INSERT INTO blocks (height, hash, nonce, reward, fees, status, found_by, found_at, network_difficulty, round_shares)
-        VALUES (?, ?, ?, ?, ?, 'immature', ?, unixepoch(), ?, ?)
+        INSERT INTO blocks (height, hash, nonce, reward, fees, status, found_by, found_at, network_difficulty, round_shares, fee_percent)
+        VALUES (?, ?, ?, ?, ?, 'immature', ?, unixepoch(), ?, ?, ?)
       `);
 
       // String(nonce): the column is TEXT and a Grin nonce is a u64 that must never be
       // rounded through a JS number. See db.js's blocks DDL and audit §J5-1.
-      const result = stmt.run(height, hash, String(nonce), total, fees, minerAddress, networkDiff, roundShares);
+      const result = stmt.run(height, hash, String(nonce), total, fees, minerAddress, networkDiff, roundShares,
+        Number.isFinite(feePct) ? feePct : null);
       this._historyCache.clear(); // a new block shows on blocks.html at once, not after the TTL
 
       console.log(

@@ -237,7 +237,12 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
     }
 
     async function restoreSection(section) {
-      if (!confirm(`Restore ${section} to defaults?`)) return;
+      // pool_info carries the pool fee, and a restore applies it at once (routes/admin/settings.js
+      // applyLiveFee): during a 0% promotion this ends the promotion for every block found next.
+      const feeNote = section === 'pool_info'
+        ? '\n\nThis also resets the pool fee to the default, effective immediately: every block found from now on is split at it. A block already found keeps its rate.'
+        : '';
+      if (!confirm(`Restore ${section} to defaults?${feeNote}`)) return;
 
       try {
         const response = await adminFetch(`/api/admin/settings/${section}/restore`, {

@@ -212,9 +212,11 @@ module.exports = function createPoolRoutes(ctx, app) {
       // nonce and `id`/`created_at` are internal row bookkeeping — none of the three is read by
       // blocks.html or the reactor fuel-rods, and publishing the nonce serves no verifier (the
       // block hash already anchors the find on any chain explorer). Everything the two consumers
-      // actually render is kept, including found_by and the luck pair.
+      // actually render is kept, including found_by and the luck pair. fee_percent is the pool
+      // fee the block's reward is split at (recorded when it was found; null = not on record),
+      // published so a miner can check a fee change never re-priced a block already found.
       let sql = `SELECT height, hash, reward, status, found_by, found_at, confirmed_at,
-                        network_difficulty, round_shares FROM blocks`;
+                        network_difficulty, round_shares, fee_percent FROM blocks`;
       const params = [];
       // `matured` = confirmed OR paid. rewards.js flips confirmed→paid the moment it credits
       // the round, so a bare `status=confirmed` filter drops nearly every settled block — the

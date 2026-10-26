@@ -1014,6 +1014,10 @@ class StratumServer {
     // pause waits on this set, and "settled" means it is empty.
     const inflightEntry = { isBlock: false, startedAt: Date.now() };
     this.inflight.add(inflightEntry);
+    // The pool fee in force as this solution ARRIVES. If it solves a block, creditBlock records
+    // this rate on it, not whatever the fee is after the node round-trip and the block-stats
+    // fetches — a fee saved in that window must not land on a block found under the old rate.
+    const feePercentAtSubmit = this.config.pool_fee_percent;
     (async () => {
       let nodeResult = { accepted: true, blockHash: null, error: null };
       if (this.nodeStratumClient) {
@@ -1124,7 +1128,8 @@ class StratumServer {
           let credited = null;
           try {
             credited = await this.blockManager.creditBlock(
-              height, nodeResult.blockHash, nonce, GRIN_BLOCK_REWARD, session.grinAddress
+              height, nodeResult.blockHash, nonce, GRIN_BLOCK_REWARD, session.grinAddress,
+              feePercentAtSubmit
             );
           } catch (err) {
             credited = { success: false, error: err.message };

@@ -618,26 +618,37 @@ module.exports = function createAdminPayoutsRoutes(ctx, guards) {
     }
   });
 
-  // Pool-fee revenue per found block (reward × pool_fee_percent). An honest, derived report —
-  // the pool's cut of each block, not a separately stored figure.
+  // Pool-fee revenue per found block: reward × the fee % recorded on that block (blocks.js
+  // captures it at find time and rewards.js splits at it), so a fee change never rewrites past
+  // rows. A row from before the column: still unsettled → the live rate, which is what
+  // rewards.js will charge it; already settled with no recovered rate → blank, not a guess.
+  // An orphan's reward never arrived, so its cut is 0.
   router.get('/api/admin/export/fee-revenue.csv', secureAdmin, (req, res) => {
     try {
-      const feePct = parseFloat(config.pool_fee_percent != null ? config.pool_fee_percent : 1.0) || 0;
+      const livePct = parseFloat(config.pool_fee_percent != null ? config.pool_fee_percent : 1.0) || 0;
       if (!adminCsvGate(req, res)) return;
       const before = adminCsvBefore(req);
       const rows = before === null
         ? db.prepare(
-            `SELECT height, hash, reward, status, found_at FROM blocks
+            `SELECT height, hash, reward, status, found_at, fee_percent FROM blocks
              ORDER BY height DESC LIMIT ?`).all(ADMIN_CSV_MAX_ROWS + 1)
         : db.prepare(
-            `SELECT height, hash, reward, status, found_at FROM blocks WHERE height <= ?
+            `SELECT height, hash, reward, status, found_at, fee_percent FROM blocks WHERE height <= ?
              ORDER BY height DESC LIMIT ?`).all(before, ADMIN_CSV_MAX_ROWS + 1);
       const { page, note } = adminCsvPage(res, rows, (last) => last.height);
       const iso = (t) => (t ? new Date(t * 1000).toISOString() : '');
+      const pctOf = (r) => {
+        if (r.fee_percent !== null && r.fee_percent !== undefined) return Number(r.fee_percent);
+        return (r.status === 'immature' || r.status === 'confirmed') ? livePct : null;
+      };
       sendCsv(res, `fee-revenue-${config.network}.csv`,
         ['height', 'hash', 'reward_grin', 'pool_fee_percent', 'pool_cut_grin', 'status', 'found_at'],
-        page.map((r) => [r.height, r.hash, r.reward, feePct,
-          parseFloat((r.reward * feePct / 100).toFixed(9)), r.status, iso(r.found_at)]),
+        page.map((r) => {
+          const pct = pctOf(r);
+          const cut = r.status === 'orphaned' ? 0
+            : pct === null ? '' : parseFloat((r.reward * pct / 100).toFixed(9));
+          return [r.height, r.hash, r.reward, pct === null ? '' : pct, cut, r.status, iso(r.found_at)];
+        }),
         note);
     } catch (err) {
       res.status(500).json({ error: err.message });

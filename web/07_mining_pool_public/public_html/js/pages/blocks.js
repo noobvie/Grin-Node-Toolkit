@@ -67,6 +67,15 @@
             return '<td class="num" style="color:' + color + '" title="round shares ÷ network difficulty">' +
                    v.toFixed(0) + '%</td>';
         }
+        // The fee recorded on the block when it was found — what its reward is split at. An
+        // orphan's reward never arrived, so nothing is split; null = not on record.
+        function feeCell(b) {
+            const pct = b.fee_percent;
+            if (b.status === 'orphaned' || pct === null || pct === undefined || !isFinite(Number(pct))) {
+                return '<td class="num dim">—</td>';
+            }
+            return '<td class="num">' + Number(Number(pct).toFixed(2)) + '%</td>';
+        }
 
         // no-store + a 20 s abort, for the reason given at Auth.read: a fetch on the connection a
         // phone held before sleeping hangs, and the panel keeps its old value meanwhile.
@@ -110,7 +119,7 @@
 
         async function loadBlocks() {
             const tbody = document.getElementById('blocks-tbody');
-            tbody.innerHTML = '<tr><td colspan="6">Loading…</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7">Loading…</td></tr>';
             try {
                 const q = '?limit=' + PAGE_SIZE + '&offset=' + (_page * PAGE_SIZE) +
                           (_filter ? '&status=' + encodeURIComponent(_filter) : '');
@@ -118,7 +127,7 @@
                 const rows = Array.isArray(blocks) ? blocks : [];
                 _lastFull = rows.length === PAGE_SIZE;
                 if (!rows.length) {
-                    tbody.innerHTML = '<tr><td colspan="6">' +
+                    tbody.innerHTML = '<tr><td colspan="7">' +
                         (_page === 0 ? 'No blocks found yet — the pool is still searching.' : 'No more blocks.') +
                         '</td></tr>';
                 } else {
@@ -128,6 +137,7 @@
                             '<td>' + Explorer.link('block', h, h.toLocaleString('en-US')) + '</td>' +
                             '<td>' + statusCell(b.status) + '</td>' +
                             luckCell(b) +
+                            feeCell(b) +
                             // No `title` tooltip (audit §J11-1): /api/pool/blocks masks found_by
                             // now, so the tooltip would only repeat the visible text — but the
                             // old one carried the FULL address on every row of an offset-paged,
@@ -140,7 +150,7 @@
                     }).join('');
                 }
             } catch (e) {
-                tbody.innerHTML = '<tr><td colspan="6">Block data unavailable</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7">Block data unavailable</td></tr>';
                 _lastFull = false;
             }
             updatePager();

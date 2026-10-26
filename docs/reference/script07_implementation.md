@@ -893,6 +893,62 @@ account page refuses the pseudo-address, and a raw `grin-wallet send` trips a co
   negative by it. Client-side only: the server still accepts any amount up to `available`.
 - Tests: `test-operator-revenue.js` 46 → 60 (§8 the four refusals × two buckets, §9 the lock).
 
+### 10.22 Per-block pool fee rate (a fee change never re-prices a found block)
+
+**Status:** built 2026-10-25, not VPS-tested
+
+Design → `script07_design.md` §7 (the fee bullets). Built for a 0% fee promotion: switching the fee
+1 → 0 (or back) must be exact at the boundary and visible to miners.
+
+**The problem it fixes.** `rewards.js` read the LIVE `config.pool_fee_percent` at maturity, ~1440
+blocks (~1 day) after the find. A block found at 0% that matured after the fee went back to 1% was
+charged 1%, and the reverse. Separately, the setting only reached the running pool on a restart
+(`mergeDbSettings` runs at boot), so the admin form, the public pages and the charged rate could all
+disagree; and the fee-revenue CSV priced every past block at today's rate.
+
+**What was built (where).**
+- `blocks.fee_percent` (REAL, NULL = not on record): `lib/db.js` DDL, `migrateBlocks` addition, and
+  the §J5-1 nonce rebuild copies it. On first add, `backfillBlockFeePercent` recovers a PAID block's
+  rate from its `reference_type 'pool_fee'` credit; a paid block with no such row (0% fee, no
+  shares, or a pruned ledger row) stays NULL — those cannot be told apart. It is ONE grouped pass
+  over `balance_log` (`UPDATE … FROM`), not a subquery per block: no index covers
+  `(reference_type, reference_id)`, and on a synthetic in-memory DB the per-block form took 75 s
+  for 2,000 paid blocks × 400k ledger rows — at boot, before stratum is up. Grouped: 29 ms.
+- `BlockManager.creditBlock` stamps the rate on the row at FIND time. `stratum-server.js`
+  snapshots `config.pool_fee_percent` when the submit ARRIVES and passes it in (6th argument);
+  without one, `creditBlock` reads it on entry. Either way it is taken before the node
+  round-trip and the two block-stats fetches (up to 10 s), so a fee saved in that window never
+  lands on a block found under the old rate. A missing rate (null/empty) is stored NULL, never
+  read as 0% (`feeRate` in `blocks.js`).
+- The BlockManager constructor (`_stampUnsettledFeeRate`) records the boot rate on an
+  immature/confirmed row that has none. That is NOT necessarily its find-time rate (a fee change
+  + restart during maturation, or a fee saved but not yet restarted before this boot, makes them
+  differ): it is the rate the code before `fee_percent` would have charged at maturity, so the
+  charge is unchanged, and a fee saved live after the deploy cannot re-price the block.
+  `/api/pool/blocks` publishes the stamped value like any other.
+- `RewardDistributor.distributeRewards` splits at `block.fee_percent`; a NULL row uses the live rate
+  and writes it onto the row inside the settle transaction. `creditBalances` books a fee credit
+  when `poolFee > 0`, no longer on the config rate.
+- `routes/admin/settings.js` `applyLiveFee`: a `pool_info` save or Restore defaults sets
+  `config.pool_fee_percent` at once (one shared config object; one process). Admin helper text says so,
+  and the Pool Info "Restore Defaults" confirm (`settings-common.js`) warns that it resets the fee
+  to the default immediately — mid-promotion, that ends the promotion.
+- `GET /api/admin/export/fee-revenue.csv`: each row's own rate; NULL + unsettled → live rate (what
+  it will be charged), NULL + settled → blank; an orphan's cut is 0.
+- Public: `GET /api/pool/blocks` returns `fee_percent` (API_DOC_META updated, and pool-info's entry
+  says its fee is the rate for blocks found from now on); `blocks.html` P-06 has a Fee column
+  (`—` for orphans and unknown rows) and the intro explains it.
+
+**Unchanged on purpose.** The dashboard tile and `/api/config/pool-info` show the live rate; the
+Payments page "Effective pool fee" is ledger-derived, so it drifts toward the promo rate rather than
+jumping. A 0% fee also sends nothing to the prize pool through `prize_fee_cut_percent` (the cut is
+a share of the fee).
+
+- Tests: `test-block-ledger.js` 85 → 101 (§11: stamp at find, a fee saved during the node
+  fetches, the submit snapshot winning over the live rate, a missing rate stored NULL, both boundary directions, legacy
+  fallback + record, backfill, boot stamp of a maturing legacy block, rebuild keeps the column); `test-admin-guards.js` +5 (save/restore
+  call `applyLiveFee`; 0 is applied, other sections and non-numbers are not).
+
 ## Payments
 
 ### 10.2 Goblin/Nostr payout rail

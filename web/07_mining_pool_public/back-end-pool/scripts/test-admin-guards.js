@@ -334,6 +334,25 @@ try {
   ok('the settings save no longer rescans donor names', !/rescan/i.test(saveBlock));
   ok('the settings save still writes through updateSection and invalidates branding',
     /poolSettings\.updateSection\(req\.params\.section, req\.body, req\.user\.user_id\)/.test(saveBlock) && /invalidateBranding\(\)/.test(saveBlock));
+  // The pool fee is live on save AND on Restore defaults — a restart-only fee showed miners the
+  // old rate while the admin form showed the new one.
+  const restoreBlock = routeSource('post', '/api/admin/settings/:section/restore').replace(/\/\/[^\n]*/g, '');
+  ok('a settings save applies the saved pool fee to the live config',
+    /const updated = poolSettings\.updateSection\([^)]*\);\s*applyLiveFee\(req\.params\.section, updated\)/.test(saveBlock));
+  ok('…and so does Restore defaults',
+    /const restored = poolSettings\.resetSection\([^)]*\);\s*applyLiveFee\(req\.params\.section, restored\)/.test(restoreBlock));
+  {
+    const settingsSrc = fs.readFileSync(path.join(APP, 'routes/admin/settings.js'), 'utf8');
+    const body = (settingsSrc.match(/const applyLiveFee = \(section, data\) => \{([\s\S]*?)\n  \};/) || [, ''])[1];
+    const applyLiveFee = new Function('config', 'section', 'data', body);
+    const cfg = { pool_fee_percent: 1 };
+    applyLiveFee(cfg, 'pool_info', { pool_fee_percent: 0 });
+    ok('applyLiveFee: a pool_info save of 0 sets the live fee to 0 (0 is a value, not "unset")', cfg.pool_fee_percent === 0);
+    applyLiveFee(cfg, 'payout', { pool_fee_percent: 5 });
+    ok('applyLiveFee: another section never touches the fee', cfg.pool_fee_percent === 0);
+    applyLiveFee(cfg, 'pool_info', { pool_fee_percent: 'x' });
+    ok('applyLiveFee: a non-numeric value leaves the fee alone', cfg.pool_fee_percent === 0);
+  }
 
   // The public donor list must not have grown a moderation field or a full address by
   // accident. The route delegates to lib/donor-ledger.js donorWall() and hands it the mask as

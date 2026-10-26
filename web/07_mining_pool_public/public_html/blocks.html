@@ -151,7 +151,9 @@
         <p class="dim" style="margin:0 0 16px;font-size:13px;line-height:1.6;">
             <strong>Luck</strong> is the round's shares &divide; the network difficulty — under 100% means the
             block was found with fewer shares than statistically expected (lucky), over 100% means it took
-            more (unlucky). Each block is independently verifiable on the Grin chain explorer.
+            more (unlucky). <strong>Fee</strong> is the pool fee a block's reward is split at — the rate in
+            force when it was found, kept even if the fee changes while the block matures. Each block is
+            independently verifiable on the Grin chain explorer.
         </p>
 
         <!-- ═══ Spec placard: compact live tiles ═══ -->
@@ -281,13 +283,14 @@
                                 <th>Height</th>
                                 <th>Status</th>
                                 <th class="num" title="Round shares ÷ network difficulty. Under 100% = lucky.">Luck</th>
+                                <th class="num" title="The pool fee this block is split at — the rate when it was found, kept even if the fee changes while it matures.">Fee</th>
                                 <th>Found by</th>
                                 <th>Date (UTC)</th>
                                 <th class="num">Age</th>
                             </tr>
                         </thead>
                         <tbody id="blocks-tbody">
-                            <tr><td colspan="6">Loading…</td></tr>
+                            <tr><td colspan="7">Loading…</td></tr>
                         </tbody>
                     </table>
                     </div>

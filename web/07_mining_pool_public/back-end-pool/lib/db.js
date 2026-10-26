@@ -260,7 +260,8 @@ function migrateBlocks() {
     const additions = {
       network_difficulty: 'REAL DEFAULT NULL',
       round_shares: 'REAL DEFAULT NULL',
-      fees: 'REAL DEFAULT NULL'
+      fees: 'REAL DEFAULT NULL',
+      fee_percent: 'REAL DEFAULT NULL'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -268,9 +269,38 @@ function migrateBlocks() {
         console.warn(`[db] blocks: added missing column ${name}`);
       }
     }
+    if (!have.has('fee_percent')) backfillBlockFeePercent();
     migrateBlocksNonceToText();
   } catch (e) {
     console.error(`[db] blocks migration check failed: ${e.message}`);
+  }
+}
+
+// One-time, when fee_percent is first added: recover the rate an already-settled block was
+// really split at from the pool-fee credit rewards.js booked for it (the only writer of a
+// reference_type 'pool_fee' credit). A paid block with no such row — a 0% fee, no attributable
+// shares, or a ledger row since pruned by balance_log_keep_days — stays NULL ("not recorded"):
+// those cases cannot be told apart, and a guessed rate would be published as fact. Unsettled
+// legacy rows stay NULL too; rewards.js charges them the current rate and records it.
+// Its own try: a failure here must not skip the nonce rebuild that runs after it.
+//
+// ONE pass over balance_log (grouped, then joined), never a subquery per block: no index covers
+// (reference_type, reference_id), so a correlated subquery scans the whole ledger once per paid
+// block. That runs at boot, before stratum is up — on a synthetic in-memory DB, 2,000 paid
+// blocks against a 400k-row ledger took 75 s that way, and 29 ms grouped.
+function backfillBlockFeePercent() {
+  try {
+    const r = db.prepare(`
+      UPDATE blocks SET fee_percent = ROUND(100.0 * f.fee / blocks.reward, 4)
+      FROM (SELECT reference_id AS height, SUM(amount) AS fee FROM balance_log
+            WHERE reference_type = 'pool_fee' AND event_type = 'credit'
+            GROUP BY reference_id) AS f
+      WHERE f.height = blocks.height
+        AND blocks.fee_percent IS NULL AND blocks.status = 'paid' AND blocks.reward > 0
+    `).run();
+    if (r.changes > 0) console.warn(`[db] blocks: fee_percent recovered from the ledger for ${r.changes} settled block(s)`);
+  } catch (e) {
+    console.error(`[db] blocks: fee_percent backfill skipped: ${e.message}`);
   }
 }
 
@@ -322,17 +352,19 @@ function migrateBlocksNonceToText() {
         confirmed_at INTEGER DEFAULT NULL,
         network_difficulty REAL DEFAULT NULL,
         round_shares REAL DEFAULT NULL,
+        fee_percent REAL DEFAULT NULL,
         created_at INTEGER NOT NULL DEFAULT (unixepoch())
       )`);
+      // fee_percent is copied: migrateBlocks adds it before calling this rebuild.
       db.exec(`INSERT INTO blocks_j5_new
         (id, height, hash, nonce, reward, fees, status, found_by, found_at, confirmed_at,
-         network_difficulty, round_shares, created_at)
+         network_difficulty, round_shares, fee_percent, created_at)
         SELECT id, height, hash,
                CASE WHEN typeof(nonce) = 'integer' THEN CAST(nonce AS TEXT)
                     WHEN typeof(nonce) = 'text'    THEN nonce
                     ELSE '' END,
                reward, fees, status, found_by, found_at, confirmed_at,
-               network_difficulty, round_shares, created_at
+               network_difficulty, round_shares, fee_percent, created_at
         FROM blocks`);
       db.exec('DROP TABLE blocks');
       db.exec('ALTER TABLE blocks_j5_new RENAME TO blocks');
@@ -617,6 +649,10 @@ function createSchema() {
       confirmed_at INTEGER DEFAULT NULL,
       network_difficulty REAL DEFAULT NULL,
       round_shares REAL DEFAULT NULL,
+      -- Pool fee % in force when the block was FOUND; rewards.js splits the reward at this
+      -- rate at maturity, so a fee change while the block matures (~1 day) never reaches it.
+      -- NULL = a row from before the column whose rate is not on record.
+      fee_percent REAL DEFAULT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
 

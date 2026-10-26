@@ -64,6 +64,8 @@ GSB_REPO="${GSB_REPO:-https://github.com/mimblewimble/grin.git}"
 GSB_SRC_DIR="${GSB_SRC_DIR:-/opt/grin/src/grin}"
 GSB_BIN_DIR="${GSB_BIN_DIR:-/opt/grin/bin}"
 GSB_DEFAULT_REF="${GSB_DEFAULT_REF:-staging}"
+# Pause between two nodes' restarts when both are swapped (_gsb_stagger).
+GSB_STAGGER_S="${GSB_STAGGER_S:-1000}"
 # Toolkit-carried grin patches (scripts/patches/grin/*.patch) — resolved from this
 # file's own location at source time, so it works wherever the toolkit is cloned.
 GSB_PATCH_DIR="${GSB_PATCH_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/patches/grin}"
@@ -309,6 +311,23 @@ _gsb_fetch_source() {
         info  "Branches:  git -C $GSB_SRC_DIR branch -r"
         info  "Tags:      git -C $GSB_SRC_DIR tag --sort=-creatordate | head"
         return 1
+    fi
+
+    # Anyone can open a pull request, and cargo runs a crate's build scripts as
+    # the building user — root here. The head can also move after the operator
+    # read the PR, so show the exact commit and make building it a decision.
+    # Asked BEFORE the submodule update: a PR's .gitmodules chooses the URLs
+    # that update would clone from.
+    if [[ "$ref" == pr/* ]]; then
+        echo ""
+        warn "A pull request is UNREVIEWED code. Compiling it runs its build scripts as root."
+        info "Head commit: $(git -C "$GSB_SRC_DIR" log -1 --format='%H  %an  %s' 2>/dev/null || echo '?')"
+        info "Compare it with the PR's commits page before you continue:"
+        info "  ${GSB_REPO%.git}/pull/${ref#pr/}/commits"
+        if ! _gsb_confirm "Build this exact commit?" n; then
+            info "Build cancelled."
+            return 1
+        fi
     fi
 
     git -C "$GSB_SRC_DIR" submodule update --init --recursive --quiet 2>/dev/null || true
@@ -690,10 +709,125 @@ EOF
 }
 
 # -----------------------------------------------------------------------------
-# _gsb_install_to_instances — stop nodes, back up each current binary to
-# <dir>/grin.prev, install the artifact, restart. Mirrors update_binary_only's
-# flow (same stop/restart primitives) so a source build behaves like a release
-# update everywhere else in the toolkit.
+# _gsb_pick_targets <verb> — narrow GSB_INST_DIRS / GSB_INST_NETS to the node(s)
+# the operator chooses. One node: no question. Two: mainnet, testnet or both.
+# There is no default, so Enter cancels: on a pool box a careless Enter must
+# not restart the node the pool is mining on. Returns 1 on cancel.
+# -----------------------------------------------------------------------------
+_gsb_pick_targets() {
+    local verb="$1" n=${#GSB_INST_DIRS[@]} i
+    (( n <= 1 )) && return 0
+
+    echo ""
+    echo -e "  ${BOLD}Which node should $verb?${RESET}"
+    for i in "${!GSB_INST_DIRS[@]}"; do
+        echo -e "    ${GREEN}$(( i + 1 ))${RESET}) ${GSB_INST_NETS[$i]} — ${DIM}${GSB_INST_DIRS[$i]}${RESET}"
+    done
+    echo -e "    ${GREEN}$(( n + 1 ))${RESET}) both"
+    echo -e "    ${DIM}0${RESET}) back"
+    echo -ne "${BOLD}Choice: ${RESET}"
+    local c=""
+    read -r c || c=""
+    if [[ "$c" == "$(( n + 1 ))" ]]; then
+        return 0
+    fi
+    # No leading zero: bash reads "08" as octal and prints an error.
+    if [[ "$c" =~ ^[1-9][0-9]{0,2}$ ]] && (( c <= n )); then
+        local d="${GSB_INST_DIRS[$(( c - 1 ))]}" t="${GSB_INST_NETS[$(( c - 1 ))]}"
+        GSB_INST_DIRS=("$d")
+        GSB_INST_NETS=("$t")
+        return 0
+    fi
+    info "Cancelled — nothing was changed."
+    return 1
+}
+
+# -----------------------------------------------------------------------------
+# Targets are stopped ONE AT A TIME, right before their own swap, so with
+# "both" the second node keeps serving through the first one's swap and the
+# stagger pause. _gsb_stop_upfront covers the case where s01_stop_node is
+# missing: the only stop left stops EVERY node, so it runs once before the
+# loop, and only when every node is a target anyway.
+# -----------------------------------------------------------------------------
+_gsb_stop_one() {
+    local net="$1"
+    _gsb_have s01_stop_node || return 0
+    s01_stop_node "$net" || warn "Stopping the $net node reported a problem — continuing."
+    return 0
+}
+
+_gsb_stop_upfront() {
+    _gsb_have s01_stop_node && return 0
+    # Re-collecting overwrites the selection, so count on a copy and put it back.
+    local -a keep_dirs=("${GSB_INST_DIRS[@]}") keep_nets=("${GSB_INST_NETS[@]}")
+    local total=0
+    if _gsb_collect_instances; then total=${#GSB_INST_NETS[@]}; fi
+    GSB_INST_DIRS=("${keep_dirs[@]}")
+    GSB_INST_NETS=("${keep_nets[@]}")
+    if (( ${#GSB_INST_NETS[@]} < total )); then
+        error "s01_stop_node is unavailable — cannot stop one node without stopping the other."
+        return 1
+    fi
+    if _gsb_have stop_grin_gracefully; then
+        stop_grin_gracefully || warn "Stop step reported a problem — continuing."
+        return 0
+    fi
+    error "stop_grin_gracefully is unavailable — refusing to swap a running binary."
+    return 1
+}
+
+# -----------------------------------------------------------------------------
+# _gsb_stagger <index> <net> — before every target after the first, wait
+# GSB_STAGGER_S. grin startup is heavy on CPU and disk, and a small VPS cannot
+# boot two nodes at once: the same reason the @reboot autostart holds testnet
+# back 1000 s (grin_node_keepalive.sh). Enter skips the wait at a terminal.
+# -----------------------------------------------------------------------------
+_gsb_stagger() {
+    local i="$1" net="$2" s="$GSB_STAGGER_S" junk=""
+    (( i > 0 )) || return 0
+    [[ "$s" =~ ^[0-9]+$ ]] || s=1000
+    (( s > 0 )) || return 0
+    echo ""
+    info "Waiting ${s} s before the $net node, so two nodes do not boot at once."
+    if [[ -t 0 ]]; then
+        info "Press Enter to go ahead now. The $net node keeps running until then."
+        read -r -t "$s" junk || true
+    else
+        sleep "$s" || true
+    fi
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# _gsb_start_target <net> <dir> — restart one swapped node. s01_start_node is
+# preferred because it reports a failure and returns, where start_grin_tmux can
+# `die` and leave the next target unswapped. It starts the dir the node table
+# resolves, so it is used only when that dir is the one just swapped.
+# -----------------------------------------------------------------------------
+_gsb_start_target() {
+    local net="$1" dir="$2"
+    if _gsb_have s01_start_node && _gsb_have s01_scan_nodes; then
+        s01_scan_nodes
+        if [[ "${NT_DIR[$net]:-}" == "$dir" ]]; then
+            s01_start_node "$net" || warn "Could not start the $net node — check the log."
+            return 0
+        fi
+    fi
+    if _gsb_have start_grin_tmux; then
+        GRIN_DIR="$dir"
+        NETWORK_TYPE="$net"
+        start_grin_tmux || warn "Could not start the $net node — check the log."
+    else
+        warn "No start function available — start the $net node manually."
+    fi
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# _gsb_install_to_instances — stop the chosen node(s), back up each current
+# binary to <dir>/grin.prev, install the artifact, restart. Mirrors
+# update_binary_only's flow (same stop/restart primitives) so a source build
+# behaves like a release update everywhere else in the toolkit.
 # -----------------------------------------------------------------------------
 _gsb_install_to_instances() {
     local art="${GSB_ARTIFACT:-}"
@@ -709,6 +843,8 @@ _gsb_install_to_instances() {
         return 1
     fi
 
+    _gsb_pick_targets "get $(basename "$art")" || return 1
+
     echo ""
     echo -e "  ${BOLD}Installing:${RESET} $(basename "$art")"
     echo -e "  ${BOLD}Target node(s):${RESET}"
@@ -723,17 +859,15 @@ _gsb_install_to_instances() {
     info "The replaced binary is kept twice: <node_dir>/grin.prev for a one-key"
     info "rollback, and an archived copy in $GSB_BIN_DIR that survives a rebuild."
     echo ""
-    if ! _gsb_confirm "Stop the node(s), swap the binary and restart?" n; then
+    if (( ${#GSB_INST_DIRS[@]} > 1 )); then
+        info "One node at a time: ${GSB_INST_NETS[1]} is swapped ${GSB_STAGGER_S} s after ${GSB_INST_NETS[0]} restarts."
+    fi
+    if ! _gsb_confirm "Stop the node(s) above, swap the binary and restart?" n; then
         info "Cancelled — nothing was changed."
         return 1
     fi
 
-    if _gsb_have stop_grin_gracefully; then
-        stop_grin_gracefully || warn "Stop step reported a problem — continuing."
-    else
-        error "stop_grin_gracefully is unavailable — refusing to swap a running binary."
-        return 1
-    fi
+    _gsb_stop_upfront || return 1
 
     local art_ver="" art_ref=""
     art_ver=$("$art" --version 2>/dev/null | head -1 || true)
@@ -755,6 +889,8 @@ _gsb_install_to_instances() {
 
     for i in "${!GSB_INST_DIRS[@]}"; do
         local dir="${GSB_INST_DIRS[$i]}" net="${GSB_INST_NETS[$i]}"
+        _gsb_stagger "$i" "$net"
+        _gsb_stop_one "$net"
         local prev_desc=""
         prev_desc=$(_gsb_binary_desc "$dir")
 
@@ -762,12 +898,22 @@ _gsb_install_to_instances() {
             # Durable copy first (survives a node-dir wipe), then the fast one.
             gsb_archive_replaced "$dir"
             cp -a "$dir/grin" "$dir/grin.prev" \
-                || { error "Could not back up $dir/grin — skipping this node."; continue; }
+                || { error "Could not back up $dir/grin — skipping this node."; _gsb_start_target "$net" "$dir"; continue; }
             info "Backed up current binary → $dir/grin.prev  ($prev_desc)"
         fi
 
-        install -m 755 "$art" "$dir/grin" \
-            || { error "Install into $dir failed — leaving grin.prev in place."; continue; }
+        # A failed install can leave $dir/grin missing or half-written, so put
+        # the backup back before restarting the node on it.
+        if ! install -m 755 "$art" "$dir/grin"; then
+            error "Install into $dir failed."
+            if [[ -f "$dir/grin.prev" ]] && cp -a "$dir/grin.prev" "$dir/grin"; then
+                info "Put the previous binary back from $dir/grin.prev."
+                _gsb_start_target "$net" "$dir"
+            else
+                error "Could not restore $dir/grin — the $net node is left stopped."
+            fi
+            continue
+        fi
         chown grin:grin "$dir/grin" 2>/dev/null || true
 
         local hdr="source build (script 01, key G)"
@@ -788,13 +934,7 @@ EOF
 
         success "Installed into $dir/grin"
 
-        if _gsb_have start_grin_tmux; then
-            GRIN_DIR="$dir"
-            NETWORK_TYPE="$net"
-            start_grin_tmux || warn "Could not start the $net node — check the log."
-        else
-            warn "start_grin_tmux unavailable — start the $net node manually."
-        fi
+        _gsb_start_target "$net" "$dir"
     done
 
     echo ""
@@ -836,6 +976,12 @@ _gsb_restore_previous() {
         return 1
     fi
 
+    GSB_INST_DIRS=("${cand_dirs[@]}")
+    GSB_INST_NETS=("${cand_nets[@]}")
+    _gsb_pick_targets "be rolled back" || return 1
+    cand_dirs=("${GSB_INST_DIRS[@]}")
+    cand_nets=("${GSB_INST_NETS[@]}")
+
     echo ""
     echo -e "  ${BOLD}Rollback targets:${RESET}"
     for i in "${!cand_dirs[@]}"; do
@@ -844,17 +990,20 @@ _gsb_restore_previous() {
         echo -e "        ${DIM}restores: $("${cand_dirs[$i]}/grin.prev" --version 2>/dev/null | head -1 || echo unreadable)${RESET}"
     done
     echo ""
+    if (( ${#cand_dirs[@]} > 1 )); then
+        info "One node at a time: ${cand_nets[1]} is restored ${GSB_STAGGER_S} s after ${cand_nets[0]} restarts."
+    fi
     if ! _gsb_confirm "Restore the previous binary on the node(s) above?" y; then
         info "Cancelled."
         return 1
     fi
 
-    if _gsb_have stop_grin_gracefully; then
-        stop_grin_gracefully || warn "Stop step reported a problem — continuing."
-    fi
+    _gsb_stop_upfront || return 1
 
     for i in "${!cand_dirs[@]}"; do
         local dir="${cand_dirs[$i]}" net="${cand_nets[$i]}"
+        _gsb_stagger "$i" "$net"
+        _gsb_stop_one "$net"
         # Keep the source build around under its artifact name; grin.prev is
         # consumed by the restore so a second rollback cannot loop endlessly.
         if cp -a "$dir/grin.prev" "$dir/grin"; then
@@ -863,13 +1012,10 @@ _gsb_restore_previous() {
             success "Restored $dir/grin  ($(_gsb_binary_desc "$dir"))"
         else
             error "Restore failed for $dir — binary left as-is."
+            _gsb_start_target "$net" "$dir"
             continue
         fi
-        if _gsb_have start_grin_tmux; then
-            GRIN_DIR="$dir"
-            NETWORK_TYPE="$net"
-            start_grin_tmux || warn "Could not start the $net node — check the log."
-        fi
+        _gsb_start_target "$net" "$dir"
     done
 
     _gsb_have log && log "[SOURCE BUILD] rolled back ${#cand_dirs[@]} instance(s)"

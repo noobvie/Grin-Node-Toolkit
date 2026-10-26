@@ -417,8 +417,8 @@ A (Super Auto — one-hit wipe & rebuild both) — run_super_auto. Inline, one p
   (_install_grin_logrotate). gnk_* come from lib/grin_node_keepalive.sh (sourced at top).
   Success or cancel → back to the menu. It wipes only the dirs the conf lists.
 
-G (source build / rollback) — gsb_menu, lib/01_lib_source_build.sh. Stops ALL running nodes
-  while it swaps a binary (known gap, see script01_implementation.md Open items).
+G (source build / rollback) — gsb_menu, lib/01_lib_source_build.sh. Install (2) and roll back
+  (4) ask mainnet / testnet / both and stop only the chosen network (s01_stop_node).
 
 "both" network — runs setup_one_node twice sequentially. Binary download cached after first run
   (reused for testnet). Each run independently saves to conf.

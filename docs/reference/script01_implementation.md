@@ -1,7 +1,7 @@
 # Script 01 — Build a New Grin Node: implementation
 
 > **Covers code as of:** 2026-10-15 · **Last verified:** never systematically verified (written from the build record and a read of `lib/01_lib_menu.sh` and `lib/01_lib_node_table.sh`; the stub-harness result below describes the code, not this page)
-> **Product code last changed:** 2026-10-15 — `scripts/01_build_new_grin_node.sh` split into an entry plus `scripts/lib/01_lib_*.sh`; new menu and node table, then menu groups + per-key target hints, autostart in the status line and the wizard's Step 14c autostart offer; `scripts/lib/grin_node_control.sh` (exact `=` session match); `scripts/081_host_monitor_port.sh` (remote stop snippet). Working tree at the time of writing.
+> **Product code last changed:** 2026-10-26 — `scripts/lib/01_lib_source_build.sh` (key G: pull-request refs, per-node install/rollback; working tree); 2026-10-15 — `scripts/01_build_new_grin_node.sh` split into an entry plus `scripts/lib/01_lib_*.sh`; new menu and node table, then menu groups + per-key target hints, autostart in the status line and the wizard's Step 14c autostart offer; `scripts/lib/grin_node_control.sh` (exact `=` session match); `scripts/081_host_monitor_port.sh` (remote stop snippet). Working tree at the time of writing.
 
 **Status:** built, **not VPS-tested.** Behaviour was exercised only against a stub harness kept outside
 the repo (it sources one lib with `tmux`/`ss`/`su`/`pgrep`/`kill`/`grin` replaced by shell functions
@@ -150,7 +150,16 @@ the exact `-t "=name"`) and `081_host_monitor_port.sh` (its remote stop snippet 
   old dir; the prompt says so when that is the case. Step 14d is the event recorder offer.
 - **Key A** — wipes **both** nodes and rebuilds both pruned and streamed, with autostart, watchdog,
   event recorder and logrotate. It returns to the menu when done.
-- **Key G** stops **both** nodes while it swaps a binary (see Open items).
+- **Key G** → `2` install and `4` roll back ask which node to swap: mainnet, testnet or both. Enter
+  cancels, and with one node installed nothing is asked. Only the chosen network is stopped
+  (`s01_stop_node`), so the other node keeps running. With both, the nodes go one at a time: mainnet is
+  stopped, swapped and restarted, then the script waits `GSB_STAGGER_S` (1000 s, the same hold-back as
+  the testnet `@reboot` autostart) before it stops testnet, which serves until then. Enter skips the wait.
+  Each swapped node is restarted through `s01_start_node` when the node table resolves the same dir,
+  otherwise through `start_grin_tmux`. A node whose backup, install or restore fails is restarted on the
+  binary it already had. → `1` also builds a GitHub pull request: a ref `pr/<N>` (or `#N`, `prN`,
+  `pull/N`, any case) is fetched from `refs/pull/<N>/head`, and the exact head commit must be confirmed
+  before the compile, because a PR's build scripts run as root.
 - **A box that ran the old `K`** (conf emptied, dirs left on disk): the scan still finds the nodes by
   disk and prints the conf mismatch; nothing refills the conf until the next install or full reinstall
   of that network rewrites it.
@@ -225,9 +234,7 @@ wrapped around old linear code inherits every `exit` in it — contain them, don
   `download_grin_binary` can print *success* after failing, and `patch_config`'s `sed -i` lines can fail
   silently, leaving a node to start on an unpatched toml. Needs a decision: add `|| die` to the unguarded
   wizard file ops (smaller), or call the menu bare and drop the guards around it.
-- **Key `G` stops both nodes.** Its install and rollback call `stop_grin_gracefully` (= stop all) and
-  restart through `start_grin_tmux`, which can `die`, with no stagger. Intended: stop and start only the
-  instance it installs into, through `s01_stop_node`/`s01_start_node`.
+- **Key `G` starts a stopped node.** Install also starts a chosen node that was stopped before the swap.
 - **Wizard prompts that still leave the script.** `check_legacy_grin_dir`, `select_archive_mode` and the
   disk-space prompt `exit 0` on "0", and a typo at Step 4 hits `die` instead of re-prompting
   (`lib/01_lib_wizard.sh`, `lib/01_lib_chain_data.sh`). After key 4 → full reinstall the network is

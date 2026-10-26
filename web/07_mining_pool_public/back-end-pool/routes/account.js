@@ -156,9 +156,9 @@ module.exports = function createAccountRoutes(ctx) {
         } catch (e) { return off(0); }
       })();
 
-      // Donor profile (design §18.6) — the donor's OWN view of their nickname + banner requests.
-      // This page is public to anyone holding the address, so profileFor() never returns the
-      // pending name text, image bytes or who decided; a rejection reason IS shown (the admin UI
+      // Donor profile (design §18.6, §18.12) — the donor's OWN view of their nickname, banner and
+      // link requests. This page is public to anyone holding the address, so profileFor() never
+      // returns the pending name text, pending URL, image bytes or who decided; a rejection reason IS shown (the admin UI
       // says so beside the field). Guarded on its own like the two blocks above: null on a
       // failure, never a 500 of the money page. slot_rank costs one ledger scan and only runs
       // for an address that has donated.
@@ -914,10 +914,11 @@ module.exports = function createAccountRoutes(ctx) {
   // where the money goes — a leaked first-ever rig password must not be a permanent key to
   // somebody else's payout destination.
   //
-  // PURPOSE (design §18.6). The same gate guards a donor-profile change, which speaks
-  // for the address on a public page. `purpose` picks the WORDING only — the rules are identical
-  // — so a donor is never told they are "changing a payout destination". The 'destination' texts
-  // are the pre-§18 strings, unchanged byte for byte.
+  // PURPOSE. The age floor and the anchor rule also guard a donor-profile change (design §18.6),
+  // through requireAgedProof below: ONE proof instead of two, because a profile speaks for the
+  // address on a public page but cannot move money. `purpose` picks the WORDING only, so a donor
+  // is never told they are "changing a payout destination". The 'destination' texts are the
+  // pre-§18 strings, unchanged byte for byte.
   const PROOF_PURPOSES = {
     destination: {
       required: 'to change a payout destination',
@@ -932,6 +933,50 @@ module.exports = function createAccountRoutes(ctx) {
       anchor: 'changing your donor profile',
     },
   };
+  // The age floor, shared by both gates. Floored, and NOT allowed to reach zero. The destination
+  // cooldown is an operator dial and 0 is a legitimate setting for it ("don't make me wait after
+  // registering") — but the age requirement is a different control that happens to borrow the
+  // same number, and letting a 0 there switch it off would silently restore the §J3-1 hole on
+  // any pool that turned the cooldown down. An injected proof is minutes old; one hour breaks
+  // "mine for ten seconds, then redirect" while staying invisible to anyone who has actually
+  // been mining here.
+  const proofMinAgeSec = () => {
+    const cooldownH = config.nostr_destination_cooldown_hours !== undefined ? config.nostr_destination_cooldown_hours : 48;
+    const MIN_PROOF_AGE_SEC = 3600;
+    return Math.max(MIN_PROOF_AGE_SEC, (Math.max(0, Number(cooldownH) || 0) * 3600));
+  };
+  // A leg is acceptable only from a LIVE row of the proof set (never an evicted anchor), and
+  // only once it has aged — age is first_seen_at, which a refresh never moves (design §17.2
+  // #2) and a returning evicted anchor restarts (script07_implementation.md §17.7), so an anchor cannot be re-activated
+  // into an aged leg.
+  // age_seconds === null means the row predates the timestamp columns; treat an unknown
+  // age as OLD, not as fresh — those rows were written before this attack was reachable,
+  // and failing them closed would lock out every miner who mined before the upgrade.
+  const proofLegFails = (p, minAgeSec) => {
+    if (p.slot === 'anchor') return 'anchor_not_accepted_here';
+    if (p.age_seconds !== null && p.age_seconds !== undefined && p.age_seconds < minAgeSec) {
+      return 'proof_too_recent';
+    }
+    return null;
+  };
+  // The refusal for one leg: audited, with the sentence the account page shows. `leg` is 'ip',
+  // 'password', or 'proof' (requireAgedProof's single box, before the kind is known). `single`
+  // marks the one-box gate, where the other kind of proof is a way out worth naming.
+  const proofDeny = (ctx, leg, reason, code) => {
+    const { addr, reqIp, action, words, minAgeSec, single } = ctx;
+    auditOwnerProof(db, { action, grinAddress: addr, ip: reqIp, ok: false, details: { reason, leg } });
+    return {
+      ok: false, code: code || 403, reason,
+      error: reason === 'proof_too_recent'
+        // minAgeSec, not cooldownH: the age floor is what was enforced, and with the
+        // cooldown dial at 0 the old text told the miner "at least 0 h old" while refusing.
+        ? `That ${leg === 'ip' ? 'mining IP' : 'rig password'} was only recorded recently. ${words.aged} using evidence at least ${Math.ceil(minAgeSec / 3600)} h old — this is what stops someone who briefly mined to your address from ${words.harm}.` +
+          (single ? ` Try your ${leg === 'ip' ? 'rig password' : 'mining IP'} instead, or ${leg === 'ip' ? 'an IP' : 'a password'} your rigs used before.` : '')
+        : reason === 'anchor_not_accepted_here'
+          ? `That proof is your original recorded one, and it has dropped out of the ${PROOF_SET_MAX} most recently used. It can withdraw to your own wallet, but ${words.anchor} needs ${single ? 'a mining IP or rig password' : 'a mining IP and rig password'} your rigs are still using.`
+          : (leg === 'ip' ? 'Mining IP proof failed' : leg === 'password' ? 'Rig password proof failed' : 'Ownership proof failed'),
+    };
+  };
   const requireBothProofs = async (addr, body, reqIp, action, purpose = 'destination') => {
     const words = PROOF_PURPOSES[purpose] || PROOF_PURPOSES.destination;
     const ipRaw = (body && (body.ip_proof || body.proof)) || '';
@@ -939,42 +984,9 @@ module.exports = function createAccountRoutes(ctx) {
     if (!ipRaw || !passRaw) {
       return { ok: false, code: 400, error: `Both your mining IP and your rig password are required ${words.required}`, reason: 'both_proofs_required' };
     }
-    const cooldownH = config.nostr_destination_cooldown_hours !== undefined ? config.nostr_destination_cooldown_hours : 48;
-    // Floored, and NOT allowed to reach zero. The destination cooldown is an operator dial and
-    // 0 is a legitimate setting for it ("don't make me wait after registering") — but the age
-    // requirement is a different control that happens to borrow the same number, and letting a
-    // 0 there switch it off would silently restore the §J3-1 hole on any pool that turned the
-    // cooldown down. An injected proof is minutes old; one hour breaks "mine for ten seconds,
-    // then redirect" while staying invisible to anyone who has actually been mining here.
-    const MIN_PROOF_AGE_SEC = 3600;
-    const minAgeSec = Math.max(MIN_PROOF_AGE_SEC, (Math.max(0, Number(cooldownH) || 0) * 3600));
-    // A leg is acceptable only from a LIVE row of the proof set (never an evicted anchor), and
-    // only once it has aged — age is first_seen_at, which a refresh never moves (design §17.2
-    // #2) and a returning evicted anchor restarts (script07_implementation.md §17.7), so an anchor cannot be re-activated
-    // into an aged leg.
-    // age_seconds === null means the row predates the timestamp columns; treat an unknown
-    // age as OLD, not as fresh — those rows were written before this attack was reachable,
-    // and failing them closed would lock out every miner who mined before the upgrade.
-    const legFails = (p) => {
-      if (p.slot === 'anchor') return 'anchor_not_accepted_here';
-      if (p.age_seconds !== null && p.age_seconds !== undefined && p.age_seconds < minAgeSec) {
-        return 'proof_too_recent';
-      }
-      return null;
-    };
-    const deny = (leg, reason, code) => {
-      auditOwnerProof(db, { action, grinAddress: addr, ip: reqIp, ok: false, details: { reason, leg } });
-      return {
-        ok: false, code: code || 403, reason,
-        error: reason === 'proof_too_recent'
-          // minAgeSec, not cooldownH: the age floor is what was enforced, and with the
-          // cooldown dial at 0 the old text told the miner "at least 0 h old" while refusing.
-          ? `That ${leg === 'ip' ? 'mining IP' : 'rig password'} was only recorded recently. ${words.aged} using evidence at least ${Math.ceil(minAgeSec / 3600)} h old — this is what stops someone who briefly mined to your address from ${words.harm}.`
-          : reason === 'anchor_not_accepted_here'
-            ? `That proof is your original recorded one, and it has dropped out of the ${PROOF_SET_MAX} most recently used. It can withdraw to your own wallet, but ${words.anchor} needs a mining IP and rig password your rigs are still using.`
-            : (leg === 'ip' ? 'Mining IP proof failed' : 'Rig password proof failed'),
-      };
-    };
+    const minAgeSec = proofMinAgeSec();
+    const legFails = (p) => proofLegFails(p, minAgeSec);
+    const deny = (leg, reason, code) => proofDeny({ addr, reqIp, action, words, minAgeSec }, leg, reason, code);
     // Checked in order so a wrong IP costs one failed attempt, not two.
     // A leg that VERIFIED but as the other kind (an IP in the password box, or the reverse) is
     // refused as `wrong_kind`: the verifier's own reason there is its success code, `match`,
@@ -993,6 +1005,29 @@ module.exports = function createAccountRoutes(ctx) {
     const passBad = legFails(passProof);
     if (passBad) return deny('password', passBad, 409);
     return { ok: true, method: 'ip+password' };
+  };
+
+  // ONE proof — a recent mining IP or the rig password, from the page's single ownership box —
+  // under the same age floor and anchor rule as requireBothProofs. It guards the donor profile
+  // (design §18.1 #5), which speaks for the address in public but cannot move money. One share
+  // writes both legs anyway (§J3-1), so it is the AGE, not a second box, that keeps out someone
+  // who briefly mined here. What one proof gives up: an IP is not a secret, so a rig behind the
+  // owner's NAT or VPN exit for longer than the floor passes. That harm is bounded — a name is
+  // word-checked, a banner or link waits for review, and the owner can always take it down.
+  // `password_proof` is still read so a client written for the two-box gate keeps working.
+  const requireAgedProof = async (addr, body, reqIp, action, purpose = 'donor_profile') => {
+    const words = PROOF_PURPOSES[purpose] || PROOF_PURPOSES.donor_profile;
+    const raw = (body && (body.proof || body.ip_proof || body.password_proof)) || '';
+    if (!raw) {
+      return { ok: false, code: 400, error: `Your mining IP or your rig password is required ${words.required}`, reason: 'proof_required' };
+    }
+    const minAgeSec = proofMinAgeSec();
+    const ctx = { addr, reqIp, action, words, minAgeSec, single: true };
+    const p = await verifyOwnerProof(db, addr, raw, reqIp);
+    if (!p.ok) return proofDeny(ctx, 'proof', p.reason || 'no_match');
+    const bad = proofLegFails(p, minAgeSec);
+    if (bad) return proofDeny(ctx, p.method, bad, 409);
+    return { ok: true, method: p.method };
   };
 
   // Fire the change alert at the destination being REPLACED. Best-effort by contract
@@ -1125,18 +1160,19 @@ module.exports = function createAccountRoutes(ctx) {
     }
   });
 
-  // ─── Donor profile — nickname + banner (design §18.4–§18.6) ──────────────
-  // A donor sets a public name and a banner (the banner shows only for the top N of the league).
+  // ─── Donor profile — nickname + banner + link (design §18.4–§18.6, §18.12) ──────────────
+  // A donor sets a public name, a banner (shown only for the top N of the league) and one link.
   // A NAME is checked automatically and goes live at once (script07_design_games.md §19.17.6): the name rule with the donor
-  // shape, banned names, "taken", one change per 7 days. A BANNER is still PRE-MODERATED: it
-  // becomes a pending donor_requests row that nothing public reads until an admin approves it.
+  // shape, banned names, "taken", the name change limit. A BANNER and a LINK are PRE-MODERATED:
+  // each becomes a pending donor_requests row that nothing public reads until an admin approves it.
   //
-  // The writes are gated like a payout-destination change, BOTH proofs each aged past the same
-  // floor (requireBothProofs, audit §J3-1), because a profile speaks for the address on a public
-  // page. Two more conditions: ≥ 1 donation debit, which is a cost to post and bounds the queue
-  // by real donors, and not blocked. Refusals run cheapest-first, and none of them spends a proof
-  // attempt on a request that would be refused anyway: donations off → account → blocked → not a
-  // donor → the input itself → the proofs → the write. lib/donor-profiles.js re-checks the account
+  // The writes need ONE proof (mining IP or rig password) aged past the payout-destination floor
+  // (requireAgedProof, audit §J3-1), because a profile speaks for the address on a public page;
+  // it cannot move money, so it does not take the destination's second proof. Two more
+  // conditions: ≥ 1 donation debit, which is a cost to post and bounds the queue by real donors,
+  // and not blocked. Refusals run cheapest-first, and none of them spends a proof attempt on a
+  // request that would be refused anyway: donations off → account → blocked → not a donor → the
+  // input itself → the proof → the write. lib/donor-profiles.js re-checks the account
   // and the block inside its transaction, since the proof check awaits in between.
   const donorBannerUpload = multer({
     storage: multer.memoryStorage(),
@@ -1149,7 +1185,7 @@ module.exports = function createAccountRoutes(ctx) {
     // The +1: busboy trips LIMIT_FILE_SIZE when a file REACHES the limit, so a limit of exactly
     // MAX_BANNER_BYTES refused a file of exactly 300 KB, which the rule allows. With +1, 300 KB
     // reaches validateBanner (the precise check) and 300 KB + 1 is refused here.
-    // fieldSize bounds the text fields, which carry only the two proofs.
+    // fieldSize bounds the text fields, which carry only the proof.
     limits: { fileSize: DonorProfiles.MAX_BANNER_BYTES + 1, files: 1, fields: 10, fieldSize: 4096, parts: 11 },
   });
 
@@ -1158,13 +1194,14 @@ module.exports = function createAccountRoutes(ctx) {
     blocked: [403, 'This address cannot submit a donor profile. Contact the pool operator if you think this is a mistake.'],
     not_a_donor: [409, "A donor profile unlocks after your first donation. Add a donateN tag to a rig's worker name (for example rig01-donate10); once that rig has earned a share of a matured block, you can set your name and banner here."],
     conflict: [409, 'Another change to this profile was saved at the same moment. Reload the page and try again.'],
+    links_unavailable: [503, DonorProfiles.LINK_TEXT.links_unavailable],
     donations_off: [503, 'Donations are switched off on this pool, so donor profiles cannot be changed right now.'],
     // The name answers. not_allowed (a reserved or blocked word) and unavailable (banned
     // OR taken) are generic on purpose: which list hit, and banned vs taken, is the admin's.
     name_not_allowed: [400, DonorProfiles.NAME_TEXT.name_not_allowed],
     name_unavailable: [409, DonorProfiles.NAME_TEXT.name_unavailable],
     unchanged: [409, DonorProfiles.NAME_TEXT.unchanged],
-    name_cooldown: [429, `A donor name can be changed once every ${DonorProfiles.NAME_CHANGE_DAYS} days.`],
+    name_cooldown: [429, 'Your donor name cannot be changed again yet.'],
   };
   const donorRefuse = (res, code, error, extra) => {
     const [status, text] = DONOR_REFUSAL[code] || [code === 'banner_too_large' ? 413 : 400, 'Refused'];
@@ -1189,25 +1226,27 @@ module.exports = function createAccountRoutes(ctx) {
       if (bad) return donorRefuse(res, bad);
       const v = DonorProfiles.validateName(req.body ? req.body.name : undefined);
       if (!v.ok) return donorRefuse(res, v.code, v.error);
-      // Before the proofs: unchanged, the 7-day limit, address-like. None reads a word list, and
+      // Before the proofs: unchanged, the change limit, address-like. None reads a word list, and
       // the account page already shows the live name and when it can change.
-      const pre = DonorProfiles.namePrecheck(db, addr, v.name);
+      const ds = donorSettings(poolSettings.getSection('incentives'), poolSettings.getSection('pool_info').pool_name);
+      const pre = DonorProfiles.namePrecheck(db, addr, v.name, { ds });
       if (pre) return donorRefuse(res, pre.code, pre.error, pre.available_at ? { available_at: pre.available_at } : null);
-      // The word lists, banned names and "taken" are checked only AFTER both proofs: a stranger
+      // The word lists, banned names and "taken" are checked only AFTER the proof: a stranger
       // holding the address must not be able to probe the operator's list (the owner can, at the
       // `withdraw` rate — and every answer from a list is the same generic sentence).
-      const proof = await requireBothProofs(addr, req.body, reqIp, 'donor_profile_submit', 'donor_profile');
+      const proof = await requireAgedProof(addr, req.body, reqIp, 'donor_profile_submit');
       if (!proof.ok) return res.status(proof.code).json({ error: proof.error, reason: proof.reason });
-      const r = DonorProfiles.submitName(db, addr, v.name, { isDonor: true, rule: donorNameRule() });
+      const r = DonorProfiles.submitName(db, addr, v.name, { isDonor: true, rule: donorNameRule(), ds });
       if (!r.ok) {
         // The row is about the PROOF, which passed (`ok`); the name was refused. The refused text
         // is stored nowhere and `hit` (which list) never leaves the server.
         auditOwnerProof(db, { action: 'donor_profile_submit', grinAddress: addr, ip: reqIp, ok: true, details: { kind: 'name', refused: r.code, proof_method: proof.method } });
         return donorRefuse(res, r.code, r.error, r.available_at ? { available_at: r.available_at } : null);
       }
-      auditOwnerProof(db, { action: 'donor_profile_submit', grinAddress: addr, ip: reqIp, ok: true, details: { kind: 'name', request_id: r.id, replaced_id: r.replaced_id, proof_method: proof.method } });
-      // Live at once: the wall and the account page show it from the next read.
-      res.json({ success: true, kind: 'name', status: 'approved', name: r.name, submitted_at: r.submitted_at, replaced_id: r.replaced_id });
+      auditOwnerProof(db, { action: 'donor_profile_submit', grinAddress: addr, ip: reqIp, ok: true, details: { kind: 'name', request_id: r.id, replaced_id: r.replaced_id, link_review_id: r.link_review ? r.link_review.pending_id : null, proof_method: proof.method } });
+      // Live at once: the wall and the account page show it from the next read. A live link went
+      // back to review with it (design §18.12) — link_review says so, so the page can tell the donor.
+      res.json({ success: true, kind: 'name', status: 'approved', name: r.name, submitted_at: r.submitted_at, replaced_id: r.replaced_id, link_review: !!(r.link_review && r.link_review.replaced_id) });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -1225,14 +1264,14 @@ module.exports = function createAccountRoutes(ctx) {
           if (upErr.code === 'LIMIT_FILE_SIZE') {
             return donorRefuse(res, 'banner_too_large', `That image is larger than ${DonorProfiles.MAX_BANNER_BYTES / 1024} KB. Banner: ${DonorProfiles.BANNER_RULE}.`);
           }
-          return donorRefuse(res, 'bad_upload', 'The upload could not be read. Send one image in a multipart field named "file", with the two proofs as text fields.');
+          return donorRefuse(res, 'bad_upload', 'The upload could not be read. Send one image in a multipart field named "file", with the proof as a text field.');
         }
         // Only the bytes decide: the client's filename and declared MIME are never read.
         const buf = req.file ? req.file.buffer : null;
         const v = DonorProfiles.validateBanner(buf);
         if (!v.ok) return donorRefuse(res, v.code, v.error);
         const reqIp = normalizeIp(req.ip);
-        const proof = await requireBothProofs(addr, req.body, reqIp, 'donor_profile_submit', 'donor_profile');
+        const proof = await requireAgedProof(addr, req.body, reqIp, 'donor_profile_submit');
         if (!proof.ok) return res.status(proof.code).json({ error: proof.error, reason: proof.reason });
         const r = DonorProfiles.submitBanner(db, addr, buf, { isDonor: true });
         if (!r.ok) return donorRefuse(res, r.code, r.error);
@@ -1244,8 +1283,42 @@ module.exports = function createAccountRoutes(ctx) {
     });
   });
 
+  // A LINK (design §18.12) is pre-moderated like a banner: a pending row nothing public reads
+  // until an admin approves it — the pending URL is not returned by /api/account/:addr either.
+  // Gate order as the name route. Before the proofs: the URL's own shape (the validator, which
+  // reads no list) and "same as the LIVE link" (public on the wall anyway). "Same as the
+  // PENDING one" is answered only after the proofs, inside submitLink, so a stranger holding the
+  // address cannot test guesses against a URL that is never shown to them.
+  router.post('/api/account/:addr/donor-profile/link', rateLimiter.middleware('withdraw'), async (req, res) => {
+    try {
+      const { addr } = req.params;
+      const reqIp = normalizeIp(req.ip);
+      const bad = donorSubmitRefusal(addr);
+      if (bad) return donorRefuse(res, bad);
+      // A failed startup rebuild (lib/db.js migrateDonorRequests) is a fact about the pool, not
+      // the address, so it is answered before any proof is spent. submitLink keeps its own check.
+      if (!DonorProfiles.linksSupported(db)) return donorRefuse(res, 'links_unavailable');
+      const v = DonorProfiles.validateLink(req.body ? req.body.url : undefined);
+      if (!v.ok) return donorRefuse(res, v.code, v.error);
+      const pre = DonorProfiles.linkPrecheck(db, addr, v.url);
+      if (pre) return donorRefuse(res, pre.code, pre.error);
+      const proof = await requireAgedProof(addr, req.body, reqIp, 'donor_profile_submit');
+      if (!proof.ok) return res.status(proof.code).json({ error: proof.error, reason: proof.reason });
+      const r = DonorProfiles.submitLink(db, addr, v.url, { isDonor: true });
+      if (!r.ok) {
+        auditOwnerProof(db, { action: 'donor_profile_submit', grinAddress: addr, ip: reqIp, ok: true, details: { kind: 'link', refused: r.code, proof_method: proof.method } });
+        return donorRefuse(res, r.code, r.error);
+      }
+      // The host, never the full URL: the audit trail is not where a donor's URL is kept.
+      auditOwnerProof(db, { action: 'donor_profile_submit', grinAddress: addr, ip: reqIp, ok: true, details: { kind: 'link', request_id: r.id, host: r.host, replaced_pending: r.replaced, proof_method: proof.method } });
+      res.json({ success: true, kind: 'link', status: 'pending', url: r.url, host: r.host, link_kind: r.link_kind, submitted_at: r.submitted_at, replaced_pending: r.replaced });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Withdraw a request under review (which=pending) or take down the approved one (which=live).
-  // Same AND-gate as a submit, since taking a donor's name off the wall is itself a public change
+  // Same proof gate as a submit, since taking a donor's name off the wall is itself a public change
   // made in their name. It deliberately does NOT need donations on, a donation debit, or an
   // unblocked address: removing your own data must always be possible.
   router.delete('/api/account/:addr/donor-profile/:kind', rateLimiter.middleware('withdraw'), async (req, res) => {
@@ -1267,14 +1340,16 @@ module.exports = function createAccountRoutes(ctx) {
       }
       const action = which === 'pending' ? 'donor_profile_withdraw' : 'donor_profile_remove';
       const reqIp = normalizeIp(req.ip);
-      const proof = await requireBothProofs(addr, req.body, reqIp, action, 'donor_profile');
+      const proof = await requireAgedProof(addr, req.body, reqIp, action);
       if (!proof.ok) return res.status(proof.code).json({ error: proof.error, reason: proof.reason });
       const r = which === 'pending'
         ? DonorProfiles.withdraw(db, addr, kind)
         : DonorProfiles.removeLive(db, addr, kind, { uploadsDir });
       if (!r.ok) return res.status(404).json(none);
       if (r.warning) console.warn(`[donor-profile] ${addr.slice(0, 9)}… ${kind}: ${r.warning}`);
-      auditOwnerProof(db, { action, grinAddress: addr, ip: reqIp, ok: true, details: { kind, request_id: r.id, proof_method: proof.method } });
+      // A link row also names its host (never the URL), as the submit and admin rows do.
+      const details = kind === 'link' ? { kind, request_id: r.id, host: r.host, proof_method: proof.method } : { kind, request_id: r.id, proof_method: proof.method };
+      auditOwnerProof(db, { action, grinAddress: addr, ip: reqIp, ok: true, details });
       res.json({ success: true, kind, which, status: which === 'pending' ? 'withdrawn' : 'removed' });
     } catch (err) {
       res.status(500).json({ error: err.message });

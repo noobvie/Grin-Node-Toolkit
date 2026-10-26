@@ -29,7 +29,7 @@ function initDb(dbPath = './pool.sqlite') {
   //
   // It does NOT rescue a long exclusive lock — a VACUUM against a live pool holds one for
   // minutes, far past any sane busy_timeout. That is why the toolkit's maintenance cron stops
-  // the service around it rather than relying on this pragma (07_grin_mining_public_pool.sh).
+  // the service around it rather than relying on this pragma (scripts/lib/07_lib_pool_ops.sh).
   db.pragma('busy_timeout = 5000');
 
   createSchema();
@@ -260,7 +260,8 @@ function migrateBlocks() {
     const additions = {
       network_difficulty: 'REAL DEFAULT NULL',
       round_shares: 'REAL DEFAULT NULL',
-      fees: 'REAL DEFAULT NULL'
+      fees: 'REAL DEFAULT NULL',
+      fee_percent: 'REAL DEFAULT NULL'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -268,9 +269,38 @@ function migrateBlocks() {
         console.warn(`[db] blocks: added missing column ${name}`);
       }
     }
+    if (!have.has('fee_percent')) backfillBlockFeePercent();
     migrateBlocksNonceToText();
   } catch (e) {
     console.error(`[db] blocks migration check failed: ${e.message}`);
+  }
+}
+
+// One-time, when fee_percent is first added: recover the rate an already-settled block was
+// really split at from the pool-fee credit rewards.js booked for it (the only writer of a
+// reference_type 'pool_fee' credit). A paid block with no such row — a 0% fee, no attributable
+// shares, or a ledger row since pruned by balance_log_keep_days — stays NULL ("not recorded"):
+// those cases cannot be told apart, and a guessed rate would be published as fact. Unsettled
+// legacy rows stay NULL too; rewards.js charges them the current rate and records it.
+// Its own try: a failure here must not skip the nonce rebuild that runs after it.
+//
+// ONE pass over balance_log (grouped, then joined), never a subquery per block: no index covers
+// (reference_type, reference_id), so a correlated subquery scans the whole ledger once per paid
+// block. That runs at boot, before stratum is up — on a synthetic in-memory DB, 2,000 paid
+// blocks against a 400k-row ledger took 75 s that way, and 29 ms grouped.
+function backfillBlockFeePercent() {
+  try {
+    const r = db.prepare(`
+      UPDATE blocks SET fee_percent = ROUND(100.0 * f.fee / blocks.reward, 4)
+      FROM (SELECT reference_id AS height, SUM(amount) AS fee FROM balance_log
+            WHERE reference_type = 'pool_fee' AND event_type = 'credit'
+            GROUP BY reference_id) AS f
+      WHERE f.height = blocks.height
+        AND blocks.fee_percent IS NULL AND blocks.status = 'paid' AND blocks.reward > 0
+    `).run();
+    if (r.changes > 0) console.warn(`[db] blocks: fee_percent recovered from the ledger for ${r.changes} settled block(s)`);
+  } catch (e) {
+    console.error(`[db] blocks: fee_percent backfill skipped: ${e.message}`);
   }
 }
 
@@ -322,17 +352,19 @@ function migrateBlocksNonceToText() {
         confirmed_at INTEGER DEFAULT NULL,
         network_difficulty REAL DEFAULT NULL,
         round_shares REAL DEFAULT NULL,
+        fee_percent REAL DEFAULT NULL,
         created_at INTEGER NOT NULL DEFAULT (unixepoch())
       )`);
+      // fee_percent is copied: migrateBlocks adds it before calling this rebuild.
       db.exec(`INSERT INTO blocks_j5_new
         (id, height, hash, nonce, reward, fees, status, found_by, found_at, confirmed_at,
-         network_difficulty, round_shares, created_at)
+         network_difficulty, round_shares, fee_percent, created_at)
         SELECT id, height, hash,
                CASE WHEN typeof(nonce) = 'integer' THEN CAST(nonce AS TEXT)
                     WHEN typeof(nonce) = 'text'    THEN nonce
                     ELSE '' END,
                reward, fees, status, found_by, found_at, confirmed_at,
-               network_difficulty, round_shares, created_at
+               network_difficulty, round_shares, fee_percent, created_at
         FROM blocks`);
       db.exec('DROP TABLE blocks');
       db.exec('ALTER TABLE blocks_j5_new RENAME TO blocks');
@@ -617,6 +649,10 @@ function createSchema() {
       confirmed_at INTEGER DEFAULT NULL,
       network_difficulty REAL DEFAULT NULL,
       round_shares REAL DEFAULT NULL,
+      -- Pool fee % in force when the block was FOUND; rewards.js splits the reward at this
+      -- rate at maturity, so a fee change while the block matures (~1 day) never reaches it.
+      -- NULL = a row from before the column whose rate is not on record.
+      fee_percent REAL DEFAULT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
 
@@ -789,8 +825,11 @@ function createSchema() {
       --   wallet_offline     the miner's onion did not answer a fresh probe after the send failed
       --                      (the ONLY code that counts toward the 5-in-24h Tor pause)
       --   wallet_unreachable the probe could not tell (our Tor could not look)
+      --   wallet_not_findable the probe's long-running tor reaches the onion, but the send's fresh
+      --                      tor never got check_version answered — the miner's onion is no
+      --                      longer findable on the network (not counted, no operator alert)
       --   pool_send_path     the miner's wallet answers the probe, yet grin-wallet could not
-      --                      deliver — the pool's side (operator alert tor_send_path)
+      --                      deliver for any other reason — the pool's side (operator alert tor_send_path)
       --   pool_busy          the pool wallet could not cover it (NotEnoughFunds), nothing sent
       --   unknown            a Held payout later proven absent (or refunded by the operator)
       --   wallet_offline_cleared  a wallet_offline the operator un-counted (pause clear)
@@ -1107,30 +1146,18 @@ function createSchema() {
       donor_censor_by INTEGER DEFAULT NULL
     )`,
 
-    // ─── Donor profiles (design §18.4) — pre-moderated name + banner ─────────────────────
+    // ─── Donor profiles (design §18.4, §18.12) — name + banner + link ────────────────────
     // A request LOG, not columns: every submission is a row and every decision a status change,
     // so history and audit come free. The two PARTIAL unique indexes are the "one pending + one
     // approved per (address, kind)" rule as a database fact — lib/donor-profiles.js relies on
     // them and turns a constraint hit into a clean 409. `image` holds a banner's bytes while it
     // is PENDING only (never web-reachable, backed up with pool.db) and is NULLed by every
-    // decision; an approved banner lives on disk as uploads/donors/<file>. `reason` is shown to
-    // the donor on their own account page. The v1 donor_* columns above are left alone.
-    `CREATE TABLE IF NOT EXISTS donor_requests (
-      id           INTEGER PRIMARY KEY AUTOINCREMENT,
-      grin_address TEXT NOT NULL REFERENCES miner_accounts(grin_address),
-      kind         TEXT NOT NULL CHECK (kind IN ('name','banner')),
-      status       TEXT NOT NULL CHECK (status IN ('pending','approved','rejected','replaced','withdrawn','removed')),
-      name         TEXT,
-      image        BLOB,
-      file         TEXT,
-      mime TEXT, width INTEGER, height INTEGER, bytes INTEGER, sha256 TEXT,
-      submitted_at INTEGER NOT NULL DEFAULT (unixepoch()),
-      decided_at   INTEGER, decided_by INTEGER REFERENCES users(id),
-      reason       TEXT
-    )`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS uq_donor_req_pending  ON donor_requests(grin_address, kind) WHERE status = 'pending'`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS uq_donor_req_approved ON donor_requests(grin_address, kind) WHERE status = 'approved'`,
-    `CREATE INDEX        IF NOT EXISTS idx_donor_req_status  ON donor_requests(status, submitted_at)`,
+    // decision; an approved banner lives on disk as uploads/donors/<file>. `url` is a link's
+    // normalised URL (kind 'link' only). `reason` is shown to the donor on their own account
+    // page. The v1 donor_* columns above are left alone. ⚠ One DDL for a fresh install AND the
+    // table rebuild (migrateDonorRequests) — the two must store byte-identical schema text.
+    DONOR_REQUESTS_DDL,
+    ...DONOR_REQUESTS_INDEXES,
 
     // Addresses the operator has barred from SUBMITTING (§18.6). Blocking also withdraws the
     // address's pending requests; it does not touch a live name/banner (that is a separate remove).
@@ -1426,6 +1453,7 @@ function createSchema() {
   migrateShareCreditUnit(); // after migrateShares/migrateBlocks: it touches columns they add
   migrateLocations();
   migrateMinerIncentives();
+  migrateDonorRequests();
   migrateAds();
   migratePagesFromConfig();
   seedShippedPages();   // must follow the legacy migration: same table, own markers
@@ -1487,6 +1515,109 @@ function migrateMinerIncentives() {
     }
   } catch (e) {
     console.error(`[db] miner_incentives migration check failed: ${e.message}`);
+  }
+}
+
+// donor_requests (design §18.4, §18.12). createSchema() and migrateDonorRequests() both run
+// THIS text, so a fresh install and a rebuilt table store the same sqlite_master.sql
+// (scripts/test-donor-link.js compares them).
+const DONOR_REQUESTS_DDL = `CREATE TABLE IF NOT EXISTS donor_requests (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      grin_address TEXT NOT NULL REFERENCES miner_accounts(grin_address),
+      kind         TEXT NOT NULL CHECK (kind IN ('name','banner','link')),
+      status       TEXT NOT NULL CHECK (status IN ('pending','approved','rejected','replaced','withdrawn','removed')),
+      name         TEXT,
+      image        BLOB,
+      file         TEXT,
+      mime TEXT, width INTEGER, height INTEGER, bytes INTEGER, sha256 TEXT,
+      submitted_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      decided_at   INTEGER, decided_by INTEGER REFERENCES users(id),
+      reason       TEXT,
+      url          TEXT
+    )`;
+const DONOR_REQUESTS_INDEXES = [
+  `CREATE UNIQUE INDEX IF NOT EXISTS uq_donor_req_pending  ON donor_requests(grin_address, kind) WHERE status = 'pending'`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS uq_donor_req_approved ON donor_requests(grin_address, kind) WHERE status = 'approved'`,
+  `CREATE INDEX        IF NOT EXISTS idx_donor_req_status  ON donor_requests(status, submitted_at)`,
+];
+// Every column, copied as it is (`url` is NULL on a row that predates links).
+const DONOR_REQUESTS_COPY_COLS = 'id, grin_address, kind, status, name, image, file, mime, width, height, bytes, sha256, submitted_at, decided_at, decided_by, reason, url';
+
+// Rebuild donor_requests once when its kind CHECK predates 'link' or it has no `url` column
+// (design §18.12). SQLite cannot ALTER a CHECK constraint, so the table is rebuilt in ONE
+// transaction: a failure anywhere rolls back to the old table, which by then already carries
+// `url`. A no-op when the CHECK admits 'link' and the column exists.
+//
+// ⚠ The OLD table is renamed away and the real one created from DONOR_REQUESTS_DDL — never
+// "create _new, then rename it": a RENAME rewrites the stored SQL to a quoted name
+// (CREATE TABLE "donor_requests" …), which would differ from a fresh install's text.
+// ⚠ Every `id` is copied as it is (audit rows cite request ids), and sqlite_sequence is carried
+// over, so AUTOINCREMENT never hands out an id the old table already used.
+// ⚠ A RENAME carries the old indexes with it under their own names, so they can only be
+// recreated after the old table is dropped. Any index or trigger on the table beyond the
+// canonical three is recreated too, from the SQL captured before the rename.
+// ⚠ The RENAME also rewrites every VIEW, and every trigger on ANOTHER table, that names
+// donor_requests to point at donor_requests_old (SQLite ≥ 3.26) — which is then dropped. None
+// exists today; adding one means recreating it here after the rebuild.
+function migrateDonorRequests() {
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'donor_requests'").get();
+    if (!row || !row.sql) return;
+    const check = /CHECK\s*\(\s*kind\s+IN\s*\(([^)]*)\)\s*\)/i.exec(row.sql);
+    if (!check) {
+      console.error('[db] donor_requests: no kind CHECK found in the stored schema — not rebuilding');
+      return;
+    }
+    // The `url` column goes on FIRST, as its own statement outside the rebuild: every donor read
+    // names it, so a rebuild that then fails must still leave a table they can use (the old
+    // CHECK alone refuses a link row → `links_unavailable`). A missing column also forces the
+    // rebuild below, so the stored text ends up the canonical DDL either way.
+    const hasUrl = db.prepare('PRAGMA table_info(donor_requests)').all().some((c) => c.name === 'url');
+    if (!hasUrl) db.exec('ALTER TABLE donor_requests ADD COLUMN url TEXT');
+    if (hasUrl && /'link'/.test(check[1])) return;
+
+    const total = db.prepare('SELECT COUNT(*) AS c FROM donor_requests').get().c;
+    console.warn(`[db] donor_requests: schema predates 'link'; rebuilding the table (design §18.12). ${total} row(s).`);
+    const extras = db.prepare(`
+      SELECT sql FROM sqlite_master
+      WHERE tbl_name = 'donor_requests' AND type IN ('index', 'trigger') AND sql IS NOT NULL
+    `).all().map((r) => r.sql);
+    const seqRow = db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'donor_requests'").get();
+    const oldSeq = seqRow ? Number(seqRow.seq) : 0;
+
+    // PRAGMA foreign_keys is a no-op inside a transaction, so it is toggled outside one.
+    db.pragma('foreign_keys = OFF');
+    try {
+      db.transaction(() => {
+        db.exec('ALTER TABLE donor_requests RENAME TO donor_requests_old');
+        db.exec(DONOR_REQUESTS_DDL);
+        db.exec(`INSERT INTO donor_requests (${DONOR_REQUESTS_COPY_COLS}) SELECT ${DONOR_REQUESTS_COPY_COLS} FROM donor_requests_old`);
+        const copied = db.prepare('SELECT COUNT(*) AS c FROM donor_requests').get().c;
+        if (copied !== total) throw new Error(`copied ${copied} of ${total} rows`);
+        db.exec('DROP TABLE donor_requests_old');
+        // The canonical three first, so a same-named old variant can never stand in for one.
+        for (const sql of DONOR_REQUESTS_INDEXES) db.exec(sql);
+        for (const sql of extras) {
+          const m = /^CREATE\s+(UNIQUE\s+)?(INDEX|TRIGGER)\s+(?:IF\s+NOT\s+EXISTS\s+)?/i.exec(sql);
+          if (m) db.exec(sql.replace(m[0], `CREATE ${m[1] || ''}${m[2].toUpperCase()} IF NOT EXISTS `));
+        }
+        const cur = db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'donor_requests'").get();
+        if (!cur && oldSeq > 0) db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('donor_requests', ?)").run(oldSeq);
+        else if (cur && Number(cur.seq) < oldSeq) db.prepare("UPDATE sqlite_sequence SET seq = ? WHERE name = 'donor_requests'").run(oldSeq);
+      })();
+      const bad = db.pragma('foreign_key_check');
+      if (Array.isArray(bad) && bad.length > 0) {
+        console.error(`[db] donor_requests: ${bad.length} foreign-key violation(s) after the rebuild`);
+      }
+      console.warn(`[db] donor_requests rebuilt: kind admits 'link', url column present (${total} row(s) kept)`);
+    } finally {
+      db.pragma('foreign_keys = ON');
+    }
+  } catch (e) {
+    // The transaction rolled back, so the old table stands with its `url` column: names,
+    // banners and the wall keep working, and a link submit is refused before the proofs with
+    // `links_unavailable` (linksSupported reads the CHECK). Retried at the next start.
+    console.error(`[db] donor_requests rebuild failed — retried at the next start: ${e.message}`);
   }
 }
 
@@ -1593,6 +1724,45 @@ function seedShippedPages() {
         insert.run(p.slug, p.title, html, p.sort_order || 0,
           p.seo_title || null, p.seo_desc || null);
         setMarker.run(p.marker);
+      })();
+    }
+    // A shipped page whose DEFAULT text changed. `previous` rebuilds the text the last release
+    // shipped from the current default; a stored page still byte-identical to it was never
+    // edited, so it takes the new default. An edited page is never touched — the operator is told
+    // instead. Each update gets its own marker, set whatever the outcome.
+    const UPDATES = [
+      {
+        // design §18.12: the Terms clause and the Privacy note that cover donor links.
+        marker: 'pages_updated_terms_external_links',
+        slug: 'terms',
+        previous: (cur) => cur.replace(/<h2>10\. External links and user content<\/h2>\n<p>[^\n]*<\/p>\n\n/, '')
+          .replace('<h2>11. Contact</h2>', '<h2>10. Contact</h2>'),
+        what: 'section 10 "External links and user content"',
+      },
+      {
+        marker: 'pages_updated_privacy_external_links',
+        slug: 'privacy',
+        previous: (cur) => cur.replace(/<p><strong>External links\.<\/strong>[^\n]*<\/p>\n/, ''),
+        what: 'the "External links" paragraph under Third parties',
+      },
+    ];
+    const getPage = db.prepare('SELECT html FROM pages WHERE slug = ?');
+    const updatePage = db.prepare('UPDATE pages SET html = ?, updated_at = unixepoch() WHERE slug = ? AND html = ?');
+    for (const u of UPDATES) {
+      if (getMarker.get(u.marker)) continue;
+      const cur = String(defaultPages[u.slug] || '');
+      const prev = u.previous(cur);
+      // The default does not carry the change (prev === cur): nothing to ship yet, marker unset.
+      if (!cur.trim() || prev === cur) continue;
+      db.transaction(() => {
+        const row = getPage.get(u.slug);
+        if (row && row.html === prev.trim()) {
+          updatePage.run(cur.trim(), u.slug, prev.trim());
+          console.warn(`[db] page "${u.slug}": the shipped default gained ${u.what} — updated (the page was never edited)`);
+        } else if (row && row.html !== cur.trim()) {
+          console.warn(`[db] page "${u.slug}" was edited, so it was NOT updated: the shipped default gained ${u.what}. Add it by hand in Admin → Pages if you want it.`);
+        }
+        setMarker.run(u.marker);
       })();
     }
   } catch (e) {

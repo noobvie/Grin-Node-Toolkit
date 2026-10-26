@@ -527,17 +527,24 @@
     return String(Math.round(n));
   }
 
-  // GRIN amounts for the counters: exact below 10,000 ("1,500" is no wider than "1.5k"),
-  // then 12.3k / 1.5M. Not fmtCompact — its ' G' for billions would read "1.2 G GRIN".
-  // These are money figures, so the exact amount always rides on hover.
+  // GRIN amounts for the counters: whole GRIN below 1,000, then three significant
+  // figures — 5.28K / 52.8K / 528K / 1.5M / 1.2B. Not fmtCompact — its ' G' for
+  // billions would read "1.2 G GRIN". These are money figures, so the exact amount
+  // always rides on hover.
+  var GRIN_BANDS = [[1, ''], [1e3, 'K'], [1e6, 'M'], [1e9, 'B']];
   function setGrinCompact(id, amount) {
     var el = $(id);
     if (!el) return;
     var n = Number(amount) || 0;
-    // 999,950 rounds to "1000.0k", so the M band starts there.
-    var s = n >= 999950 ? Number((n / 1e6).toFixed(1)) + 'M'
-      : n >= 1e4 ? Number((n / 1e3).toFixed(1)) + 'k'
-      : Math.round(n).toLocaleString('en-US');
+    var b = 0;
+    while (b + 1 < GRIN_BANDS.length && n >= GRIN_BANDS[b + 1][0]) b++;
+    var v = b ? Number((n / GRIN_BANDS[b][0]).toPrecision(3)) : Math.round(n);
+    // Rounding can carry into the next band (999.6 → 1000, 999,500 → 1000K): step up.
+    if (v >= 1000 && b + 1 < GRIN_BANDS.length) {
+      b++;
+      v = Number((n / GRIN_BANDS[b][0]).toPrecision(3));
+    }
+    var s = b ? v + GRIN_BANDS[b][1] : v.toLocaleString('en-US');
     el.textContent = s;
     el.title = n.toLocaleString('en-US', { maximumFractionDigits: 9 }) + ' GRIN';
   }
@@ -881,6 +888,8 @@
         line.appendChild(via);
         tty.appendChild(line);
       });
+      // The box is fixed-height; keep the newest (last) line in view.
+      tty.scrollTop = tty.scrollHeight;
     } catch (e) {
       tty.textContent = '';
       var d2 = document.createElement('div');

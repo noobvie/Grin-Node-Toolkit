@@ -28,7 +28,7 @@
 <main>
   <div class="container">
     <section>
-      <h2>Games · Chat &amp; moderation</h2>
+      <h2 data-sec="Messages">Games · Chat &amp; moderation</h2>
       <p class="helper-text" style="margin:0 0 .8rem;">
         The public chat on <a href="/play/" target="_blank" rel="noopener">/play/</a>. Messages are plain text:
         this page shows them exactly as typed and never as links. Deleting, approving, muting and posting are
@@ -60,9 +60,12 @@
       </div>
       <p id="gc-list-msg" style="display:none;"></p>
 
+    </section>
+
+    <section>
       <!-- ═══ Operator post ═══ The ONLY way a message carries the Operator badge. -->
-      <div class="card" style="margin-top:1rem;">
-        <h3 class="sub-title" style="margin-top:0;">Post as the operator</h3>
+      <h2 data-sec="Operator post">Post as the operator</h2>
+      <div class="card">
         <p class="helper-text">Shown with the <strong>Operator</strong> badge, under the name "Operator" — your admin username is never shown to players. Never held; 1–280 characters of text.</p>
         <div class="form-group">
           <label for="gc-post-body">Message <span class="gc-count" id="gc-post-count">0 / 280</span></label>
@@ -72,9 +75,12 @@
         <p id="gc-post-msg" style="display:none;"></p>
       </div>
 
+    </section>
+
+    <section>
       <!-- ═══ Moderators (D21) ═══ -->
-      <div class="card" style="margin-top:1rem;">
-        <h3 class="sub-title" style="margin-top:0;">Moderators</h3>
+      <h2>Moderators</h2>
+      <div class="card">
         <p class="helper-text">
           A moderator is a <strong>miner address</strong> you trust to help with the chat. They moderate from /play/
           itself, signed in with their own address, and see a moderator queue there. They can <strong>delete</strong>
@@ -97,9 +103,12 @@
         <p id="gc-mod-msg" style="display:none;"></p>
       </div>
 
+    </section>
+
+    <section>
       <!-- ═══ Word list ═══ -->
-      <div class="card" style="margin-top:1rem;">
-        <h3 class="sub-title" style="margin-top:0;">Word list</h3>
+      <h2>Word list</h2>
+      <div class="card">
         <p class="helper-text">A message containing one of these (anywhere, even inside a longer word; case and lookalike letters ignored) is <strong>held</strong> for review, not rejected. Up to 500 entries of 1–40 characters.</p>
         <div class="gc-words" id="gc-words"></div>
         <div class="gc-row">
@@ -109,9 +118,12 @@
         <p id="gc-word-msg" style="display:none;"></p>
       </div>
 
+    </section>
+
+    <section>
       <!-- ═══ Moderation log ═══ -->
-      <div class="card" style="margin-top:1rem;">
-        <h3 class="sub-title" style="margin-top:0;">Moderation log</h3>
+      <h2>Moderation log</h2>
+      <div class="card">
         <p class="helper-text">Every games admin and moderator action, newest first. Kept 365 days.</p>
         <div class="table-wrap">
           <table>

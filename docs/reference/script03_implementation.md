@@ -1,12 +1,33 @@
 # Script 03 — Chain-Data Snapshot Method: implementation
 
-> **Covers code as of:** 2026-08-22 · **Last verified:** never systematically verified
-> **Product code last changed:** 2026-08-24 — `scripts/03_grin_share_chain_data.sh`, `scripts/lib/03_lib_remote.sh`
+> **Covers code as of:** 2026-08-22 (Code layout: 2026-10-18) · **Last verified:** 2026-10-18, PARTIAL — Code layout only, against the split files (menu keys, source lines, function placement); the rest never systematically verified
+> **Product code last changed:** 2026-10-18 — `scripts/03_grin_share_chain_data.sh` split into `scripts/lib/03_lib_{share_pipeline,schedule,remote_menu}.sh` (move only, no behaviour change); `scripts/lib/03_lib_remote.sh` 2026-08-24
 > **Scope:** what the publish pipeline and the remote copy do as built, plus the Build notes. The problem statement, the ordering rule, the 03↔01 contract, the phases and the rsync proposal are `script03_design.md`.
 
 **Status:** phases 1–4 and the remote copy (option C) are **implemented, not VPS-tested**. Phase 5 (object storage) is **dropped** (decision 2026-08-18): stay on VPS free space.
 
 ## What shipped
+
+### Code layout
+
+The entry keeps its path; the menu sections live in sourced libs. Function names are unchanged.
+
+| File | Menu keys | Purpose |
+|---|---|---|
+| `scripts/03_grin_share_chain_data.sh` (entry) | A, J, main menu | constants, logging, config helpers, nginx setup, node detection, compression benchmark, `main` and the cron dispatch |
+| `scripts/lib/03_lib_share_pipeline.sh` | B, `--cron-nginx*` | the publish pipeline: sync check, preflight, stop node, clean, compress, manifest, restart |
+| `scripts/lib/03_lib_schedule.sh` | E, F, G, H, I, `--cron-clean` | nginx-share cron, txhashset-clean cron, `@reboot` node autostart |
+| `scripts/lib/03_lib_remote_menu.sh` | C, D, `--cron-remote` | remote-copy menus: setup, schedule, SSH keys, copy now |
+| `scripts/lib/03_lib_remote.sh` | — | the remote-copy engine (`rc_*`) used by the menu lib |
+
+**Source order.** The libs are sourced directly after `03_lib_remote.sh`, before the entry's
+`CONF_*`/`LOG_*` constants and before `main "$@"`. Their top-level lines are literal assignments
+only, so nothing in them reads a variable at source time; everything else runs from inside a
+function after the entry has finished loading. Cron re-enters through the entry's `--cron-*`
+arguments, so the libs are always loaded first.
+
+**errexit.** The entry sets none, and a lib function reached via `fn || …` runs without it in
+any case. Moved code is as it was: file operations are not individually guarded.
 
 ### Publish pipeline (phases 1–4)
 
@@ -19,7 +40,7 @@ arithmetic verified locally with one-shot tests (no lingering processes).
 - Incidental fix: the "Checking zone hosts" line said **≤ 7 days** while the constant
   was 5. It now interpolates the real value.
 
-`scripts/03_grin_share_chain_data.sh`
+`scripts/03_grin_share_chain_data.sh` (+ `03_lib_share_pipeline.sh`, `03_lib_schedule.sh` for the functions)
 - Added `COMPRESS_LEVEL_FULL` / `COMPRESS_LEVEL_PRUNED` (env-overridable).
 - `compress_chain_data`: `tar -czf` → `tar -cf - | pigz -p $(nproc)` with `nice -n 19`
   + `ionice -c 3`, gzip fallback, `PIPESTATUS` check, and partial-archive cleanup.
@@ -39,7 +60,7 @@ catches it and removes the partial. Round-trip extract diffs clean against sourc
 30-assertion isolated harness (functions extracted, no script execution, no servers, no
 network, temp dir removed).
 
-`scripts/03_grin_share_chain_data.sh`
+`scripts/03_grin_share_chain_data.sh` (+ `03_lib_share_pipeline.sh` for the functions)
 - Added `COMPRESS_RATIO_FULL` / `COMPRESS_RATIO_PRUNED` / `DISK_HEADROOM_MB`
   (env-overridable) and the `RETAIN_PREVIOUS` run flag, reset per instance.
 - Added `preflight_disk_space()` as step 0a, wired ahead of `clean_output_directory`.

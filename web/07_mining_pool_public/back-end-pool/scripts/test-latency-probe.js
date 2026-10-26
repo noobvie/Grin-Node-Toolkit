@@ -1,7 +1,7 @@
 'use strict';
 
 // Latency probe targets — lib/latency-probe.js (published on /api/public/branding →
-// connection.latency) and its agreement with the nginx side in 07_grin_mining_public_pool.sh.
+// connection.latency) and its agreement with the nginx side in scripts/lib/07_lib_pool_nginx.sh.
 // Covers: probe_domain defaults to the pool's own subdomain and is never derived wider (the
 // public-suffix trap), and an operator override is honoured only as a parent of it; hub_url
 // accepts only https://<host under the probe domain>/ping; behind a CDN proxy with no usable
@@ -15,7 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const { readAppSource, routeSource } = require('./lib/app-source');
 const APP = path.resolve(__dirname, '..');
-const SH = path.resolve(APP, '../../../scripts/07_grin_mining_public_pool.sh');
+const SH = path.resolve(APP, '../../../scripts/lib/07_lib_pool_nginx.sh');
 
 const lp = require(path.join(APP, 'lib/latency-probe.js'));
 const indexSrc = readAppSource();
@@ -113,6 +113,7 @@ if (!fs.existsSync(SH)) {
   console.log(`  SKIP  f. ${SH} not present (a deployed app dir has no scripts/) — run from the repo`);
 } else {
   const sh = fs.readFileSync(SH, 'utf8');
+  ok('vhost source is the real nginx lib (non-vacuity)', sh.includes('pool_setup_nginx() {') && sh.includes('HDREOF'));
   const reLine = (sh.match(/^_POOL_HOST_RE='([^']+)'/m) || [])[1];
   ok('f. the shell hostname regex is the lib\'s, character for character',
     reLine === lp.HOST_RE.source, `shell=${reLine} js=${lp.HOST_RE.source}`);

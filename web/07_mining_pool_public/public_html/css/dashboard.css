@@ -533,17 +533,35 @@ footer {
 footer a { color: var(--text-dim); text-decoration: none; }
 footer a:hover { color: var(--accent); }
 
-/* Columns */
+/* Brand strip: name · tagline on the left, socials on the right, one line on desktop; on a
+   phone the socials wrap under the name. A strip, not a grid column: as a column it ran
+   twice the height of the link columns. */
+.footer-top {
+    max-width: 1100px; margin: 0 auto 24px; padding-bottom: 18px;
+    border-bottom: 1px solid var(--border);
+    display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
+    gap: 8px 24px;
+}
+.footer-brand { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; }
+
+/* Columns: four link columns of ~5 rows each, so they line up. branding.js applyFooterCols
+   hides a gated column left with no links and writes data-cols = the columns left, so the
+   survivors span the width instead of leaving an empty track. */
 .footer-cols {
     max-width: 1100px; margin: 0 auto;
-    display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: 28px;
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 28px;
 }
+.footer-cols[data-cols="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.footer-cols[data-cols="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .footer-col { display: flex; flex-direction: column; gap: 8px; }
 .footer-col h4 {
     margin: 0 0 4px; font-size: 12px; letter-spacing: .06em; text-transform: uppercase;
     color: var(--text-mute); font-weight: 700;
 }
-.footer-col a { font-size: 13px; line-height: 1.5; }
+/* A long CMS page title wraps inside its column rather than widening it. */
+.footer-col a { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+/* Community icons in a fixed-width slot so the labels line up despite emoji widths. */
+.footer-ico { display: inline-block; width: 1.6em; }
 /* CMS page links are appended as inline <a> inside these containers by branding.js — make
    them flex columns so each link gets its own line. Two containers: the legal pages (Terms /
    Privacy / Impressum) in the Legal column, the informational ones (Start Mining / About /
@@ -551,23 +569,9 @@ footer a:hover { color: var(--accent); }
    flex box with no children, so a pool with no CMS pages sees no stray blank row. */
 .footer-col [data-brand="page-links"],
 .footer-col [data-brand="page-links-info"] { display: flex; flex-direction: column; gap: 8px; }
-.footer-brand .brand { margin-bottom: 4px; }
-.footer-tagline { margin: 0; color: var(--text-mute); font-size: 12.5px; max-width: 32ch; }
-.footer-social { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; }
+.footer-tagline { margin: 0; color: var(--text-mute); font-size: 12.5px; }
+.footer-social { display: flex; flex-wrap: wrap; gap: 12px; }
 .footer-social a { font-size: 12.5px; }
-/* Highlighted Donate CTA in the brand column. */
-.footer-donate {
-    display: inline-flex; align-items: center; gap: 6px; align-self: flex-start;
-    margin-top: 4px; font-weight: 600; color: var(--accent);
-}
-.footer-donate:hover { color: var(--accent); text-decoration: underline; }
-.footer-donate-ico { color: #ff5d5d; }
-/* Fortune Board CTA, right under Donate. */
-.footer-fortune {
-    display: inline-flex; align-items: center; gap: 6px; align-self: flex-start;
-    margin-top: 2px; font-weight: 600; color: var(--text-dim);
-}
-.footer-fortune:hover { color: var(--text); text-decoration: underline; }
 
 /* Bottom legal row. No border-top: there is no mini-stats bar above it,
    and a rule right under the columns would add a second horizontal line to the footer. */
@@ -581,23 +585,21 @@ footer a:hover { color: var(--accent); }
 }
 .footer-bottom p { margin: 3px 0; }
 .footer-copyright { color: var(--text-dim); font-weight: 600; white-space: nowrap; }
-.footer-saigon { white-space: nowrap; }
+.footer-saigon, .footer-attribution { white-space: nowrap; }
 .footer-sep { color: var(--text-dim); opacity: .6; }
 
-/* Narrow screens: the brand block takes its own full-width row and the three LINK columns
-   (Pool / Resources / Legal) split the row below it evenly. (2×2 then one column would stack every
-   link into one long list.) The link
-   labels are short (1–2 words), so three columns fit down to ~320px. A long CMS page title
-   wraps inside its column rather than widening it (minmax(0,…) + overflow-wrap). */
-@media (max-width: 760px) {
-    .footer-cols { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px 16px; }
-    .footer-brand { grid-column: 1 / -1; }
-    .footer-col a { overflow-wrap: anywhere; }
+/* Narrow screens: the link columns pair up 2×2 — even, because every column is ~5 rows.
+   Three columns left (one gated column hidden) read as 2 + 1. */
+@media (max-width: 600px) {
+    .footer-cols,
+    .footer-cols[data-cols="3"] { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px 16px; }
 }
 @media (max-width: 440px) {
     .footer-cols { gap: 20px 12px; }
     footer { padding-left: 14px; padding-right: 14px; }
-    /* Copyright + Saigon stack here — drop the now-dangling separator. */
+    /* Copyright, attribution and Saigon stack one per line here — drop the separators.
+       Wrapping alone would leave "Since 2026 Powered by …" on one line, read as one phrase. */
+    .footer-bottom { flex-direction: column; align-items: center; row-gap: 2px; }
     .footer-sep { display: none; }
 }
 

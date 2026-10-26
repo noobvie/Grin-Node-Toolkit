@@ -105,7 +105,14 @@ class RewardDistributor {
       }
 
       const totalDifficulty = shares.reduce((sum, s) => sum + s.difficulty, 0);
-      const poolFee = block.reward * (this.config.pool_fee_percent / 100);
+      // The rate recorded when the block was FOUND (blocks.js), never the live setting: a block
+      // matures ~1 day later, and a fee change in between must not re-price it. Only a row from
+      // before fee_percent existed falls back to the live rate — and records it below, so every
+      // settled block carries the rate its reward is split at.
+      const recordedPct = block.fee_percent === null || block.fee_percent === undefined
+        ? NaN : Number(block.fee_percent);
+      const feePercent = Number.isFinite(recordedPct) ? recordedPct : Number(this.config.pool_fee_percent) || 0;
+      const poolFee = block.reward * (feePercent / 100);
       const minerReward = block.reward - poolFee;
 
       const distribution = [];
@@ -144,6 +151,9 @@ class RewardDistributor {
           e.alreadySettled = true;
           throw e;
         }
+        if (!Number.isFinite(recordedPct)) {
+          this.db.prepare('UPDATE blocks SET fee_percent = ? WHERE id = ?').run(feePercent, blockId);
+        }
         distributionResult = this.creditBalances(block.height, distribution, minerReward, poolFee);
       });
 
@@ -161,6 +171,7 @@ class RewardDistributor {
         block_height: block.height,
         success: true,
         total_reward: block.reward,
+        fee_percent: feePercent,
         pool_fee: poolFee,
         miner_reward: minerReward,
         shares_distributed: shares.length,
@@ -261,7 +272,8 @@ class RewardDistributor {
         });
       }
 
-      if (this.config.pool_fee_percent > 0) {
+      // poolFee, not the live config rate: the caller priced this block at its recorded rate.
+      if (poolFee > 0) {
         const feeAddress = this.config.pool_fee_address || 'pool_fee';
         const stmt = this.db.prepare(`
           INSERT OR IGNORE INTO miner_accounts (grin_address, balance)

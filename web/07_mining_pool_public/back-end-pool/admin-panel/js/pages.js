@@ -4,6 +4,7 @@
 API.guardAdminPage();
 
 let _pages = [];
+let _shippedDefaults = [];   // slugs that have a shipped default body (GET /api/admin/pages)
 let editor = null;
 let slugTouched = false;
 
@@ -44,6 +45,7 @@ function resetForm() {
   slugTouched = false;
   document.getElementById('form-title').textContent = 'New page';
   document.getElementById('cancel-btn').style.display = 'none';
+  document.getElementById('reset-default-btn').style.display = 'none';
 }
 
 async function loadPages() {
@@ -52,6 +54,7 @@ async function loadPages() {
     const d = await API.get('/api/admin/pages');
     if (!d || d.error) throw new Error(d && d.error ? d.error : 'Failed to load pages');
     _pages = d.pages || [];
+    _shippedDefaults = d.shipped_defaults || [];
     if (!_pages.length) {
       tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No pages yet. Create one above.</td></tr>';
       return;
@@ -91,6 +94,9 @@ function editPage(id) {
   slugTouched = true;
   document.getElementById('form-title').textContent = 'Edit page #' + p.id;
   document.getElementById('cancel-btn').style.display = '';
+  // Matched on the STORED slug: the server resolves the default from it, not from the form.
+  document.getElementById('reset-default-btn').style.display =
+    _shippedDefaults.includes(p.slug) ? '' : 'none';
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -113,6 +119,27 @@ async function submitPage() {
     flash('Page saved.', false);
     resetForm();
     loadPages();
+  } catch (err) {
+    flash(err.message, true);
+  }
+}
+
+// The body is written server-side, never via the editor: Quill would strip the default's
+// classes on the way back. The form is then closed, so a stale editor cannot be re-saved
+// over the fresh body.
+async function resetToDefault() {
+  const id = Number(document.getElementById('page-id').value);
+  const p = _pages.find(x => x.id === id);
+  if (!p) return;
+  if (!confirm(`Replace the content of "${p.title}" with the shipped default?\n\n`
+    + 'Your edits to the content are lost, including any unsaved changes in this form. '
+    + 'Title, slug, link location, order, SEO and published state are kept.')) return;
+  try {
+    const r = await API.post('/api/admin/pages/' + id + '/reset-default', {});
+    if (!r || r.error) throw new Error(r && r.error ? r.error : 'Reset failed');
+    resetForm();
+    await loadPages();
+    flash(`"${p.title}" now uses the shipped default.`, false);
   } catch (err) {
     flash(err.message, true);
   }
@@ -143,6 +170,7 @@ document.addEventListener('click', function (e) {
   switch (el.dataset.action) {
     case 'submit-page': submitPage(); break;
     case 'reset-form': resetForm(); break;
+    case 'reset-default': resetToDefault(); break;
     case 'edit-page': editPage(Number(el.dataset.id)); break;
     case 'delete-page': deletePage(Number(el.dataset.id)); break;
   }

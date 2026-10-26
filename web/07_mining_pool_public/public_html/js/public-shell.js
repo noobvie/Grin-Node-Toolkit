@@ -34,7 +34,8 @@
   // side as peers.
   // Each item carries an icon: on narrow screens the header collapses to icons-only
   // (the .nav-label is hidden via CSS) so the mobile header stays tidy; desktop shows
-  // icon + label. The footer "Pool" column reuses the labels only (always text).
+  // icon + label. The footer's Pool column reuses the labels only (always text); its
+  // Community column reuses label + icon.
   // An item is either a leaf link ({href,label,icon}) or a GROUP
   // ({label,icon,children:[…leaf links…]}). A group has NO href of its own — it
   // only opens a dropdown of its children. Gates live on the CHILDREN, never on the group
@@ -56,9 +57,9 @@
       { href: 'payment-history.html', label: 'Payouts',      icon: '💸' },
       { href: 'network-map.html',    label: 'Network Map',   icon: '🛰️' }
     ] },
-    // "Community" (operator's choice, script07_design_games.md §19.17 C0 answer 1), not "Prize Pool":
-    // the gift box is the prize pool's, so the group carries 👥 and the gift stays on the
-    // footer's Fortune Board link.
+    // "Community" (operator's choice, script07_design_games.md §19.17 C0 answer 1), not "Prize Pool".
+    // `footerCol: 'community'` renders its children as the footer's Community column
+    // instead of folding them into the Pool column.
     // Every prize-pool GRIN is paid back out to miners, never to the operator — so the
     // donate page is "Contribute" here, not "Donate" (reads as tipping the operator) and
     // not "Sponsors" (reads as companies funding the operator). Its <h1> stays
@@ -70,7 +71,7 @@
       { href: 'fortune-board.html',  label: 'Fortune Board', icon: '🏆', incentives: true },
       { href: 'donate.html',         label: 'Contribute',    icon: '💚', incentives: true },
       { href: '/play/',              label: 'Play',          icon: '🎮', games: true }
-    ] }
+    ], footerCol: 'community' }
   ];
   // "Account", not "My Stats": the page's <title> and <h1> both say Account, and it is
   // where withdrawals happen. Rendered as a chip in .nav-right, not in NAV: it is the only
@@ -162,93 +163,102 @@
       '<div class="theme-switcher"></div>' +
     '</div>';
 
-  // ── Footer columns ────────────────────────────────────────────────────────
-  // Four columns + a live mini-stats bar + a legal/copyright bottom row. The "Pool"
-  // column reuses the NAV above; the "Legal" column is filled from the CMS pages by
-  // branding.js ([data-brand="page-links"]); brand/social/copyright/security hooks are
-  // also enhanced by branding.js once /api/public/branding resolves. The mini-stats bar
-  // (network/fee/min/price/stratum) is filled by this script's own light fetches below.
+  // ── Footer ────────────────────────────────────────────────────────────────
+  // A one-line brand strip (name · tagline · socials), four link columns — Pool /
+  // Community / Resources / Help & Legal — and a copyright row. The brand is a strip, not
+  // a grid column: as a column it ran twice the height of the link columns beside it, and
+  // the columns are kept to ~5 rows each so they line up on desktop and pair evenly 2×2 on
+  // a phone. Pool and Community are built from NAV, so their labels, icons and gates are
+  // the header's — two hand-written copies had already drifted ("Donate" ❤ vs "Contribute").
+  // branding.js fills the [data-brand] hooks once /api/public/branding resolves, then
+  // applyFooterCols hides a gated column left with no links and re-counts the grid.
 
-  // Pool column reuses the canonical NAV (no anchor stays active in the footer), minus
-  // Blog — it lives in the Resources column below to avoid a duplicate link. Groups have
-  // no page of their own, so they're flattened to their child links here.
+  // Groups have no page of their own, so they're flattened to their child links. No
+  // anchor stays active in the footer. Home is left out: a footer row reading just "Home"
+  // is a weak link, and every page already carries the 🏠 Home item in the header.
   var poolLeaves = [];
+  var communityLeaves = [];
   NAV.forEach(function (l) {
-    if (l.children) { l.children.forEach(function (c) { poolLeaves.push(c); }); }
-    else poolLeaves.push(l);
+    var into = l.footerCol === 'community' ? communityLeaves : poolLeaves;
+    if (l.children) { l.children.forEach(function (c) { into.push(c); }); }
+    else into.push(l);
   });
   poolLeaves.push(ACCOUNT);   // lives in .nav-right, not NAV, but is still a pool page
-  // Excluded from the Pool column: Blog (Resources col), Fortune Board + the donate page
-  // (both surfaced as CTAs in the brand col) and Home. A footer row reading just
-  // "Home" is a weak link — every page already carries the 🏠 Home item in the header
-  // nav, which is where people look for it.
-  var POOL_COL_SKIP = { '/blog.html': 1, '/index.html': 1, '/fortune-board.html': 1, '/donate.html': 1 };
+  var POOL_COL_SKIP = { '/index.html': 1 };
+  function footerLink(l, withIcon) {
+    return '<a href="' + abs(l.href) + '"' + gateAttrs(l) + '>' +
+      (withIcon ? '<span class="footer-ico" aria-hidden="true">' + (l.icon || '') + '</span>' : '') +
+      esc(l.label) + '</a>';
+  }
   var poolCol = poolLeaves.filter(function (l) { return !POOL_COL_SKIP[fileOf(l.href)]; })
-    .map(function (l) {
-      return '<a href="' + abs(l.href) + '"' + gateAttrs(l) + '>' + esc(l.label) + '</a>';
-    }).join('');
+    .map(function (l) { return footerLink(l, false); }).join('');
+  var communityCol = communityLeaves.map(function (l) { return footerLink(l, true); }).join('');
 
   var footer = document.createElement('footer');
   footer.innerHTML =
-    '<div class="footer-cols">' +
-      // Brand + tagline + social
-      '<div class="footer-col footer-brand">' +
+    '<div class="footer-top">' +
+      '<div class="footer-brand">' +
         // No logo image here on purpose — the header already carries the swinging
         // brand logo; a second one in the footer just duplicates that animation.
         '<div class="brand">' +
           '<span data-brand="pool_name">GRINIUM</span>' +
         '</div>' +
         '<p class="footer-tagline" data-brand="pool_tagline">Mine Grin, anywhere</p>' +
-        '<div class="footer-social">' +
-          '<a data-brand="social-twitter" href="#" target="_blank" rel="noopener" style="display:none">Twitter / X</a>' +
-          '<a data-brand="social-discord" href="#" target="_blank" rel="noopener" style="display:none">Discord</a>' +
-          '<a data-brand="social-telegram" href="#" target="_blank" rel="noopener" style="display:none">Telegram</a>' +
-          '<a data-brand="social-nostr" href="#" target="_blank" rel="noopener" style="display:none">Nostr</a>' +
-        '</div>' +
-        // Donate lives in the brand column, highlighted with a heart, as the primary
-        // community call-to-action. Fortune Board sits right below it (keeps the
-        // columns balanced).
-        // Both carry data-incentives: hidden with the header's Fortune Board + Contribute
-        // links when the operator has incentives off (branding.js applyIncentivesNav).
-        '<a class="footer-donate" href="/donate.html" data-incentives="1">' +
-          '<span class="footer-donate-ico" aria-hidden="true">❤</span> Donate' +
-        '</a>' +
-        '<a class="footer-fortune" href="/fortune-board.html" data-incentives="1">' +
-          '<span class="footer-fortune-ico" aria-hidden="true">🎁</span> Fortune Board' +
-        '</a>' +
       '</div>' +
-      // Pool navigation
+      '<div class="footer-social">' +
+        '<a data-brand="social-twitter" href="#" target="_blank" rel="noopener" style="display:none">Twitter / X</a>' +
+        '<a data-brand="social-discord" href="#" target="_blank" rel="noopener" style="display:none">Discord</a>' +
+        '<a data-brand="social-telegram" href="#" target="_blank" rel="noopener" style="display:none">Telegram</a>' +
+        '<a data-brand="social-nostr" href="#" target="_blank" rel="noopener" style="display:none">Nostr</a>' +
+      '</div>' +
+    '</div>' +
+    '<div class="footer-cols">' +
       '<div class="footer-col">' +
         '<h4>Pool</h4>' + poolCol +
+      '</div>' +
+      // Community: the header group's children (each with its own gate) + the operator's
+      // public support channel (support_forum_url). data-footer-gated: hidden when every
+      // link in it is (incentives off, games not 'on', no forum link).
+      '<div class="footer-col footer-community" data-footer-gated="1">' +
+        '<h4>Community</h4>' + communityCol +
+        '<a data-brand="forum-link" href="#" target="_blank" rel="noopener" style="display:none">' +
+          '<span class="footer-ico" aria-hidden="true">💬</span>Forum</a>' +
       '</div>' +
       // Resources — Blog + API docs, plus the CMS's informational pages (Start Mining /
       // About / FAQ …), which branding.js appends here rather than under Legal. Deliberately absent:
       // "Get Started" (the CMS "Start Mining" page below is the real guide, and
-      // index.html#connect is one click from the Home link in the Pool column) and the
+      // index.html#connect is one click from the header's Home link) and the
       // "Grin Node Toolkit ↗" repo link (a link off-site to the software, not a pool
-      // resource — operators who want credit have the "Powered by" attribution setting).
+      // resource — it is the bottom row's "Powered by" attribution, an operator setting).
       '<div class="footer-col">' +
         '<h4>Resources</h4>' +
         '<a href="/blog.html">Blog</a>' +
         '<a href="/api-docs.html">API Docs</a>' +
         '<div data-brand="page-links-info"></div>' +
       '</div>' +
-      // Legal + contact (page-links injected by branding.js from the CMS)
-      '<div class="footer-col footer-legal">' +
-        '<h4>Legal</h4>' +
-        // Legal-only page-links (Terms / Privacy / Impressum …) are appended by branding.js;
-        // the CSS makes this container a flex column so each lands on its own line. The
-        // informational CMS pages go to Resources above.
-        '<div data-brand="page-links"></div>' +
+      // Help & Legal: the operator's contact, security contact (+ PGP key), then the legal
+      // CMS pages (Terms / Privacy / Impressum …) that branding.js appends; the CSS makes
+      // that container a flex column so each lands on its own line. Every link here can be
+      // absent, so the column is data-footer-gated too.
+      '<div class="footer-col footer-legal" data-footer-gated="1">' +
+        '<h4>Help &amp; Legal</h4>' +
         '<a class="footer-contact" data-brand="contact-link" href="#" style="display:none">Contact</a>' +
+        '<a data-brand="security-link" data-brand-show="security" href="#" style="display:none">Security</a>' +
+        '<a data-brand="pgp-link" href="#" target="_blank" rel="noopener" style="display:none">PGP key</a>' +
+        '<div data-brand="page-links"></div>' +
       '</div>' +
     '</div>' +
-    // Bottom row: copyright + attribution + security contact.
+    // Bottom row: copyright · attribution · signature.
     '<div class="footer-bottom">' +
-      // Copyright + Saigon signature share one line. The signature is hardcoded
-      // (matches GrinScan / Tiny Explorer) — not a branding hook — so it stays put.
-      // Yellow flag with three red stripes = Saigon.
+      // The signature is hardcoded (matches GrinScan / Tiny Explorer) — not a branding
+      // hook — so it stays put. Yellow flag with three red stripes = Saigon. The
+      // attribution carries its own separator so hiding it (show_attribution off) leaves
+      // no dangling dot.
       '<p class="footer-copyright" data-brand="copyright">Since 2026</p>' +
+      '<span class="footer-attribution" data-brand="attribution">' +
+        '<span class="footer-sep" aria-hidden="true">·</span> ' +
+        'Powered by <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener">Grin Node Toolkit</a>' +
+      '</span>' +
       '<span class="footer-sep" aria-hidden="true">·</span>' +
       '<span class="footer-saigon">From Saigon with &#10084;&#65039; ' +
         '<svg viewBox="0 0 27 18" width="21" height="14" role="img" aria-label="Yellow flag with three red stripes" style="vertical-align:-2px;border-radius:2px">' +

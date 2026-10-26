@@ -1,12 +1,36 @@
 # Script 07 — Solo Private Pool Flowchart (Reference)
 
 > **Covers code as of:** 2026-07-06 (the flowchart's own stamp)
-> **Last verified:** never systematically verified
+> **Last verified:** never systematically verified (the Code layout section was checked against the split files 2026-10-18; the flowchart itself was not)
 > **Product code last changed:** 2026-10-04 (`a6b0e1b`: planned-stop marker before the stratum-config restart in `07_grin_mining_solo.sh`)
 > Prose last edited 2026-10-12 (moved out of `script07_design.md`, where it was the closing appendix; text unchanged).
+> Code layout section added 2026-10-18 (script split into entry + 3 libs; flowchart text unchanged).
 
 **Product:** `scripts/07_grin_mining_solo.sh` — solo private mining (separate from the public pool,
 [`script07_design.md`](script07_design.md)).
+
+---
+
+## Code layout
+
+`07_grin_mining_solo.sh` is the entry and keeps its path. Menu sections live in sourced libs under
+`scripts/lib/`; every function kept its name.
+
+| File | Menu | Purpose |
+|---|---|---|
+| `07_grin_mining_solo.sh` | main, network, `lan` arg | header, logging, node/toml discovery, IP detection, status/precheck, live stats, menus, `solo_deploy_code`, settlement, `main` |
+| `lib/07_solo_stratum.sh` | network menu `2` Stratum; top `5` Watchdogs (stratum watchdog) | setup & publish, manual config, restrict, stratum watchdog cron |
+| `lib/07_solo_stats_page.sh` | top `3` | `solo_deploy_stats_page`: stats vhost, access lock, payout split, page deploy |
+| `lib/07_solo_cleanup.sh` | top `C` | `solo_cleanup`: full cleanup (destructive, kept apart) |
+| `lib/07_solo_wallet.sh`, `07_solo_backup.sh`, `07_solo_quiet.sh` | wallet · backup · quiet hours | unchanged |
+
+- **Source order:** the three new libs are sourced directly after `07_solo_quiet.sh`, unconditionally
+  (a missing lib must fail loudly), and before `main "$@"`. Their only top-level lines are literal
+  globals (`STRATUM_WATCHDOG_*`, `_ACCESS_*`), so they cannot fail at source time under the entry's
+  `set -euo pipefail`. Helpers used by more than one lib (`graceful_restart_grin`, the IP detection
+  block) stay in the entry.
+- **errexit:** every dispatch is `fn || true`, so a lib function runs with errexit off whatever the
+  entry sets; file operations in the libs are not individually guarded.
 
 ---
 

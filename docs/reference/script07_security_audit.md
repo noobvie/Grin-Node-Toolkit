@@ -1490,8 +1490,8 @@ Other things confirmed by reading rather than by memory:
   is pure `jwt.verify` + a `type === 'access'` check — no DB read, no audit write, no counter.
   Its `rateLimiter`/`ipFilter` bypass is covered at the network layer: the vhost's
   `location = /admin/_authcheck` is `internal`
-  ([07_grin_mining_public_pool.sh:1337](../../scripts/07_grin_mining_public_pool.sh#L1337)) and
-  `location /api/admin/` carries `$admin_rules` ([:1348](../../scripts/07_grin_mining_public_pool.sh#L1348)).
+  (`scripts/lib/07_lib_pool_nginx.sh` `pool_setup_nginx`) and
+  `location /api/admin/` carries `$admin_rules` (same function).
 - **The 404 fallthrough leaks nothing structural** — flat `{"error":"Not found"}`,
   [index.js:6237](../../web/07_mining_pool_public/back-end-pool/index.js#L6237). (See J1-8 for
   the 401-vs-404 side channel, which is a different thing.)
@@ -1687,7 +1687,7 @@ and the directive would pin `api.`, `testapi.` and every other sibling to HTTPS 
 uncacheable-away. That fix is present and correct:
 
 ```
-scripts/07_grin_mining_public_pool.sh:1257
+scripts/lib/07_lib_pool_nginx.sh (pool_setup_nginx)
     add_header Strict-Transport-Security "max-age=31536000" always;
 ```
 
@@ -1714,7 +1714,7 @@ agreed. Cross-ref **J16** for the vhost half.
 ### J1-8 — [Info] 401 vs 404 enumerates the admin route table
 
 **Threat actor:** anonymous internet, only while `admin_allowlist` is empty (the shipped
-default — [07_grin_mining_public_pool.sh:1108-1111](../../scripts/07_grin_mining_public_pool.sh#L1108-L1111)
+default — `scripts/lib/07_lib_pool_nginx.sh` `pool_setup_nginx`
 warns about this at install time).
 
 An unauthenticated `GET /api/admin/dashboard` runs the `secureAdmin` chain and stops at
@@ -4619,7 +4619,7 @@ The first line is today's behaviour: **no wait at all.** WAL removes reader/writ
 writer/writer contention.
 
 **(2) A second writer is a documented, operator-facing feature.**
-[`07_grin_mining_public_pool.sh:2038–2040`](../../scripts/07_grin_mining_public_pool.sh#L2038)
+`scripts/lib/07_lib_pool_ops.sh` `pool_cron_schedules`
 writes this cron:
 
 ```
@@ -4962,7 +4962,7 @@ rows.
   Also worth checking there whether the *displayed* balance and the net-amount preview agree with
   what the CAS will accept.
 - **§J16 (deployment)** owns two things this session found in the shell. (1) The weekly
-  `VACUUM` cron at `07_grin_mining_public_pool.sh:2039` takes an exclusive lock on the live
+  `VACUUM` cron at `scripts/lib/07_lib_pool_ops.sh` `pool_cron_schedules` takes an exclusive lock on the live
   database — J7-1. It should stop the service around it, or the schema should move to
   `auto_vacuum=INCREMENTAL`. (2) The same cron is the reason `busy_timeout` alone is not a fix.
 - **§J12 (rate limiting & resource exhaustion)** — J7-2's negative-limit dumps were also
@@ -5099,7 +5099,7 @@ Every secret the pool touches. Modes are what the code and the installer actuall
 
 **Threat actor: local unprivileged.** Not root — any account on the box. This is precisely the
 actor the pool's de-rooting exists to contain: the install comment at
-[07_grin_mining_public_pool.sh:614](../../scripts/07_grin_mining_public_pool.sh#L614) says the
+`scripts/lib/07_lib_pool_install.sh` `pool_install` says the
 backend runs as `grinpool` because *"the backend parses untrusted input from the public internet on
 TWO surfaces (HTTP API + raw stratum TCP) atop a large npm tree"*, and that de-rooting is worth
 little if the thing it is protecting is readable by `www-data` anyway.
@@ -5117,7 +5117,7 @@ db.pragma('foreign_keys = ON');
 
 `lib/sqlite-compat.js:28` is `new DatabaseSync(filename)` with no options, so the mode is SQLite's
 `SQLITE_DEFAULT_FILE_PERMISSIONS` (`0644`) masked by the process umask. The systemd unit at
-[07_grin_mining_public_pool.sh:631–657](../../scripts/07_grin_mining_public_pool.sh#L631) sets
+`scripts/lib/07_lib_pool_install.sh` `pool_install` sets
 `User=`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `RestrictSUIDSGID` and
 `ReadWritePaths` — but **no `UMask=`**, and systemd's default for a service is `0022`. So
 `0644 & ~0022` = `0644`. The `-wal` and `-shm` siblings inherit the database file's mode from
@@ -5187,7 +5187,7 @@ yet and because `chmod` is a no-op on the Windows dev machine.
 2. Add `UMask=0077` to the systemd unit so *every* file the backend creates from now on is tight by
    default, rather than each new one needing to remember.
 3. The root-run installer helper at
-   [:2415–2432](../../scripts/07_grin_mining_public_pool.sh#L2415) opens the same DB as root while
+   `scripts/lib/07_lib_pool_ops.sh` `pool_write_vacuum_script` opens the same DB as root while
    the service may be stopped; it already `chown`s `pool.db`/`-wal`/`-shm` back to `grinpool` but
    does not `chmod` them. Add the chmod beside the chown.
 
@@ -5227,7 +5227,7 @@ A repo-wide sweep confirms it — `telegram_bot_token` appears in only four plac
 HTML form, `alert-delivery.js` reading `config`, and a test fixture. Nothing bridges them.
 
 Nor does `pool.json` supply them: `pool_ensure_defaults`
-([07_grin_mining_public_pool.sh:305–320](../../scripts/07_grin_mining_public_pool.sh#L305)) never
+(`scripts/07_grin_mining_public_pool.sh` `pool_ensure_defaults`) never
 writes any alert key, and `lib/config.js` declares no default for them either. So on a **stock
 install, off-box alert delivery is impossible** — `configuredChannels()` returns all-false,
 `GET /api/admin/alerts/config` reports `delivery: {email:false, discord:false, slack:false}`, and
@@ -5313,7 +5313,7 @@ chown "root:$web_user" "$_foreign_secret_file"
 chmod 640 "$_foreign_secret_file"
 ```
 ```bash
-# scripts/07_grin_mining_public_pool.sh:513–514  — de-rooted backend runs as grinpool
+# scripts/lib/07_lib_pool_install.sh (pool_deroot)  — de-rooted backend runs as grinpool
 chgrp grinsecret "$sf"
 chmod 640 "$sf"
 ```
@@ -5731,7 +5731,7 @@ Five things are wrong with it, in descending order:
 5. **The baseline is stored in a different directory from the file it describes.** `hashFile` is
    relative, so it resolves against the unit's `WorkingDirectory=$POOL_APP_DIR`
    (`/opt/grin/pubpool/<net>/`), while the config is `GRIN_POOL_CONF=/opt/grin/conf/grin_pubpool*.json`
-   ([07_grin_mining_public_pool.sh:640–644](../../scripts/07_grin_mining_public_pool.sh#L640)).
+   (`scripts/lib/07_lib_pool_install.sh` `pool_install`).
    Redeploying the app directory drops the baseline, and `existsSync` then makes the check a silent
    no-op — the same "absent reads as clean" shape as #1.
 
@@ -6035,7 +6035,7 @@ is enforcement in the attacker's own browser.
 **Failure scenario.** An operator sells a header slot for a month at an agreed CPM. The buyer —
 or anyone who reads `GET /api/public/ads` and sees the ids — posts
 `{"impressions":[1,2,…,20]}` in a loop. nginx allows 600 requests/min per IP on `/api/`
-([07_grin_mining_public_pool.sh:1050](../../scripts/07_grin_mining_public_pool.sh#L1050)) and the
+(`scripts/lib/07_lib_pool_nginx.sh` `pool_setup_nginx`) and the
 app's `public` bucket allows 1200/min, so one IP moves the counters ~200,000 times an hour, and a
 handful of hosts moves them arbitrarily. The admin panel renders exactly those two columns and
 computes the percentage from them, with no indication they are unverified:
@@ -6435,7 +6435,7 @@ is **§J12's**, listed in the handoffs.
   `proxy_hide_header X-Powered-By` — the pool's vhost is the only toolkit vhost without it) and
   should note that the generated page CSP allowlists `googletagmanager.com`,
   `*.google-analytics.com`, `plausible.io` and `cloud.umami.is`
-  ([07_grin_mining_public_pool.sh:1269](../../scripts/07_grin_mining_public_pool.sh#L1269)).
+  (`scripts/lib/07_lib_pool_nginx.sh` `pool_setup_nginx`).
   That allowlist is correct — it is what makes an operator's own analytics choice work — but
   after J11-4 it is now wider than the default configuration uses, which is the right way round
   and worth stating so a later reader does not "tidy" it away.
@@ -6784,7 +6784,7 @@ The §J1 matrix says which *guard* a route carries. This is the other axis, and 
 
 nginx zone rates, all `$binary_remote_addr`-keyed through the shared
 `nginx_ensure_rate_limit_zones` primitive as CLAUDE.md requires
-([07_grin_mining_public_pool.sh:1048-1053](../../scripts/07_grin_mining_public_pool.sh#L1048)):
+(`scripts/lib/07_lib_pool_nginx.sh` `pool_setup_nginx`):
 `_auth` 200 r/m · `_captcha` 600 r/m · `_api` 600 r/m · `_admin` 2400 r/m · `_static` 6000 r/m.
 
 ### Findings
@@ -7073,7 +7073,7 @@ the vhost happening to agree with it.
 
 **Checked before changing it:** Script 07's guided installer registers the first admin with
 `curl http://127.0.0.1:$port/api/auth/register`
-([07_grin_mining_public_pool.sh:1763](../../scripts/07_grin_mining_public_pool.sh#L1763)) —
+(`scripts/lib/07_lib_pool_ops.sh` `pool_setup_admin`) —
 straight at the app port, not through nginx, so no `X-Forwarded-For` is present and the
 tightened check still lets the setup-time CAPTCHA bypass through. Tightening that helper without
 confirming this would have broken first-install on a fresh box.
@@ -7581,7 +7581,7 @@ audit nobody reads. It should be stated in the pre-mainnet gate rather than disc
   which nothing calls.
 - **`engines: node >=24`** matches the installer, which removes the distro packages and pulls
   NodeSource `setup_24.x` on both apt and dnf
-  ([07_grin_mining_public_pool.sh:455-466](../../scripts/07_grin_mining_public_pool.sh#L455)).
+  (`scripts/lib/07_lib_pool_install.sh` `pool_ensure_node24`).
   Consistent. (That step is `curl … | bash -` as root — a real supply-chain surface, but it is
   §J16's file and §J16's call.)
 
@@ -7653,7 +7653,7 @@ uses a real `AbortSignal.timeout` — which is what the NIP-05 path should look 
   four) is confirmed as J15's to verify, unchanged from §J4's handoff.
 - **§J16 (deployment & infra)** — three. (a) The Node install is
   `curl -fsSL https://deb.nodesource.com/setup_24.x | bash -` as root
-  ([07_grin_mining_public_pool.sh:458, 464](../../scripts/07_grin_mining_public_pool.sh#L458));
+  (`scripts/lib/07_lib_pool_install.sh` `pool_ensure_node24`);
   the version choice is correct against `engines`, the delivery is §J16's call. (b) J13-6 is
   fixed in `pool_deploy_code`, but §J16 should decide whether the deploy ought to *verify*
   rather than *infer* — `npm ci --dry-run` or an `npm ls --omit=dev` check would catch a
@@ -8136,7 +8136,7 @@ That host belongs to the toolkit author, not to the deploying operator, and it i
 pool built from this repo. A miner who clicks it hands `tools.grin.money` their IP, the
 timestamp, and — via the `Referer` — the pool they are on. The pool's own vhost sets
 `Referrer-Policy: strict-origin-when-cross-origin`
-([07_grin_mining_public_pool.sh:1264](../../scripts/07_grin_mining_public_pool.sh#L1264)), so
+(`scripts/lib/07_lib_pool_nginx.sh` `pool_setup_nginx`), so
 the origin (not the path) crosses. That reconstitutes off-box exactly the *(mining IP, this
 pool, this time)* linkage §G1 spent a pass removing from `admin_audit_log`, on the one page
 where the visitor is demonstrably a miner of that pool.
@@ -8313,7 +8313,7 @@ every file mode. `07_lib_pool_backup.sh` and `07_lib_pool_wallet.sh` were read f
 > **Plan correction.** The §J16 brief asks about "Central API reachability from satellites: IP
 > allowlist + shared secret over the nginx HTTPS vhost." **There is no such surface.** The
 > satellite role was removed in the Model C refactor; the only trace left is
-> `pool_satellite_installed()` ([:3163](../../scripts/07_grin_mining_public_pool.sh#L3163)), a
+> `pool_satellite_installed()` (`scripts/07_grin_mining_public_pool.sh`), a
 > detector kept so `Z) Cleanup` can still find a legacy install. Regional **gateways** forward
 > raw stratum over WireGuard and speak no HTTP to the hub at all — §J1 reached the same
 > conclusion from the route table. So there is no satellite shared secret whose entropy or
@@ -8434,7 +8434,7 @@ There are **three** admin allowlists, and they do not connect:
 
 | # | Surface | Written by | Read by | State |
 |---|---|---|---|---|
-| 1 | `pool.json` → `admin_allowlist` | the shell, hand-edit ([:337](../../scripts/07_grin_mining_public_pool.sh#L337), [:1157](../../scripts/07_grin_mining_public_pool.sh#L1157)) | nginx `$admin_rules` on `location /admin/` + `/api/admin/` | **works**, applied only when `4) Setup nginx` is re-run |
+| 1 | `pool.json` → `admin_allowlist` | the shell, hand-edit (`scripts/07_grin_mining_public_pool.sh` `pool_ensure_defaults`, `scripts/lib/07_lib_pool_nginx.sh` `pool_setup_nginx`) | nginx `$admin_rules` on `location /admin/` + `/api/admin/` | **works**, applied only when `4) Setup nginx` is re-run |
 | 2 | `config.admin_ip_allowlist` | **nobody** | `new IpFilter({ allowlist: config.admin_ip_allowlist \|\| [] })` ([index.js:747](../../web/07_mining_pool_public/back-end-pool/index.js#L747)) | permanently `[]` on every installed pool |
 | 3 | `POST /api/admin/security/ip-allowlist/add` | the panel, `freshAdmin` ([index.js:5301](../../web/07_mining_pool_public/back-end-pool/index.js#L5301)) | the same `IpFilter` | **in-memory only** |
 
@@ -8559,7 +8559,7 @@ Three inherited items were re-read this session and remain exactly as the sessio
 them described. Listed so §J17 does not have to go looking.
 
 1. **§J7-1's weekly `VACUUM` cron** is unchanged at
-   [:2128–2131](../../scripts/07_grin_mining_public_pool.sh#L2128):
+   `scripts/lib/07_lib_pool_ops.sh` `pool_cron_schedules`:
    `0 3 * * 0 root /usr/bin/sqlite3 $POOL_APP_DIR/pool.db "VACUUM;"`. §J7 handed §J16 "the cron"
    and asked for stop-service-around-it or `auto_vacuum=INCREMENTAL`. **Not changed here**,
    because §J7-1 is explicit that the repair is paired with a `busy_timeout` decision that is an
@@ -8577,7 +8577,7 @@ them described. Listed so §J17 does not have to go looking.
    it properly means deciding between journal and file logging, which is a §J17 operations
    question, not a security one.
 3. **Node.js is installed by `curl -fsSL https://deb.nodesource.com/setup_24.x | bash -` as
-   root** ([:465, :471](../../scripts/07_grin_mining_public_pool.sh#L465)) — §J13's handoff (a).
+   root** (`scripts/lib/07_lib_pool_install.sh` `pool_ensure_node24`) — §J13's handoff (a).
    §J16's call: **keep it.** It is NodeSource's only documented install path, it is TLS-pinned to
    a vendor the operator is already trusting for the runtime itself, and the alternatives
    (vendoring a keyring + apt source by hand) trade one trust root for the same trust root plus a
@@ -9075,7 +9075,7 @@ slack, and a missing timestamp failing the test rather than passing it), and the
    for minutes, which no `busy_timeout` survives, and pointed at a binary this toolkit never
    installs (the app uses `node:sqlite`), so the maintenance it promised had very likely never
    run at all. Replaced by a generated `/usr/local/bin/<service>-vacuum`
-   ([07_grin_mining_public_pool.sh:2198–2262](../../scripts/07_grin_mining_public_pool.sh#L2198))
+   (`scripts/lib/07_lib_pool_ops.sh` `pool_write_vacuum_script`)
    that stops the service, vacuums via `node:sqlite`, and restarts **in a trap** so a failed
    vacuum can never leave the pool down until someone notices on Monday. It chowns `pool.db` and
    its WAL sidecars back to `grinpool` afterwards — §J16-8's trap, in the other direction. The

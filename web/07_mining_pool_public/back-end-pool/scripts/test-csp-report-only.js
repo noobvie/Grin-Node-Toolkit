@@ -33,9 +33,10 @@ const ok = (name, cond, extra = '') => {
 };
 
 const INDEX = path.resolve(__dirname, '../index.js');
-const VHOST = path.resolve(__dirname, '../../../../scripts/07_grin_mining_public_pool.sh');
+const VHOST = path.resolve(__dirname, '../../../../scripts/lib/07_lib_pool_nginx.sh');
 const indexSrc = fs.readFileSync(INDEX, 'utf8');
 const vhostSrc = fs.readFileSync(VHOST, 'utf8');
+ok('vhost source is the real nginx lib (non-vacuity)', vhostSrc.includes('pool_setup_nginx() {') && vhostSrc.includes('HDREOF'));
 
 // "a b; c d e;" → [['a','b'], ['c','d','e']]
 function directives(policy) {
@@ -251,7 +252,7 @@ console.log('\n[7] nginx header inheritance — every block with its own add_hea
     return { blocks, balanced: !bad && !q && stack.length === 1 && !cur.trim() };
   };
 
-  const heredocs = [...vhostSrc.matchAll(/cat > "\$POOL_NGINX_CONF" << EOF\n([\s\S]*?)\nEOF\n/g)].map((m) => m[1]);
+  const heredocs = [...vhostSrc.matchAll(/cat > "\$POOL_NGINX_CONF" << EOF(?: \|\| \{[^\n]*\})?\n([\s\S]*?)\nEOF\n/g)].map((m) => m[1]);
   ok('both vhost heredocs located (HTTP bootstrap + the SSL vhost)', heredocs.length === 2, `found ${heredocs.length}`);
   const all = []; let sslBlocks = [];
   heredocs.forEach((h, n) => {

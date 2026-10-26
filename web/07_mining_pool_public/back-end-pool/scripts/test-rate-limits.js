@@ -286,7 +286,8 @@ console.log('\n[8] §J12-3 / -5 / -9 / -11 / -12 — the remaining resolution pa
 
 {
   const vhost = fs.readFileSync(
-    path.resolve(APP, '../../../scripts/07_grin_mining_public_pool.sh'), 'utf8');
+    path.resolve(APP, '../../../scripts/lib/07_lib_pool_nginx.sh'), 'utf8');
+  ok('vhost source is the real nginx lib (non-vacuity)', vhost.includes('pool_setup_nginx() {') && vhost.includes('HDREOF'));
   const ipFilterSrc = fs.readFileSync(path.join(APP, 'lib/ip-filter.js'), 'utf8');
   const schedSrc = fs.readFileSync(path.join(APP, 'lib/withdrawal-scheduler.js'), 'utf8');
   const rlSrc = fs.readFileSync(path.join(APP, 'lib/rate-limiter.js'), 'utf8');
@@ -390,7 +391,8 @@ console.log('\n[9] the withdraw POST outlives the Tor pre-flight probe at nginx 
   // gate was still deciding. Safe since §10.5's res.destroyed check (nothing is created), but the
   // miner had to retry. ONE exact regex block for the withdraw POST gets a longer read timeout;
   // every other /api/ read keeps 30 s.
-  const vhost = fs.readFileSync(path.resolve(APP, '../../../scripts/07_grin_mining_public_pool.sh'), 'utf8');
+  const vhost = fs.readFileSync(path.resolve(APP, '../../../scripts/lib/07_lib_pool_nginx.sh'), 'utf8');
+  ok('vhost source is the real nginx lib (non-vacuity)', vhost.includes('pool_setup_nginx() {') && vhost.includes('HDREOF'));
   const i = vhost.indexOf('location ~ ^/api/account/[^/]+/withdraw\\$ {');
   const block = i < 0 ? '' : vhost.slice(i, vhost.indexOf('\n    }', i));
   const t = Number((block.match(/proxy_read_timeout (\d+)s;/) || [])[1]);

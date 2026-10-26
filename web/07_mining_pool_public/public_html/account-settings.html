@@ -126,9 +126,15 @@
     @media (prefers-reduced-motion: reduce) { .wled.on { animation: none; } }
     .wled-legend { margin: 10px 0 0; font-size: 12px; color: var(--text-dim); }
 
-    /* ── payout console: main row + ownership gate + two control columns ── */
-    .deck-row.acct-main { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); align-items: start; }
-    @media (max-width: 900px) { .deck-row.acct-main { grid-template-columns: minmax(0, 1fr); } }
+    /* ── payout console: ownership gate + withdraw form (amount | method) ── */
+    .withdraw-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 0 32px; align-items: start; }
+    .wd-method { padding-left: 32px; border-left: 1px solid var(--border-soft); }
+    .wd-note { margin: 16px 0 0; font-size: 12.5px; color: var(--text-mute); }
+    #acct-dest-goblin { max-width: 640px; }
+    @media (max-width: 900px) {
+      .withdraw-grid { grid-template-columns: minmax(0, 1fr); }
+      .wd-method { padding: 18px 0 0; margin-top: 18px; border-left: 0; border-top: 1px solid var(--border-soft); }
+    }
     .gate-block {
       border: 1px solid color-mix(in srgb, var(--info) 35%, var(--bg));
       background: color-mix(in srgb, var(--info) 5%, transparent);
@@ -138,6 +144,10 @@
       font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .18em;
       text-transform: uppercase; color: var(--info); margin-bottom: 10px;
     }
+    /* The gate lives in P-00, under the lookup; the panels that use it carry a pointer back. */
+    #acct-gate .gate-block { margin: 16px 0 0; }
+    .gate-ptr { margin: 0 0 16px; font-size: 13px; line-height: 1.55; color: var(--text-dim); }
+    .gate-ptr a { color: var(--info); }
     /* Net-amount preview under the withdraw amount field. Info-toned rather than warning-toned:
        the fee is normal, disclosed pricing, not an error state. */
     .net-preview {
@@ -147,8 +157,6 @@
     .net-preview b { color: var(--text); font-weight: 700; }
     .net-preview.is-short b { color: var(--danger, #f85149); }
 
-    /* single withdraw column (there is no per-account threshold) */
-    .withdraw-col { max-width: 560px; }
     /* h4 = one destination card inside the "Payout destinations" h3. Needs an explicit rule:
        an unstyled h4 renders bolder and LARGER than the 11px dim-mono h3 above it, which
        reads as the outer heading being the subordinate one. */
@@ -296,6 +304,20 @@
     .fx-table td.grin { color: var(--accent); }
     .fx-table td + td { padding-left: 12px; }
 
+    /* ── account details: two-column key/value list | earnings ───────────── */
+    .acct-details { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 0 36px; align-items: start; }
+    .acct-dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; }
+    /* Every cell keeps its rule: in two columns the last item is not the last row. */
+    .acct-dl li:last-child { border-bottom: 1px solid var(--border-soft); }
+    .acct-dl .v { text-align: right; min-width: 0; overflow-wrap: anywhere; }
+    #acct-donate-row { grid-column: 1 / -1; }
+    .acct-details .fx-head { margin-top: 0; padding-top: 0; border-top: 0; }
+    @media (max-width: 1100px) {
+      .acct-details { grid-template-columns: minmax(0, 1fr); }
+      .acct-details .fx-head { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border-soft); }
+    }
+    @media (max-width: 600px) { .acct-dl { grid-template-columns: minmax(0, 1fr); } }
+
     /* ── ledger pager + export row ───────────────────────────────────────── */
     .pager-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
     .pager-row .pg-label { font-size: 13px; color: var(--text-dim); }
@@ -333,18 +355,31 @@
     }
 
     /* ── P-09 donor profile (design §18.8) ─────────────────────────────────
-       Two columns (name | banner) under one two-proof gate. Every block that starts hidden
-       does so with an inline style="display:none", never through these classes, so a
+       Three columns (name | banner | link) and one Save under them; the proof is P-00's.
+       Every block that starts hidden does so with an inline style="display:none", never through these classes, so a
        style.display = '' reveal always works (memory: project_pool_frontend_uiux_audit). */
-    .dp-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 26px; }
+    .dp-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 26px; }
+    /* Two columns while three would squeeze the banner's 4:1 box; the link column then takes the
+       full row beneath. */
+    @media (max-width: 1100px) { .dp-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .dp-col-link { grid-column: 1 / -1; } }
     @media (max-width: 900px) { .dp-grid { grid-template-columns: minmax(0, 1fr); } }
+    .dp-livelink { margin: 0 0 12px; font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
+    .dp-linktag {
+      display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 10.5px;
+      letter-spacing: .06em; color: var(--text-dim);
+      border: 1px solid var(--border, rgba(255,255,255,.12));
+    }
+    .dp-col input[type="text"] { max-width: 100%; }
     .dp-col h3 {
       font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .16em;
       text-transform: uppercase; color: var(--text-dim); margin: 0 0 12px;
       padding-bottom: 7px; border-bottom: 1px solid var(--border-soft);
     }
-    .dp-proofs { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 14px; }
-    @media (max-width: 640px) { .dp-proofs { grid-template-columns: minmax(0, 1fr); } }
+    .dp-save {
+      display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
+      margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--border-soft);
+    }
+    .dp-save-note { font-size: 12.5px; color: var(--text-dim); }
     .dp-lines { display: flex; flex-direction: column; gap: 6px; margin: 0 0 12px; }
     .dp-line {
       font-size: 13px; line-height: 1.5; padding: 7px 11px; border-radius: 6px; overflow-wrap: anywhere;
@@ -409,6 +444,63 @@
                         <button class="btn-save" id="acct-lookup">View Account</button>
                     </div>
                     <div class="acct-msg" id="acct-msg"></div>
+                    <!-- The page's ONE ownership proof. Shown once an address is loaded; every gated
+                         action reads it through getProof(): the P-04 payouts, P-08's proof reveal and the
+                         P-09 donor profile. The Goblin destination register is the exception and keeps its
+                         own two boxes in P-04 (it can re-point money, so it needs BOTH proofs). -->
+                    <div id="acct-gate" style="display:none">
+                        <div class="gate-block">
+                            <div class="gate-title">🔐 Ownership proof — payouts &amp; donor profile</div>
+                            <div class="form-group" style="margin-bottom:0">
+                                <!-- WHY THIS GATE EXISTS — it can't be used to steal coins. A Tor payout goes
+                                     only to this address's own wallet and a slatepack is encrypted to this
+                                     address, so there is nowhere else for the money to go. What the gate stops
+                                     is a stranger reading the public leaderboard and triggering payouts the
+                                     owner never asked for — each burns a pool-paid network fee and force-moves
+                                     coins the owner meant to leave alone. Same reason a proof on record that the
+                                     owner did not add is harmless to their coins: anyone can point a miner at any
+                                     address, a stranger's value sits BESIDE the owner's (it never replaces one),
+                                     and it can still only pay this address.
+                                     There is deliberately no visible "Why does my rig password matter?" fold (it
+                                     repeated the homepage setup guide), so this reasoning lives only in this
+                                     comment and in the withdraw route's comment in back-end-pool/routes/. -->
+                                <label for="acct-ip-proof">A recent mining IP <b>or</b> your rig's stratum password
+                                    <span style="color:var(--text-mute);font-weight:400">(8&ndash;128 characters)</span></label>
+                                <!-- maxlength matches owner-proof PASS_MAX (128) — stop an over-long
+                                     password at the keyboard rather than at the failed withdrawal. -->
+                                <!-- type=password by default (audit §J15-4). This one box gates EVERY money
+                                     action on the page — both withdraw rails, slatepack finalize, the kernel
+                                     proof reveal and the CSV exports — plus the donor profile, and one of the two
+                                     things it accepts is the rig's stratum password. It shipped as type="text"
+                                     while #acct-nostr-pass-proof (P-04), the SAME secret, was already
+                                     type="password". The Show toggle exists because the other accepted value
+                                     is an IP address, which is unusable masked. -->
+                                <span class="proof-wrap">
+                                <input type="password" id="acct-ip-proof" maxlength="128" placeholder="e.g. 203.0.113.42, 2001:db8::1, or your rig password" autocomplete="off" spellcheck="false">
+                                <button type="button" class="proof-reveal" id="acct-proof-reveal" aria-label="Show or hide the proof you typed" aria-pressed="false">Show</button>
+                                </span>
+                                <small id="acct-ip-hint" style="color:var(--text-dim);"></small>
+                                <!-- Password-proof diagnostics (renderPasswordProof). Hidden until the
+                                     account endpoint reports something worth saying. -->
+                                <div id="acct-pass-diag" class="pass-diag" style="display:none"></div>
+                                <small style="color:var(--text-mute);">Accepted: any IP your rigs have recently submitted shares from
+                                    (check yours at <a href="https://tools.grin.money/tools/my-ip/" target="_blank" rel="noopener noreferrer">tools.grin.money/tools/my-ip</a>),
+                                    or any password your rigs send in their pool config &mdash; the pool keeps up to 10 of each.</small>
+                                <!-- No "Why does my rig password matter?" fold here (it repeated the homepage
+                                     setup guide). Where each of its facts lives:
+                                     · can't steal / what the gate stops / a stranger's proof → the comment above
+                                       the label (reasoning only — no miner-visible home when Goblin is off)
+                                     · 10 IPs + 10 passwords kept → the "Accepted:" hint above + homepage step 3
+                                     · a password survives an IP change; any rig may use its own → homepage step 3
+                                     · defaults / repeated / straight runs / <8 / non-Latin refused → homepage step 3,
+                                       the (8–128) label, and PROOF_REASONS on a failed submit
+                                     · a returning IP only refreshes; the least recently used of 10 drops off, so a
+                                       password rotation never locks anyone out → design §17 (not on any page)
+                                     · how to set one (8+ digit PIN in the pool password field) → homepage step 3 -->
+                                <small><a href="/#rx-miner-guide">Password rules → Miner setup</a></small>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -497,63 +589,15 @@
                     </div>
                 </div>
 
-                <div class="deck-row acct-main">
-                    <!-- ═══ P-04 · PAYOUT CONTROLS (one ownership gate) ═══ -->
+                <!-- P-04 and P-05 each own a full-width row: side by side, the long payout form
+                     left the short details card trailing a tall empty gap. -->
+                <div class="deck-row">
+                    <!-- ═══ P-04 · PAYOUT CONTROLS (the ownership proof it reads sits in P-00) ═══ -->
                     <div class="panel"><span class="screws"></span>
                         <h2 class="panel-title"><span class="tag">P-04</span> Payout controls <span class="right"><span class="pstat" id="acct-payout-status" style="display:none"></span></span></h2>
                         <div class="panel-body">
 
-                            <div class="gate-block">
-                                <div class="gate-title">🔐 Ownership gate — required for every payout action</div>
-                                <div class="form-group" style="margin-bottom:0">
-                                    <!-- WHY THIS GATE EXISTS — it can't be used to steal coins. A Tor payout goes
-                                         only to this address's own wallet and a slatepack is encrypted to this
-                                         address, so there is nowhere else for the money to go. What the gate stops
-                                         is a stranger reading the public leaderboard and triggering payouts the
-                                         owner never asked for — each burns a pool-paid network fee and force-moves
-                                         coins the owner meant to leave alone. Same reason a proof on record that the
-                                         owner did not add is harmless to their coins: anyone can point a miner at any
-                                         address, a stranger's value sits BESIDE the owner's (it never replaces one),
-                                         and it can still only pay this address.
-                                         There is deliberately no visible "Why does my rig password matter?" fold (it
-                                         repeated the homepage setup guide), so this reasoning lives only in this
-                                         comment and in the withdraw route's comment in back-end-pool/routes/. -->
-                                    <label for="acct-ip-proof">A recent mining IP <b>or</b> your rig's stratum password
-                                        <span style="color:var(--text-mute);font-weight:400">(8&ndash;128 characters)</span></label>
-                                    <!-- maxlength matches owner-proof PASS_MAX (128) — stop an over-long
-                                         password at the keyboard rather than at the failed withdrawal. -->
-                                    <!-- type=password by default (audit §J15-4). This one box gates EVERY money
-                                         action on the page — both withdraw rails, slatepack finalize, the kernel
-                                         proof reveal and the CSV exports — and one of the two things it accepts is
-                                         the rig's stratum password. It shipped as type="text" while
-                                         #acct-nostr-pass-proof, the SAME secret fifty lines below, was already
-                                         type="password". The Show toggle exists because the other accepted value
-                                         is an IP address, which is unusable masked. -->
-                                    <span class="proof-wrap">
-                                    <input type="password" id="acct-ip-proof" maxlength="128" placeholder="e.g. 203.0.113.42, 2001:db8::1, or your rig password" autocomplete="off" spellcheck="false">
-                                    <button type="button" class="proof-reveal" id="acct-proof-reveal" aria-label="Show or hide the proof you typed" aria-pressed="false">Show</button>
-                                    </span>
-                                    <small id="acct-ip-hint" style="color:var(--text-dim);"></small>
-                                    <!-- Password-proof diagnostics (renderPasswordProof). Hidden until the
-                                         account endpoint reports something worth saying. -->
-                                    <div id="acct-pass-diag" class="pass-diag" style="display:none"></div>
-                                    <small style="color:var(--text-mute);">Accepted: any IP your rigs have recently submitted shares from
-                                        (check yours at <a href="https://tools.grin.money/tools/my-ip/" target="_blank" rel="noopener noreferrer">tools.grin.money/tools/my-ip</a>),
-                                        or any password your rigs send in their pool config &mdash; the pool keeps up to 10 of each.</small>
-                                    <!-- No "Why does my rig password matter?" fold here (it repeated the homepage
-                                         setup guide). Where each of its facts lives:
-                                         · can't steal / what the gate stops / a stranger's proof → the comment above
-                                           the label (reasoning only — no miner-visible home when Goblin is off)
-                                         · 10 IPs + 10 passwords kept → the "Accepted:" hint above + homepage step 3
-                                         · a password survives an IP change; any rig may use its own → homepage step 3
-                                         · defaults / repeated / straight runs / <8 / non-Latin refused → homepage step 3,
-                                           the (8–128) label, and PROOF_REASONS on a failed submit
-                                         · a returning IP only refreshes; the least recently used of 10 drops off, so a
-                                           password rotation never locks anyone out → design §17 (not on any page)
-                                         · how to set one (8+ digit PIN in the pool password field) → homepage step 3 -->
-                                    <small><a href="/#rx-miner-guide">Password rules → Miner setup</a></small>
-                                </div>
-                            </div>
+                            <p class="gate-ptr">🔐 Every payout action below uses your <a href="#acct-gate">ownership proof at the top of the page ↑</a></p>
 
                             <div class="withdraw-col">
                                 <!-- h3, not h4: this is the first level under P-04's h2, and
@@ -565,6 +609,10 @@
                                     mining and want to withdraw what you have, contact the pool operator to arrange a manual payout.
                                     <a data-brand="contact-link" style="display:none">Contact support</a>
                                 </div>
+                                <!-- Two columns on a wide screen (how much | how it is paid), stacked in
+                                     that same order on a narrow one. -->
+                                <div class="withdraw-grid">
+                                <div class="wd-amount">
                                 <div class="form-group">
                                     <label for="acct-amount">Amount (GRIN) &middot;
                                         <a class="amt-chip" id="acct-amt-min" title="Fill the pool minimum">min <span id="acct-pool-min">—</span> ツ</a> &middot;
@@ -587,6 +635,26 @@
                                         &middot; you receive <b><span id="acct-net-val">—</span> ツ</b>
                                     </p>
                                 </div>
+
+                                <div class="pending-strip" id="acct-pending-strip">
+                                    <span id="acct-pending-text"></span>
+                                </div>
+
+                                <!-- Closing note is two sentences. What it leaves out:
+                                     · the fee economics → the title on the "Withdrawal fee" label (the live
+                                       fee → you-receive preview under the amount field stays VISIBLE; it is a
+                                       number, and hiding what a payout costs is the one cut not to make).
+                                     · "while one is in flight it shows above" → the pending strip says so itself.
+                                     · no manual cancel, because a payout that looks failed can still land
+                                       (memory project_pool_account_page).
+                                     · after a payout is returned, a short cooldown applies before the next
+                                       request on ANY rail — the server says so when it refuses one. -->
+                                <p class="note wd-note">
+                                    One payout at a time. One that can't be delivered returns to your balance automatically.
+                                </p>
+                                </div>
+
+                                <div class="wd-method">
                                 <!-- Radio ⇄ pane visibility is driven by the rail registry (js/payout-methods.js),
                                      not by hardcoded ids in this page. Each rail owns one label + one pane. -->
                                 <div class="radio-row" role="radiogroup" aria-label="Payout method">
@@ -688,25 +756,9 @@
                                     <button class="btn-save" id="acct-nostr-send" disabled>Send to my Goblin wallet</button>
                                     <div class="acct-msg" id="acct-nostr-send-msg"></div>
                                 </div>
+                                </div>
+                                </div>
                             </div>
-
-                            <div class="pending-strip" id="acct-pending-strip">
-                                <span id="acct-pending-text"></span>
-                            </div>
-
-                            <!-- Closing note is two sentences. What it leaves out:
-                                 · the fee economics → the title on the "Withdrawal fee" label (the live
-                                   fee → you-receive preview under the amount field stays VISIBLE; it is a
-                                   number, and hiding what a payout costs is the one cut not to make). The
-                                   #acct-fee-note span that carried it is gone with its JS.
-                                 · "while one is in flight it shows above" → the pending strip says so itself.
-                                 · no manual cancel, because a payout that looks failed can still land
-                                   (memory project_pool_account_page).
-                                 · after a payout is returned, a short cooldown applies before the next
-                                   request on ANY rail — the server says so when it refuses one. -->
-                            <p class="note" style="margin:16px 0 0;font-size:12.5px;color:var(--text-mute);">
-                                One payout at a time. One that can't be delivered returns to your balance automatically.
-                            </p>
 
                             <!-- ═══ PAYOUT DESTINATIONS ═══════════════════════════════════════════
                                  Only rails that pay somewhere OTHER than this address's own wallet appear
@@ -738,7 +790,8 @@
                                         <b>This one action needs both proofs.</b> Tor and Slatepack can only ever pay
                                         your own mining address, so proving ownership there moves nothing. A Goblin
                                         username is a different address — so changing it asks for your mining IP
-                                        <em>and</em> your rig password, not either one.
+                                        <em>and</em> your rig password, not either one. The ownership proof at the top
+                                        of the page does not cover this: fill in both boxes below.
                                     </p>
                                     <div class="form-group">
                                         <label for="acct-nostr-username">Goblin username (<code>name@goblin.st</code> or an <code>npub…</code>)</label>
@@ -770,21 +823,26 @@
                             </div>
                         </div>
                     </div>
+                </div>
 
+                <div class="deck-row">
                     <!-- ═══ P-05 · ACCOUNT DETAILS + EARNINGS ═══ -->
                     <div class="panel"><span class="screws"></span>
                         <h2 class="panel-title"><span class="tag">P-05</span> Account details</h2>
-                        <div class="panel-body">
-                            <ul class="detail-list">
+                        <div class="panel-body acct-details">
+                            <!-- Wide: details (two columns, read in pairs) | earnings. Each pair answers
+                                 one question: alive? · how long? · shares · results · payout. Narrow: one
+                                 column, same order. -->
+                            <ul class="detail-list acct-dl">
                                 <li><span class="k">Status</span><span class="v" id="acct-status">—</span></li>
+                                <li><span class="k">Last seen</span><span class="v" id="acct-last-seen">—</span></li>
                                 <li><span class="k">First seen</span><span class="v" id="acct-since">—</span></li>
                                 <li><span class="k">Member for</span><span class="v" id="acct-age">—</span></li>
-                                <li><span class="k">Last seen</span><span class="v" id="acct-last-seen">—</span></li>
                                 <li><span class="k">Total shares submitted</span><span class="v" id="acct-shares">—</span></li>
-                                <li><span class="k">Blocks found</span><span class="v" id="acct-blocks">—</span></li>
                                 <li><span class="k">Last share</span><span class="v" id="acct-last-share">—</span></li>
-                                <li><span class="k">Pending withdrawal</span><span class="v" id="acct-pending">—</span></li>
+                                <li><span class="k">Blocks found</span><span class="v" id="acct-blocks">—</span></li>
                                 <li><span class="k">Payouts made</span><span class="v" id="acct-paid-count">—</span></li>
+                                <li><span class="k">Pending withdrawal</span><span class="v" id="acct-pending">—</span></li>
                                 <li><span class="k">Minimum payout (pool)</span><span class="v" id="acct-min">—</span></li>
                                 <!-- Donation row (design §18.8, renderDonationRow). A `donateN`
                                      tag in a rig's worker name donates N % of what THAT rig's
@@ -800,6 +858,7 @@
                                      under the amount field already discloses it where it matters. -->
                             </ul>
 
+                            <div class="fx-col">
                             <div class="fx-head">Earnings <span class="src" id="fx-src">est. &middot; spot price</span></div>
                             <table class="fx-table" aria-label="Earnings converted to BTC and USD">
                                 <thead><tr><th>Period</th><th>GRIN</th><th>BTC</th><th>USD</th></tr></thead>
@@ -810,6 +869,7 @@
                                     <tr><td>Last 30 days</td><td class="grin">—</td><td>—</td><td>—</td></tr>
                                 </tbody>
                             </table>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -917,39 +977,20 @@
                      summary, which never carries the pending name or image (anyone holding the
                      address can open this page) — a pending item is shown from THIS tab's own
                      submit response only (dpMine), and after a reload by its submit time alone.
-                     Hidden while donations are off, unless there is something here to withdraw
-                     or remove: removing your own data is always allowed (script07_implementation.md §18.11). -->
+                     Hidden while donations are off, unless there is a submission to delete
+                     or something live to remove: removing your own data is always allowed (script07_implementation.md §18.11). -->
                 <div class="deck-row" id="acct-donor" style="display:none">
                     <div class="panel"><span class="screws"></span>
-                        <h2 class="panel-title"><span class="tag">P-09</span> Donor profile <span class="right">names checked at once · banners reviewed</span></h2>
+                        <h2 class="panel-title"><span class="tag">P-09</span> Donor profile <span class="right">names checked at once · banners &amp; links reviewed</span></h2>
                         <div class="panel-body">
                             <div id="dp-lead" class="dp-lines"></div>
                             <div id="dp-body" style="display:none">
-                                <!-- The two proof inputs + help text are the Goblin destination
-                                     card's (P-04, acct-nostr-*), restated for this purpose: the
-                                     server gate is the same requireBothProofs, with donor wording. -->
-                                <div class="gate-block">
-                                    <div class="gate-title">🔐 Both proofs — required for every donor-profile change</div>
-                                    <p class="note" style="margin:0 0 12px;">
-                                        Your name and banner speak for this address on a public page, so changing them asks for
-                                        your mining IP <em>and</em> your rig password, not either one. Each must have been on
-                                        record for a while — that is what stops someone who briefly mined to your address from
-                                        putting words on the donor wall in your name.
-                                    </p>
-                                    <div class="dp-proofs">
-                                        <div class="form-group">
-                                            <label for="dp-ip-proof">Proof 1 — a recent mining IP</label>
-                                            <input type="text" id="dp-ip-proof" maxlength="64" placeholder="e.g. 203.0.113.42" autocomplete="off" spellcheck="false">
-                                        </div>
-                                        <div class="form-group">
-                                            <label for="dp-pass-proof">Proof 2 — your rig's stratum password</label>
-                                            <input type="password" id="dp-pass-proof" maxlength="128" placeholder="the password your miner logs in with" autocomplete="off">
-                                        </div>
-                                    </div>
-                                    <small style="color:var(--text-mute);">Check your IP at
-                                        <a href="https://tools.grin.money/tools/my-ip/" target="_blank" rel="noopener noreferrer">tools.grin.money/tools/my-ip</a>.
-                                        Both boxes are cleared after every change that goes through.</small>
-                                </div>
+                                <!-- No proof box of its own: every change here reads the P-00 ownership
+                                     proof (getProof). The server gate is requireAgedProof — one proof, but
+                                     aged past the same floor as a Goblin destination change. -->
+                                <p class="gate-ptr">🔐 Saving or removing anything here uses your <a href="#acct-gate">ownership proof at the top of the page ↑</a>.
+                                    It must have been on record for a while — that is what stops someone who briefly mined to your
+                                    address from putting words on the donor wall in your name.</p>
 
                                 <div class="dp-grid">
                                     <div class="dp-col">
@@ -964,9 +1005,8 @@
                                             </div>
                                         </div>
                                         <div class="dp-actions">
-                                            <button class="btn-save" id="dp-name-submit" style="display:none">Set this name</button>
-                                            <button type="button" class="btn-save btn-quiet" id="dp-name-withdraw" style="display:none">Withdraw request</button>
-                                            <button type="button" class="btn-save btn-quiet" id="dp-name-remove" style="display:none">Remove from wall</button>
+                                            <button type="button" class="btn-save btn-quiet" id="dp-name-withdraw" style="display:none">Delete submission</button>
+                                            <button type="button" class="btn-save btn-quiet" id="dp-name-remove" style="display:none">Remove from Contribute page</button>
                                         </div>
                                         <div class="acct-msg" id="dp-name-msg"></div>
                                     </div>
@@ -994,13 +1034,46 @@
                                             </div>
                                         </div>
                                         <div class="dp-actions">
-                                            <button class="btn-save" id="dp-banner-submit" style="display:none">Submit banner for review</button>
-                                            <button type="button" class="btn-save btn-quiet" id="dp-banner-withdraw" style="display:none">Withdraw request</button>
-                                            <button type="button" class="btn-save btn-quiet" id="dp-banner-remove" style="display:none">Remove from wall</button>
+                                            <button type="button" class="btn-save btn-quiet" id="dp-banner-withdraw" style="display:none">Delete submission</button>
+                                            <button type="button" class="btn-save btn-quiet" id="dp-banner-remove" style="display:none">Remove from Contribute page</button>
                                         </div>
                                         <div class="acct-msg" id="dp-banner-msg"></div>
                                     </div>
+
+                                    <div class="dp-col dp-col-link">
+                                        <h3>Link</h3>
+                                        <div class="dp-lines" id="dp-link-lines"></div>
+                                        <!-- The approved link. The anchor's href is set as a property by
+                                             renderDonor(), never through markup; the text is the host. -->
+                                        <p class="dp-livelink" id="dp-link-live" style="display:none">
+                                            <a id="dp-link-live-a"></a><span class="dp-linktag" id="dp-link-live-tag" style="display:none"></span>
+                                        </p>
+                                        <!-- This tab's own pending submission, shown as text only. -->
+                                        <p class="dp-livelink" id="dp-link-mine" style="display:none"></p>
+                                        <div id="dp-link-form" style="display:none">
+                                            <div class="form-group">
+                                                <label for="dp-link">One link for your card
+                                                    <span style="color:var(--text-mute);font-weight:400">(https://&hellip; &middot; a Tor .onion address &middot; nostr:npub1&hellip; &middot; up to 200 characters)</span></label>
+                                                <input type="text" id="dp-link" maxlength="220" placeholder="https://example.com" autocomplete="off" spellcheck="false">
+                                                <small class="dp-hint" id="dp-link-hint" aria-live="polite"></small>
+                                            </div>
+                                        </div>
+                                        <div class="dp-actions">
+                                            <button type="button" class="btn-save btn-quiet" id="dp-link-withdraw" style="display:none">Delete submission</button>
+                                            <button type="button" class="btn-save btn-quiet" id="dp-link-remove" style="display:none">Remove from Contribute page</button>
+                                        </div>
+                                        <div class="acct-msg" id="dp-link-msg"></div>
+                                    </div>
                                 </div>
+                                <!-- ONE save for the three fields (dpSave): it sends only the fields that
+                                     were filled in, each to its own route, and stops at the first refusal
+                                     that would refuse them all (the proof, the account). Each field's own
+                                     result lands in that column's message line. -->
+                                <div class="dp-save" id="dp-save-row" style="display:none">
+                                    <button class="btn-save" id="dp-save">Save donor profile</button>
+                                    <span class="dp-save-note">Saves only what you filled in. A name shows at once; a banner or link waits for review.</span>
+                                </div>
+                                <div class="acct-msg" id="dp-save-msg"></div>
                             </div>
                         </div>
                     </div>

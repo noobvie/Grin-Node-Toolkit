@@ -4,7 +4,17 @@ const express = require('express');
 const caches = require('../_shared/caches');
 
 module.exports = function createAdminSettingsRoutes(ctx, guards) {
-  const { poolSettings, retentionManager, authManager } = ctx;
+  const { poolSettings, retentionManager, authManager, config } = ctx;
+
+  // The pool fee takes effect on save, not on restart: the public pages, the stats feeds and
+  // the rate blocks.js stamps on each newly found block all read config.pool_fee_percent, so a
+  // restart-only fee would show miners one rate while the admin form shows another. Safe live
+  // because a block keeps the rate recorded when it was found (rewards.js).
+  const applyLiveFee = (section, data) => {
+    if (section !== 'pool_info' || !data) return;
+    const pct = Number(data.pool_fee_percent);
+    if (Number.isFinite(pct)) config.pool_fee_percent = pct;
+  };
   const { secureAdmin, freshAdmin, stepUpRefused, STEP_UP_MAX_AGE_S } = guards;
   const { invalidateBranding } = caches;
   const router = express.Router();
@@ -165,6 +175,7 @@ module.exports = function createAdminSettingsRoutes(ctx, guards) {
       // (There is no donor-name rescan here on a changed word list:
       // the list only flags queued names at read time.)
       const updated = poolSettings.updateSection(req.params.section, req.body, req.user.user_id);
+      applyLiveFee(req.params.section, updated);
       invalidateBranding();   // §J12-8: /api/public/branding is memoised; an edit must show at once
       res.json({ success: true, section: req.params.section, data: updated });
     } catch (err) {
@@ -176,6 +187,7 @@ module.exports = function createAdminSettingsRoutes(ctx, guards) {
   router.post('/api/admin/settings/:section/restore', freshAdmin, (req, res) => {
     try {
       const restored = poolSettings.resetSection(req.params.section, req.user.user_id);
+      applyLiveFee(req.params.section, restored);
       invalidateBranding();   // §J12-8
       res.json({ success: true, section: req.params.section, data: restored });
     } catch (err) {

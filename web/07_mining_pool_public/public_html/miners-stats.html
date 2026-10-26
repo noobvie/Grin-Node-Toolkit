@@ -81,7 +81,7 @@
       color: inherit;
     }
 
-    /* Shared timeframe toggle driving all three trend charts (Day/Week/Month/Year/All). */
+    /* Shared timeframe toggle driving every trend recorder on the page (Day/Week/Month/Year/All). */
     .rangebar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 2px; }
     .rangebar .rng-btn {
       font: inherit; font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
@@ -170,7 +170,7 @@
 
         <div class="deck">
 
-            <!-- ═══ Shared timeframe toggle for the three trend recorders ═══ -->
+            <!-- ═══ Shared timeframe toggle for every trend recorder below ═══ -->
             <div class="rangebar" id="ms-rangebar" role="tablist" aria-label="Chart timeframe">
                 <button class="rng-btn active" data-range="day"   role="tab">Day</button>
                 <button class="rng-btn"        data-range="week"  role="tab">Week</button>
@@ -179,6 +179,20 @@
                 <button class="rng-btn"        data-range="all"   role="tab">All Time</button>
                 <span class="rng-spacer"></span>
                 <span class="rng-note" id="ms-range-note">last 24h &middot; hourly</span>
+            </div>
+
+            <!-- ═══ P-00 · GRIN NETWORK (hashrate + difficulty) ═══
+                 One series on two LOCKED scales: per-block difficulty is network hashrate times a
+                 constant, so the right axis is the left one re-labelled, never a second measure.
+                 Pool hashrate stays on P-01 (it would be a flat line at the network's scale); the
+                 relationship is the share figure in the title, hidden until both series have data. -->
+            <div class="panel"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">P-00</span> Chart recorder — Grin network
+                    <span class="right"><span id="ms-net-latest">—</span><span id="ms-net-share" hidden></span></span></h2>
+                <div class="panel-body chart-wrap">
+                    <canvas id="ms-chart-network" aria-label="Grin network hashrate and difficulty over the selected timeframe" role="img"></canvas>
+                    <div class="chart-empty" id="ms-empty-network">NO NETWORK DATA YET</div>
+                </div>
             </div>
 
             <div class="deck-row half">

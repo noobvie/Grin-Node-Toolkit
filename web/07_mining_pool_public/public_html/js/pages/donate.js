@@ -103,10 +103,66 @@
                     '</div>';
             }
 
+            // The donor's reviewed link (§18.12), or null. The server re-validates on read; this is
+            // the second fence: https:// (or http:// to a v3 .onion) and nostr:npub1… /
+            // nprofile1… only, no whitespace, so nothing else can ever become an href. The visible
+            // text is derived from the URL itself (host, or the identifier shortened), not taken
+            // from the API's `host`.
+            var WEB_RE = /^https?:\/\/[a-z0-9._-]+(:[0-9]{1,5})?(\/[^\s]*)?$/;
+            var ONION_RE = /^https?:\/\/[a-z2-7]{56}\.onion(:[0-9]{1,5})?(\/[^\s]*)?$/;
+            var NOSTR_RE = /^nostr:(npub1|nprofile1)[a-z0-9]{20,400}$/;
+            function linkOf(d) {
+                var l = d && d.link;
+                if (!l || typeof l.url !== 'string' || l.url.length > 200) return null;
+                var u = l.url;
+                if (NOSTR_RE.test(u)) {
+                    var id = u.slice(6);
+                    return { url: u, kind: 'nostr', text: id.length > 13 ? id.slice(0, 9) + '…' + id.slice(-4) : id };
+                }
+                if (!WEB_RE.test(u)) return null;
+                var host;
+                try { host = new URL(u).host; } catch (e) { return null; }
+                if (ONION_RE.test(u)) return { url: u, kind: 'onion', text: host };
+                if (u.slice(0, 8) !== 'https://') return null;
+                return { url: u, kind: 'web', text: host };
+            }
+            // A link is built as DOM nodes, never as markup: the card HTML carries only an empty
+            // slot (its index into linkQueue), and fillLinks() puts the <a> in afterwards, with
+            // href set as a property.
+            var linkQueue = [];
+            function linkSlot(d) {
+                var l = linkOf(d);
+                if (!l) return '';
+                linkQueue.push(l);
+                return '<div class="donor-link" data-link="' + (linkQueue.length - 1) + '"></div>';
+            }
+            function fillLinks(root) {
+                var slots = root.querySelectorAll('[data-link]');
+                for (var i = 0; i < slots.length; i++) {
+                    var l = linkQueue[Number(slots[i].getAttribute('data-link'))];
+                    if (!l) continue;
+                    var a = document.createElement('a');
+                    a.className = 'donor-link-a';
+                    a.href = l.url;
+                    a.rel = 'nofollow ugc sponsored noopener noreferrer';
+                    // nostr: hands off to an app; a _blank tab would sit empty behind it.
+                    if (l.kind !== 'nostr') a.target = '_blank';
+                    a.textContent = l.text;
+                    slots[i].appendChild(a);
+                    if (l.kind !== 'web') {
+                        var tag = document.createElement('span');
+                        tag.className = 'donor-link-tag';
+                        tag.textContent = l.kind === 'onion' ? 'Tor' : 'Nostr';
+                        slots[i].appendChild(tag);
+                    }
+                }
+            }
+
             function leagueCard(d) {
                 return '<div class="donor-card">' +
                     '<div class="donor-rank">' + medal(d.rank) + '</div>' +
                     nameCell(d) +
+                    linkSlot(d) +
                     cardStats(d) +
                 '</div>';
             }
@@ -140,6 +196,7 @@
                     '<div class="spot-body">' +
                         '<div class="donor-rank">' + medal(d.rank) + '</div>' +
                         (b ? nameCell(d) : '') +
+                        linkSlot(d) +
                         cardStats(d) +
                     '</div>' +
                 '</div>';
@@ -199,6 +256,13 @@
                         ? 'A name and banner stop showing ' + exp + ' ' + plural(exp, 'month', 'months') + ' after your last donation, and come back when you donate again.'
                         : 'A name and banner stay up for as long as the pool keeps them up.');
                 }
+                // The name change limit: the operator's donor_name_change_days, 0–90, 0 = any time.
+                var chg = Number(ranking.name_change_days);
+                if (isFinite(chg) && chg >= 0) {
+                    chg = Math.floor(chg);
+                    set('dn-name-change', chg === 0 ? 'You can change it at any time.'
+                        : 'You can change it ' + (chg === 1 ? 'once a day.' : 'once every ' + chg + ' days.'));
+                }
 
                 var grid = document.getElementById('donor-grid');
                 var empty = document.getElementById('donor-empty');
@@ -223,15 +287,18 @@
                     // Ranks 1..N in the spotlight, N+1.. as today's compact cards. The API sends
                     // the league in rank order; a card only gets a banner if the API attached one.
                     var top = league.slice(0, slots), rest = league.slice(slots);
+                    linkQueue = [];
                     if (top.length) {
-                        document.getElementById('donor-spot').innerHTML =
-                            top.map(function (d, i) { return spotCard(d, i === 0); }).join('');
+                        var spot = document.getElementById('donor-spot');
+                        spot.innerHTML = top.map(function (d, i) { return spotCard(d, i === 0); }).join('');
+                        fillLinks(spot);
                         set('donor-spot-head', 'Top ' + slots);
                         spotWrap.style.display = '';
                     } else {
                         spotWrap.style.display = 'none';
                     }
                     grid.innerHTML = rest.map(leagueCard).join('');
+                    fillLinks(grid);
                     grid.style.display = rest.length ? '' : 'none';
                     empty.style.display = 'none';
                 }

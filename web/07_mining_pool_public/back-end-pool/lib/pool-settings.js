@@ -611,7 +611,10 @@ PASS      any-password-you-choose</code>
 <h2>9. Promotions and incentives</h2>
 <p>Any prize pool, bonus, jackpot, streak reward, or draw is optional, discretionary, and may be changed, suspended, or withdrawn at any time. Prizes are paid from the community prize pool, whose inflows and outflows are published on the <a href="/donate.html">Prize Pool</a> page; draws are seeded from a Grin block chosen in advance, before its hash exists, so the result cannot be picked after the fact. Prizes have no cash value beyond the GRIN credited, and are void where prohibited by local law.</p>
 
-<h2>10. Contact</h2>
+<h2>10. External links and user content</h2>
+<p>The Service may display links, names, banners and other content submitted by users, including donors, or pointing to websites we do not operate. That content belongs to whoever submitted it. We do not control, review in advance, or endorse it, and we are not responsible for the content, accuracy, security or privacy practices of any linked website or service, or for any loss or damage arising from visiting one. Following a link is at your own risk, and we may remove any link or user content at our discretion.</p>
+
+<h2>11. Contact</h2>
 <p>Questions about these Terms can be directed to the pool operator using the contact links in the website footer, or via the Grin forum (<a href="https://forum.grin.mw/u/hellogrin" target="_blank" rel="noopener">hellogrin on forum.grin.mw</a>).</p>`,
 
       privacy: `<p class="muted">Last updated: October 2026</p>
@@ -638,6 +641,7 @@ PASS      any-password-you-choose</code>
 
 <h2>Third parties</h2>
 <p>Payouts are delivered over the <strong>Tor network</strong> to your address; routing is handled by Tor, not by us. A Slatepack payout involves no third party at all. Analytics data is processed by the analytics provider under their own privacy policy. We do not sell or rent your data.</p>
+<p><strong>External links.</strong> Pages may carry links submitted by users, such as donors, or to other websites. Following one takes you off this pool: we do not control those sites, we are not responsible for their content or what they collect, and their own privacy policy applies, not this one.</p>
 <p>This pool may offer an optional <strong>Goblin</strong> payout. It is used only if you register a Goblin name or npub on your Account page: the name is looked up on its Nostr domain, and payouts you send that way — plus a security notice to your old key if you change or remove it — travel as encrypted Nostr messages through public relays. Those relays are third parties operating under their own terms; they can see that a message was sent to your Nostr key but not its contents. If you never register one, nothing about you is sent to any relay.</p>
 
 <h2>Incentives and the fortune board</h2>
@@ -747,6 +751,7 @@ PASS      any-password-you-choose</code>
       donor_name_expiry_months: 12,          // masked again this long after the last debit; 0 = never
       donor_banner_slots: 5,                 // design §18: top N league donors show their approved
                                              // banner; 0 = banners off (int 0-10)
+      donor_name_change_days: 7,             // one name change per N days; 0 = any time (int 0-90)
       // Join bonus — paid once per address, only after its first successful withdrawal
       join_bonus_enabled: 'false',
       join_bonus_amount: 0.1,                // GRIN
@@ -1392,6 +1397,7 @@ PASS      any-password-you-choose</code>
         },
         donor_name_expiry_months: intRange('donor_name_expiry_months', 0, 120),
         donor_banner_slots: intRange('donor_banner_slots', 0, 10),
+        donor_name_change_days: intRange('donor_name_change_days', 0, 90),
         join_bonus_amount: nonNeg('join_bonus_amount'),
         jackpot_amount: nonNeg('jackpot_amount'),
         streak_bonus_per_week_percent: percent('streak_bonus_per_week_percent'),

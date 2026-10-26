@@ -200,13 +200,32 @@
                 <span class="rng-note" id="ph-range-note">last 30 days &middot; daily</span>
             </div>
 
-            <!-- ═══ P-01 · CUMULATIVE GRIN PAID ═══ -->
+            <!-- ═══ P-01 · CREDITED vs SENT, per period ═══
+                 Both bars are MINER-side: credited = block rewards after the pool fee + giveaways −
+                 donations (what lands in withdrawable balances); sent = confirmed payouts net of the
+                 withdrawal fee. Not miners-stats P-03, whose "earnings" is the gross block reward
+                 with the fee still in it — that gap would read as money held. -->
             <div class="panel"><span class="screws"></span>
-                <h2 class="panel-title"><span class="tag">P-01</span> Ledger recorder — cumulative GRIN paid
-                    <span class="right">running total sent to miners over the window</span></h2>
-                <div class="panel-body chart-wrap">
-                    <canvas id="ph-chart-cumulative" aria-label="Cumulative GRIN paid to miners over the selected timeframe" role="img"></canvas>
-                    <div class="chart-empty" id="ph-empty-cumulative">NO PAYOUT DATA YET</div>
+                <h2 class="panel-title"><span class="tag">P-01</span> Ledger recorder — credited vs sent
+                    <span class="right">GRIN credited to miners vs paid out, per period</span></h2>
+                <div class="panel-body">
+                    <div class="chart-wrap">
+                        <canvas id="ph-chart-flow" aria-label="GRIN credited to miner balances against GRIN paid out to miners, per period over the selected timeframe" role="img"></canvas>
+                        <div class="chart-empty" id="ph-empty-flow">NO LEDGER ACTIVITY IN THIS WINDOW</div>
+                    </div>
+                    <details class="chart-explain">
+                    <summary>How to read this chart</summary>
+                    <p class="dim">
+                        <b>Credited</b> is what miners' balances received: block rewards after the pool fee,
+                        plus giveaways, minus any share miners chose to donate. <b>Sent</b> is what the pool
+                        actually paid out, after the flat withdrawal fee. The two rarely match in a single
+                        period, and that is normal: a reward is credited only once its block matures
+                        (about a day), and a balance is paid only when its miner withdraws, at or above
+                        the minimum. Credited running ahead of sent is GRIN still in miners' own balances,
+                        waiting to be withdrawn &mdash; or, after a long idle period, swept to the prize
+                        pool as described under abandoned balances.
+                    </p>
+                    </details>
                 </div>
             </div>
 

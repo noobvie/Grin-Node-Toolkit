@@ -186,7 +186,8 @@ console.log('\n[6] §J14-10 — token handling');
 console.log('\n[7] §J14-4 — the admin panel gets its own CSP');
 {
   const vhost = fs.readFileSync(
-    path.resolve(__dirname, '../../../../scripts/07_grin_mining_public_pool.sh'), 'utf8');
+    path.resolve(__dirname, '../../../../scripts/lib/07_lib_pool_nginx.sh'), 'utf8');
+  ok('vhost source is the real nginx lib (non-vacuity)', vhost.includes('pool_setup_nginx() {') && vhost.includes('HDREOF'));
 
   // /admin/ is static-served, so Express's header middleware never runs for an admin page:
   // whatever the vhost includes IS the admin CSP. It must not include $hdr_page, the public
@@ -244,7 +245,8 @@ console.log('\n[7] §J14-4 — the admin panel gets its own CSP');
   ok('control — location / still includes $hdr_page',
      /include \$hdr_page;/.test(rootLoc) && !/include \$hdr_admin;/.test(rootLoc));
   ok('cleanup removes the new snippet too (snippets/ is swept by nothing else)',
-     /"\$hdr_common" "\$hdr_page" "\$hdr_admin"/.test(vhost));
+     /"\$hdr_common" "\$hdr_page" "\$hdr_admin"/.test(fs.readFileSync(
+       path.resolve(__dirname, '../../../../scripts/lib/07_lib_pool_cleanup.sh'), 'utf8')));
 
   // The panel loads nothing third-party — the premise the tight CSP rests on. If someone
   // adds a CDN <script>/<link> to a page, this fails and the CSP must be revisited.
@@ -344,9 +346,11 @@ console.log('\n[9] §18.6 — donors.html');
   }
   ok('no input id in the form that is not an incentives key (or settings-skip)', stray.length === 0, stray.join(','));
   for (const k of ['allow_miner_donations', 'donation_address', 'donor_banner_slots',
-                   'donor_rank_window_days', 'donor_loyalty_percent_per_month', 'donor_loyalty_cap', 'donor_name_expiry_months']) {
+                   'donor_rank_window_days', 'donor_loyalty_percent_per_month', 'donor_loyalty_cap', 'donor_name_expiry_months',
+                   'donor_name_change_days']) {
     ok(`form carries ${k}`, present.has(k));
   }
+  ok('name change days carries the validator bounds (0–90)', /id="donor_name_change_days"[^>]*min="0" max="90"/.test(form));
   ok('the removed donor_censored_display is on no admin page', !panelFiles().some((f) => /donor_censored_display/.test(read(f))));
   ok('C4: the retired flag-word list is on no admin page (its words moved to Settings → Names)',
      !panelFiles().some((f) => /id="donor_name_blocklist"/.test(read(f))));
@@ -380,9 +384,9 @@ console.log('\n[9] §18.6 — donors.html');
   // Row actions pass their value via this.dataset (audit §J14), and every write uses the panel
   // helper for step-up-gated writes (adminFetch handles the freshAdmin challenge; a bare
   // Auth.fetch would show "re-authentication required" with no way to complete it).
-  ok('queue decisions pass the request id via this.dataset',
-     /data-id="\$\{id\}" data-action="approve-request"/.test(donors) && /data-id="\$\{id\}" data-action="reject-request"/.test(donors) &&
-     /case 'approve-request':\s+approveRequest\(el\.dataset\.id\)/.test(donors) && /case 'reject-request':\s+rejectRequest\(el\.dataset\.id\)/.test(donors));
+  ok('queue decisions pass the request id (and their section\'s message box) via this.dataset',
+     /data-id="\$\{id\}" data-msg="\$\{msg\}" data-action="approve-request"/.test(donors) && /data-id="\$\{id\}" data-msg="\$\{msg\}" data-action="reject-request"/.test(donors) &&
+     /case 'approve-request':\s+approveRequest\(el\.dataset\.id, el\.dataset\.msg\)/.test(donors) && /case 'reject-request':\s+rejectRequest\(el\.dataset\.id, el\.dataset\.msg\)/.test(donors));
   ok('remove / block / unblock pass the address (and kind) via this.dataset',
      /data-kind="name" data-action="remove-live"/.test(donors) && /case 'remove-live':\s+removeLive\(el\.dataset\.addr, el\.dataset\.kind\)/.test(donors) &&
      /case 'block-donor':\s+blockDonor\(el\.dataset\.addr\)/.test(donors) && /case 'unblock-donor':\s+unblockDonor\(el\.dataset\.addr\)/.test(donors));

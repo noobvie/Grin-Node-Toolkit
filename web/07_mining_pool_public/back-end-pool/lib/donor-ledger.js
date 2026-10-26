@@ -210,7 +210,8 @@ const NO_LIVE = Object.freeze({ rigs_online: 0, rigs_donating: 0, pct_min: 0, pc
 //            tagged rig mining NOW — rigs_donating > 0 — gated on `active` like the badges,
 //            and counting a tagged address that has no card yet), total_donated (lifetime Σ)
 //   ranking  the four settings the page turns into its one ranking sentence, plus
-//            banner_slots — N of the page's Top-N spotlight (0 = no spotlight, no banners)
+//            banner_slots — N of the page's Top-N spotlight (0 = no spotlight, no banners) —
+//            and name_change_days, the donor name change limit (0 = any time)
 //
 // opts:
 //   ds          donorSettings() — bounded (window ≥ 0, loyalty 0–100, cap ≥ 1, expiry ≥ 0,
@@ -240,6 +241,10 @@ const NO_LIVE = Object.freeze({ rigs_online: 0, rigs_donating: 0, pct_min: 0, pc
 // URL is publicProfiles' publicUrl() (`/uploads/donors/<16 hex>.<png|jpg|gif>` or nothing),
 // and a row whose stored dims are not positive integers shows no banner rather than one the
 // page cannot reserve space for. The key is on every card so both arrays share one shape.
+//
+// Links (design §18.12): `link` is { url, host, kind: web|onion|nostr } on EVERY league card
+// whose address has an approved, unexpired link that re-validates (publicProfiles) — else null.
+// Past cards are always null, like the banner.
 //
 // Cost: the ONE composite ledger scan (via donorLedger) and one
 // IN-list read of approved donor_requests for the ≤ 120 cards shown; active_donors comes from
@@ -286,7 +291,7 @@ function donorWall(db, opts = {}) {
   const profiles = publicProfiles(db, shown.map((r) => r.address), { ds, now, lastDonatedAt: lastByAddr });
 
   const card = (r, rank) => {
-    const st = profiles.get(r.address) || { name: null, name_state: 'masked', banner: null };
+    const st = profiles.get(r.address) || { name: null, name_state: 'masked', banner: null, link: null };
     const lv = liveFor(r.address);
     const donating = active ? count(lv.rigs_donating) : 0;
     // The slot rule: a numbered league card (past cards have rank null) inside the top N.
@@ -294,11 +299,16 @@ function donorWall(db, opts = {}) {
     const inSlot = Number.isSafeInteger(rank) && rank >= 1 && rank <= slots;
     const banner = inSlot && b && typeof b.url === 'string' && dim(b.width) && dim(b.height)
       ? { url: b.url, width: b.width, height: b.height } : null;
+    // A link on EVERY league card (any rank), never on the past strip (§18.12).
+    const l = st.link;
+    const onLeague = Number.isSafeInteger(rank) && rank >= 1;
+    const link = onLeague && l && typeof l.url === 'string' ? { url: l.url, host: l.host, kind: l.kind } : null;
     return {
       rank,
       name: st.name,
       name_state: st.name_state,
       banner,
+      link,
       address: opts.mask(r.address),
       in_window_donated: r.in_window_donated,
       total_donated: r.total_donated,
@@ -324,7 +334,8 @@ function donorWall(db, opts = {}) {
       loyalty_percent_per_month: ds.loyaltyPercentPerMonth,
       loyalty_cap: ds.loyaltyCap,
       name_expiry_months: ds.nameExpiryMonths,
-      banner_slots: slots
+      banner_slots: slots,
+      name_change_days: ds.nameChangeDays
     }
   };
 }

@@ -786,6 +786,16 @@
   "handler": "anon"
  },
  {
+  "method": "post",
+  "path": "/api/admin/pages/:id/reset-default",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
   "method": "delete",
   "path": "/api/admin/pages/:id",
   "chain": [
@@ -1086,6 +1096,14 @@
  {
   "method": "post",
   "path": "/api/account/:addr/donor-profile/banner",
+  "chain": [
+   "rateLimiter.middleware('withdraw')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/account/:addr/donor-profile/link",
   "chain": [
    "rateLimiter.middleware('withdraw')"
   ],

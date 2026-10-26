@@ -1,11 +1,47 @@
 const { getDb } = require('./db');
 
+// A pool fee % as a number, or NaN when there is none. Not bare Number(): Number(null) and
+// Number('') are 0, which would record a missing rate as a 0% block (no fee, and published as
+// such). NaN is stored as NULL, which rewards.js treats as "not on record".
+const feeRate = (v) => (v === null || v === undefined || v === '' ? NaN : Number(v));
+
 class BlockManager {
+  // Newest block intervals one history response carries (_blockIntervals). One point per
+  // block, so the cap bounds both the payload and the chart's point count.
+  static INTERVAL_CAP = 500;
+  // How long the public history route may reuse a computed response (getBlocksHistoryCached).
+  static HISTORY_TTL_MS = 60 * 1000;
+
   constructor(config) {
     this.config = config;
     this.db = getDb();
     this.lastBlockHeight = 0;
     this.nodeApi = null; // optional GrinNodeAPI for capturing per-block network difficulty
+    this._historyCache = new Map(); // range → { at, value }
+    this._stampUnsettledFeeRate();
+  }
+
+  // A block still maturing with no recorded fee was found before fee_percent existed. Its real
+  // find-time rate is not on record: the boot rate differs from it after a fee change + restart
+  // during maturation (~1 day), or a fee saved in the admin panel that the previous process
+  // never applied. The boot rate is what a pool without fee_percent charges at maturity (the
+  // live rate, which only a restart moves), so stamping it keeps that charge, and stops a fee
+  // saved live after this boot from re-pricing the block.
+  // /api/pool/blocks publishes this stamped rate like any other. Settled and orphaned rows are
+  // left alone (db.js backfills settled ones from the ledger).
+  _stampUnsettledFeeRate() {
+    const pct = feeRate(this.config.pool_fee_percent);
+    if (!Number.isFinite(pct)) return;
+    try {
+      const r = this.db.prepare(`
+        UPDATE blocks SET fee_percent = ?
+        WHERE fee_percent IS NULL AND status IN ('immature', 'confirmed')
+      `).run(pct);
+      if (r.changes > 0) console.warn(`[BlockManager] recorded fee ${pct}% on ${r.changes} maturing block(s) found before the rate was recorded`);
+    } catch (err) {
+      // rewards.js still charges an unrecorded block the live rate, so this is not fatal.
+      console.error(`[BlockManager] fee_percent stamp for maturing blocks skipped: ${err.message}`);
+    }
   }
 
   // Wire a GrinNodeAPI so creditBlock can record the block's network difficulty. Optional —
@@ -85,7 +121,14 @@ class BlockManager {
 
   // `reward` is the flat emission (60). The value actually stored is that plus the block's
   // transaction fees when they can be read from the chain — see _fetchBlockFees.
-  async creditBlock(height, hash, nonce, reward, minerAddress) {
+  //
+  // `feePercent` is the pool fee the miners were mining under when this block was found;
+  // rewards.js splits the reward at it at maturity, so a fee change never re-prices a found
+  // block. stratum-server.js snapshots it when the submit ARRIVES, before the node round-trip;
+  // without one, the rate is read here, before the node fetches below — read after them, a fee
+  // saved during those up-to-10 s would be stamped on a block found under the old rate.
+  async creditBlock(height, hash, nonce, reward, minerAddress, feePercent = this.config.pool_fee_percent) {
+    const feePct = feeRate(feePercent);
     try {
       // Capture round/network stats BEFORE inserting (round = shares since the previous block).
       const prev = this.getLastBlock();
@@ -100,13 +143,15 @@ class BlockManager {
       const total = fees === null ? reward : reward + fees;
 
       const stmt = this.db.prepare(`
-        INSERT INTO blocks (height, hash, nonce, reward, fees, status, found_by, found_at, network_difficulty, round_shares)
-        VALUES (?, ?, ?, ?, ?, 'immature', ?, unixepoch(), ?, ?)
+        INSERT INTO blocks (height, hash, nonce, reward, fees, status, found_by, found_at, network_difficulty, round_shares, fee_percent)
+        VALUES (?, ?, ?, ?, ?, 'immature', ?, unixepoch(), ?, ?, ?)
       `);
 
       // String(nonce): the column is TEXT and a Grin nonce is a u64 that must never be
       // rounded through a JS number. See db.js's blocks DDL and audit §J5-1.
-      const result = stmt.run(height, hash, String(nonce), total, fees, minerAddress, networkDiff, roundShares);
+      const result = stmt.run(height, hash, String(nonce), total, fees, minerAddress, networkDiff, roundShares,
+        Number.isFinite(feePct) ? feePct : null);
+      this._historyCache.clear(); // a new block shows on blocks.html at once, not after the TTL
 
       console.log(
         `[${new Date().toISOString()}] Block credited: height=${height}, hash=${hash.substring(0, 16)}..., ` +
@@ -262,10 +307,10 @@ class BlockManager {
 
       // "Found" = any non-orphaned block. created_at is INTEGER unixepoch.
       const blocks24h = this.db.prepare(
-        "SELECT COUNT(*) as count FROM blocks WHERE status != 'orphaned' AND created_at > unixepoch() - 86400"
+        "SELECT COUNT(*) as count, COALESCE(SUM(reward), 0) as reward FROM blocks WHERE status != 'orphaned' AND created_at > unixepoch() - 86400"
       ).get();
       const blocks7d = this.db.prepare(
-        "SELECT COUNT(*) as count FROM blocks WHERE status != 'orphaned' AND created_at > unixepoch() - 7 * 86400"
+        "SELECT COUNT(*) as count, COALESCE(SUM(reward), 0) as reward FROM blocks WHERE status != 'orphaned' AND created_at > unixepoch() - 7 * 86400"
       ).get();
       // Orphans FOUND in the last 24h — the homepage Integrity lamp's window. Same predicate as
       // AlertMonitor.checkOrphanedBlocks, so the lamp and the operator alert agree. Never "the
@@ -283,6 +328,8 @@ class BlockManager {
         immature_reward: immatureReward.total,
         blocks_24h: blocks24h.count,
         blocks_7d: blocks7d.count,
+        reward_24h: blocks24h.reward,
+        reward_7d: blocks7d.reward,
         orphans_24h: orphans24h.count
       };
     } catch (err) {
@@ -296,6 +343,8 @@ class BlockManager {
         immature_reward: 0,
         blocks_24h: 0,
         blocks_7d: 0,
+        reward_24h: 0,
+        reward_7d: 0,
         // null, not 0: a failed read must not light the lamp green ("no orphans").
         orphans_24h: null
       };
@@ -304,13 +353,18 @@ class BlockManager {
 
   // Durable block-history series for the public blocks.html deck. Blocks are never pruned, so we
   // bucket straight from the blocks table (found_at) and stay accurate at every range. One call
-  // feeds every chart: time-bucketed counts/reward (bar + cumulative area), a per-block luck
-  // trend, window status totals (doughnut) and the UTC weekday×hour heatmap. Returns { range,
-  // bucket_seconds, points, luck, status, hours }. Synchronous (all sqlite .all/.get).
+  // feeds every chart: time-bucketed counts (found vs expected columns), a per-block luck
+  // trend, window status totals (doughnut), the time between consecutive blocks and the UTC
+  // weekday×hour heatmap. Returns { range, bucket_seconds, points, luck, status, intervals,
+  // intervals_truncated, hours }. Synchronous (all sqlite .all/.get).
   // UTC-aligned buckets, mirroring getMetricsHistory.
+  //
+  // ⚠ Not for the public route — use getBlocksHistoryCached. One call is several full scans of
+  // `blocks` (no found_at index) plus the rollup read back to the oldest predecessor's day, run
+  // synchronously in the process that accepts shares.
   getBlocksHistory(range = 'month') {
     const DAY = 86400;
-    const empty = { range, bucket_seconds: null, points: [], luck: [], status: { confirmed: 0, immature: 0, orphaned: 0 }, hours: null };
+    const empty = { range, bucket_seconds: null, points: [], luck: [], status: { confirmed: 0, immature: 0, orphaned: 0 }, intervals: [], intervals_truncated: false, hours: null };
     try {
       const now = Math.floor(Date.now() / 1000);
       let bucket, cutoff;
@@ -332,7 +386,7 @@ class BlockManager {
         cutoff = now - span;
       }
 
-      // Time-bucketed counts + reward (drives the blocks-per-period columns and cumulative area).
+      // Time-bucketed counts + reward (drives the blocks-per-period columns).
       const found = this.db.prepare(`
         SELECT CAST(found_at / ? AS INTEGER) * ?              AS t,
                COUNT(*)                                       AS blocks,
@@ -403,11 +457,31 @@ class BlockManager {
         else status.immature += r.n; // 'immature' (and any legacy/unknown) count as maturing
       });
 
-      return { range, bucket_seconds: bucket, points, luck, status, hours };
+      // Its own try: a failure here blanks P-04 only, not every chart the response feeds.
+      let iv;
+      try { iv = this._blockIntervals(cutoff); } catch (e) {
+        console.error(`Error computing block intervals: ${e.message}`);
+        iv = { intervals: [], truncated: false };
+      }
+      return { range, bucket_seconds: bucket, points, luck, status,
+               intervals: iv.intervals, intervals_truncated: iv.truncated, hours };
     } catch (err) {
       console.error(`Error fetching blocks history: ${err.message}`);
       return empty;
     }
+  }
+
+  // getBlocksHistory for the public route, reused for HISTORY_TTL_MS per range, so the work per
+  // minute is bounded by the four ranges, not by request traffic. creditBlock clears it; a
+  // status change made elsewhere (orphan-detector, rewards) or a new rollup hour shows within
+  // the TTL. An error response (`empty`, bucket_seconds null) is not kept.
+  getBlocksHistoryCached(range = 'month') {
+    const now = Date.now();
+    const hit = this._historyCache.get(range);
+    if (hit && now - hit.at < BlockManager.HISTORY_TTL_MS) return hit.value;
+    const value = this.getBlocksHistory(range);
+    if (value.bucket_seconds != null) this._historyCache.set(range, { at: now, value });
+    return value;
   }
 
   // Blocks the pool SHOULD have found, from its share of network hashrate, over the hourly
@@ -418,37 +492,25 @@ class BlockManager {
   // and every hour before the column existed). Network hashrate barely moves within a bucket,
   // so a missing hour borrows its BUCKET's mean sample; the pool's own GPS — the part that
   // actually varies — is always the real one. A bucket with no sample of its own reports null
-  // (drawn as a gap), never 0: a borrowed network figure from months away is a guess.
+  // (drawn as a gap), never a guess: a borrowed network figure from months away is one. The
+  // exception is a bucket where the pool had NO hashrate in any hour — that expects 0 blocks
+  // whatever the network did, so it reports 0 (see _hourlyExpected).
   // An hour with no rollup row at all contributes nothing — the pool was not running.
   _expectedBlocks(cutoff, bucket) {
     const out = { byBucket: new Map(), grid: null, hours: 0 };
-    const rows = this.db.prepare(`
-      SELECT bucket_start AS b, pool_hashrate_gps AS p, network_hashrate_gps AS n
-      FROM pool_metrics_hourly
-      WHERE bucket_start >= ?
-    `).all(cutoff);
+    const rows = this._hourlyExpected(cutoff, bucket);
     if (!rows.length) return out;
 
     const keyOf = b => Math.floor(b / bucket) * bucket;
-    const net = new Map(); // bucket → { sum, n }
-    for (const r of rows) {
-      const k = keyOf(r.b);
-      const s = net.get(k) || { sum: 0, n: 0 };
-      if (r.n > 0) { s.sum += r.n; s.n += 1; }
-      net.set(k, s);
-    }
-
     const sums = new Map();
     const grid = Array.from({ length: 7 }, () => new Array(24).fill(0));
     for (const r of rows) {
       const k = keyOf(r.b);
-      const s = net.get(k);
-      if (!s.n) { sums.set(k, null); continue; }
-      const n = r.n > 0 ? r.n : s.sum / s.n;
-      const e = r.p > 0 ? (r.p / n) * 60 : 0;
-      sums.set(k, (sums.get(k) || 0) + e);
+      if (r.e === null) { sums.set(k, null); continue; }
+      // One unknown hour makes the whole bucket unknown, in whatever order the hours arrive.
+      if (sums.get(k) !== null) sums.set(k, (sums.get(k) || 0) + r.e);
       const d = new Date(r.b * 1000);
-      grid[d.getUTCDay()][d.getUTCHours()] += e;
+      grid[d.getUTCDay()][d.getUTCHours()] += r.e;
       out.hours += 1;
     }
 
@@ -456,6 +518,103 @@ class BlockManager {
     sums.forEach((v, k) => out.byBucket.set(k, v == null ? null : round2(v)));
     if (out.hours > 0) out.grid = grid.map(row => row.map(round2));
     return out;
+  }
+
+  // The rollup hours from `from` on, oldest first, each with the blocks it should have found:
+  // [{ b, e }], e = pool GPS ÷ network GPS × 60. The borrowing rule is _expectedBlocks': a NULL
+  // network sample takes the mean of its `borrowBucket`, and e is null for an hour of a bucket
+  // that has no sample at all. An hour with zero pool hashrate is e = 0 BEFORE that check: it
+  // needs no network figure, and the catch-up rows written after an outage are exactly such
+  // hours with no sample. Treated as unknown they would drop out of P-04's expected gap, and
+  // the outage would read as bad luck.
+  _hourlyExpected(from, borrowBucket) {
+    const rows = this.db.prepare(`
+      SELECT bucket_start AS b, pool_hashrate_gps AS p, network_hashrate_gps AS n
+      FROM pool_metrics_hourly
+      WHERE bucket_start >= ?
+      ORDER BY bucket_start ASC
+    `).all(from);
+    const keyOf = b => Math.floor(b / borrowBucket) * borrowBucket;
+    const net = new Map(); // bucket → { sum, n }
+    for (const r of rows) {
+      const k = keyOf(r.b);
+      const s = net.get(k) || { sum: 0, n: 0 };
+      if (r.n > 0) { s.sum += r.n; s.n += 1; }
+      net.set(k, s);
+    }
+    return rows.map(r => {
+      if (!(r.p > 0)) return { b: r.b, e: 0 };
+      const s = net.get(keyOf(r.b));
+      if (!s.n) return { b: r.b, e: null };
+      const n = r.n > 0 ? r.n : s.sum / s.n;
+      return { b: r.b, e: (r.p / n) * 60 };
+    });
+  }
+
+  // Time between consecutive pool blocks (blocks.html P-04): one entry per block found in the
+  // window, oldest → newest, { height, t, gap, expected, orphaned }. gap = seconds since the
+  // pool's previous block, which may be from before the window. Every status counts, as in
+  // `points`: an orphan was still a block the pool found, and dropping it would merge two
+  // exponential gaps into one; `orphaned` lets the chart mark it instead. found_at is the
+  // CREDIT time (after up to ~10 s of node calls), so heights need not be monotone. The pool's
+  // very first block has no gap.
+  //
+  // expected = the MEAN gap the pool's hashrate share predicts over that same stretch — rollup
+  // seconds ÷ expected blocks, each hour weighted by how much of it the gap overlaps. Network
+  // samples are borrowed per UTC DAY whatever the chart bucket, so a block's expected value does
+  // not change with the timeframe toggle. It is null (a gap in the line, never 0) when under
+  // half the stretch is covered by the hourly rollup, the pool had no hashrate in it, or the
+  // gap is 0. The current hour is not rolled up yet, so the newest blocks can be null — that is
+  // honest, not a bug.
+  // Gaps are exponential: gap ÷ expected is the stretch's integrated hazard, Exp(1) for ANY
+  // hashrate path (time rescaling), so ~63% fall below and ~5% above 3× — which holds only
+  // because expected is taken over the stretch itself. Do not switch to the rate at the
+  // block's own hour: that over-reports the 3× tail up to 2× on a pool whose hashrate swings.
+  //
+  // Capped to the newest INTERVAL_CAP; `truncated` says the window held more.
+  _blockIntervals(cutoff) {
+    const H = 3600, DAY = 86400, CAP = BlockManager.INTERVAL_CAP;
+    const rows = this.db.prepare(`
+      SELECT height, found_at, status FROM blocks
+      WHERE found_at >= ?
+      ORDER BY found_at DESC, height DESC
+      LIMIT ?
+    `).all(cutoff, CAP + 1);
+    const truncated = rows.length > CAP;
+    rows.reverse(); // oldest → newest; when truncated, rows[0] is only the first block's predecessor
+    if (!truncated && rows.length) {
+      // The tie branch is defensive: untruncated, every block tied at rows[0].found_at is
+      // already in the window, so it cannot match today. It keeps the order a total one.
+      const prev = this.db.prepare(`
+        SELECT height, found_at, status FROM blocks
+        WHERE found_at < ? OR (found_at = ? AND height < ?)
+        ORDER BY found_at DESC, height DESC
+        LIMIT 1
+      `).get(rows[0].found_at, rows[0].found_at, rows[0].height);
+      if (prev) rows.unshift(prev);
+    }
+    if (rows.length < 2) return { intervals: [], truncated };
+
+    // Rollup hours from the hour of the earliest predecessor, borrowing per day.
+    const hours = this._hourlyExpected(Math.floor(rows[0].found_at / DAY) * DAY, DAY);
+    let j = 0; // hours are sorted and the stretches are consecutive, so one cursor walks both
+    const intervals = [];
+    for (let i = 1; i < rows.length; i++) {
+      const a = rows[i - 1].found_at, z = rows[i].found_at;
+      const gap = Math.max(0, z - a);
+      while (j < hours.length && hours[j].b + H <= a) j++;
+      let blocks = 0, known = 0;
+      for (let k = j; k < hours.length && hours[k].b < z; k++) {
+        if (hours[k].e === null) continue;
+        const overlap = Math.min(z, hours[k].b + H) - Math.max(a, hours[k].b);
+        if (overlap <= 0) continue;
+        blocks += hours[k].e * overlap / H;
+        known += overlap;
+      }
+      const expected = (gap > 0 && known >= gap / 2 && blocks > 0) ? Math.round(known / blocks) : null;
+      intervals.push({ height: rows[i].height, t: z, gap, expected, orphaned: rows[i].status === 'orphaned' });
+    }
+    return { intervals, truncated };
   }
 
   // Most recently found block (by height), or null. Synchronous.

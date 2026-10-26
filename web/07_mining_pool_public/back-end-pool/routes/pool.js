@@ -212,9 +212,11 @@ module.exports = function createPoolRoutes(ctx, app) {
       // nonce and `id`/`created_at` are internal row bookkeeping — none of the three is read by
       // blocks.html or the reactor fuel-rods, and publishing the nonce serves no verifier (the
       // block hash already anchors the find on any chain explorer). Everything the two consumers
-      // actually render is kept, including found_by and the luck pair.
+      // actually render is kept, including found_by and the luck pair. fee_percent is the pool
+      // fee the block's reward is split at (recorded when it was found; null = not on record),
+      // published so a miner can check a fee change never re-priced a block already found.
       let sql = `SELECT height, hash, reward, status, found_by, found_at, confirmed_at,
-                        network_difficulty, round_shares FROM blocks`;
+                        network_difficulty, round_shares, fee_percent FROM blocks`;
       const params = [];
       // `matured` = confirmed OR paid. rewards.js flips confirmed→paid the moment it credits
       // the round, so a bare `status=confirmed` filter drops nearly every settled block — the
@@ -239,15 +241,17 @@ module.exports = function createPoolRoutes(ctx, app) {
     }
   });
 
-  // Durable block-history series for the public blocks.html deck (one fetch → all four charts:
-  // luck trend, blocks-per-period columns, status doughnut, cumulative reward). Blocks are never
-  // pruned, so ?range can be arbitrarily long. See BlockManager.getBlocksHistory.
+  // Durable block-history series for the public blocks.html deck (one fetch → every chart:
+  // luck trend, found vs expected columns, status doughnut, time between blocks, UTC-hour
+  // heatmap). Blocks are never pruned, so ?range can be arbitrarily long. See
+  // BlockManager.getBlocksHistory — served through its 60 s per-range cache, because one
+  // computation is several full scans run in the stratum process.
   router.get('/api/pool/blocks/history', rateLimiter.middleware('public'), (req, res) => {
     try {
       const allowed = ['week', 'month', 'year', 'all'];
       const range = allowed.includes(req.query.range) ? req.query.range : 'month';
-      res.json(blockManager ? blockManager.getBlocksHistory(range)
-                            : { range, bucket_seconds: null, points: [], luck: [], status: { confirmed: 0, immature: 0, orphaned: 0 }, hours: null });
+      res.json(blockManager ? blockManager.getBlocksHistoryCached(range)
+                            : { range, bucket_seconds: null, points: [], luck: [], status: { confirmed: 0, immature: 0, orphaned: 0 }, intervals: [], intervals_truncated: false, hours: null });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

@@ -23,7 +23,7 @@
     /* Donor names: the name is set in the mono face, so a doubled space or an O-for-0 swap shows. */
     .name-cell { font-family: var(--font-mono); font-weight: 600; overflow-wrap: anywhere; }
     #ban-form input[type="text"] { font-size: .85rem; padding: .3rem .5rem; min-width: 12rem; }
-    /* settings.css's .form-row is a 2-column grid; the ranking card has three fields. */
+    /* settings.css's .form-row is a 2-column grid; the ranking and donor-profile rows have three fields. */
     .form-row.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
     @media (max-width: 900px) { .form-row.cols-3 { grid-template-columns: 1fr; } }
 
@@ -31,6 +31,15 @@
        mono face: a doubled space or an O-for-0 swap must be visible before it is approved. */
     .req-name { font-family: var(--font-mono); font-size: 1.05rem; font-weight: 600; overflow-wrap: anywhere; }
     .req-meta { font-size: .78rem; color: var(--text-dim); margin-top: .2rem; }
+    /* A link request: the stored URL in the mono face, wrapped with overflow-wrap (not break-all,
+       which splits mid-glyph) so the whole address stays readable inside the cell. */
+    .req-url { font-family: var(--font-mono); font-size: .85rem; margin-top: .35rem; overflow-wrap: anywhere; }
+    /* A 62-character .onion host has no break opportunity; without this it sets the column's minimum
+       width and the table scrolls sideways. */
+    .req-wrap { overflow-wrap: anywhere; }
+    /* .badge is nowrap; a badge whose text is a LIST (one address per donor sharing the host)
+       must wrap, or it sets the column's minimum width and the table scrolls sideways. */
+    .req-badge-wrap { white-space: normal; overflow-wrap: anywhere; }
     /* A banner is shown at its own aspect inside a bounded box (never stretched): width/height
        attributes come from the stored dimensions, so the row does not jump when the image lands. */
     .req-banner { display: block; max-width: min(100%, 420px); height: auto; border-radius: 4px;
@@ -100,6 +109,59 @@
       <p class="error-msg" id="queue-msg" style="display:none;margin-top:.6rem;"></p>
     </section>
 
+    <!-- Donor links — design §18.12: pre-moderated like a banner, one per donor. -->
+    <section id="links-section">
+      <h2>
+        Link review queue
+        <span id="link-queue-summary" style="font-size:.82rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
+      </h2>
+      <p class="helper-text" style="margin:0 0 .8rem;">
+        A donor can attach <strong>one link</strong> to their card on the donor wall. <strong>It is
+        not public until you approve it</strong>, and what you judge is the pair: the donor's current
+        live name beside the address it points to. The address is shown exactly as stored (already
+        normalised: lower-case host, no query or fragment) — copy it into a browser you trust to look
+        at where it goes; the panel never opens it for you. Accepted kinds are <code>https://</code>,
+        <code>http://</code> to a Tor v3 <code>.onion</code>, and <code>nostr:npub1…</code> /
+        <code>nprofile1…</code>. A host shown as <code>xn--…</code> is an international name in its
+        raw form — look twice. <em>same host as</em> only flags that another donor's live link points
+        at the same place; it is never a reason to refuse. Changing a donor name sends that donor's
+        live link back here, so it is judged again under the new name. <em>Remove</em> on a live link
+        takes it off the wall at once (the reason is shown to the donor). All dates are UTC.
+      </p>
+
+      <div class="toolbar">
+        <label for="link-queue-status">Show</label>
+        <select id="link-queue-status" class="settings-skip" data-action="load-link-queue-change">
+          <option value="pending">Waiting for review</option>
+          <option value="approved">Approved (live)</option>
+          <option value="rejected">Rejected</option>
+          <option value="removed">Removed</option>
+          <option value="withdrawn">Withdrawn by the donor or by a block</option>
+          <option value="replaced">Replaced</option>
+        </select>
+        <button type="button" class="btn btn-secondary" data-action="load-link-queue">Refresh</button>
+      </div>
+
+      <div class="card" style="padding:0;">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Submitted</th>
+                <th>Donor</th>
+                <th>Link</th>
+                <th>Decision</th>
+              </tr>
+            </thead>
+            <tbody id="link-queue-tbody">
+              <tr class="loading-row"><td colspan="4"><span class="spinner"></span>Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p class="error-msg" id="link-queue-msg" style="display:none;margin-top:.6rem;"></p>
+    </section>
+
     <!-- Donor names — script07_design_games.md §19.17.6: auto-checked, live at once, post-moderated. -->
     <section id="names-section">
       <h2>
@@ -113,9 +175,9 @@
         blocked-word list — the built-in list plus your own words on
         <a href="settings-names.html">Settings → Names</a>; not a banned name; not a name another donor
         already uses, in any spelling (<code>Acme &amp; Co.</code> = <code>ACME-co</code>). A donor can
-        change it once every 7 days. <em>Remove</em> takes a name off the wall (the reason is shown to
+        change it as often as the <em>Name change limit</em> in Donation settings below allows. <em>Remove</em> takes a name off the wall (the reason is shown to
         the donor). <em>Ban name</em> removes it from everyone who holds it and stops every spelling of
-        it from being set again. <em>Block</em> stops an address from setting a name or a banner. A
+        it from being set again. <em>Block</em> stops an address from setting a name, a banner or a link. A
         <strong>hint</strong> means the rule would refuse a live name today — for example because of a
         word you added after it went live; it stays live until you remove it.
       </p>
@@ -162,10 +224,10 @@
       </h2>
       <p class="helper-text" style="margin:0 0 .8rem;">
         Every address that has donated to the prize pool, has a rig mining with a live
-        <code>donateN</code> tag, or has a donor profile on file. <em>Remove</em> takes a live name or
-        banner off the wall (the reason you give is shown to the donor). <em>Block</em> stops an address
-        from setting a name or submitting a banner and withdraws a banner it has waiting; a live name
-        or banner stays until you remove it. Rank and score are what the public wall ranks by (GRIN in
+        <code>donateN</code> tag, or has a donor profile on file. <em>Remove</em> takes a live name,
+        banner or link off the wall (the reason you give is shown to the donor). <em>Block</em> stops an address
+        from setting a name or submitting a banner or link and withdraws the banner and link it has waiting; a live name,
+        banner or link stays until you remove it. Rank and score are what the public wall ranks by (GRIN in
         the window × loyalty).
       </p>
 
@@ -174,7 +236,7 @@
         <label for="donor-filter">Show</label>
         <select id="donor-filter" class="settings-skip" data-action="filter-donors-change">
           <option value="all">All</option>
-          <option value="profile">With a live name or banner</option>
+          <option value="profile">With a live name, banner or link</option>
           <option value="pending">With a request waiting</option>
           <option value="donating">Donating now</option>
           <option value="blocked">Blocked</option>
@@ -242,7 +304,7 @@
               — one list for donor names and game nicknames. (The old "flag words" list here was retired;
               the words you had added to it were moved there once.)
             </div>
-            <div class="form-row">
+            <div class="form-row cols-3">
               <div class="form-group">
                 <label for="donor_banner_slots">Banner slots</label>
                 <input type="number" id="donor_banner_slots" name="donor_banner_slots" min="0" max="10" step="1">
@@ -252,6 +314,11 @@
                 <label for="donor_name_expiry_months">Profile expiry (months)</label>
                 <input type="number" id="donor_name_expiry_months" name="donor_name_expiry_months" min="0" max="120" step="1">
                 <div class="helper-text">An approved name or banner stops showing this many months after the later of the last donation and its approval. 0 = never.</div>
+              </div>
+              <div class="form-group">
+                <label for="donor_name_change_days">Name change limit (days)</label>
+                <input type="number" id="donor_name_change_days" name="donor_name_change_days" min="0" max="90" step="1">
+                <div class="helper-text">A donor may change their name once every this many days, counted from their last change (an admin removal does not reset it). 0 = any time. Maximum 90.</div>
               </div>
             </div>
           </div>

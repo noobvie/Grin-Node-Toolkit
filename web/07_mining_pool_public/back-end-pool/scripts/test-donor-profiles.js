@@ -249,6 +249,26 @@ try {
     check('C4: after 7 days the change goes live and the previous name → replaced',
           s2.ok && s2.replaced_id === s1.id && byStatus(N1, 'name', 'approved')[0].name === 'Acme Two' && byStatus(N1, 'name', 'replaced').length === 1);
     check('C4: a case change of your own name is a change, never "taken"', DP.submitName(db, N1, 'ACME TWO', ND(NOW + 14 * DAY)).ok);
+    // The limit is the donor_name_change_days setting (ds.nameChangeDays): 0 = off, N = N days.
+    const dsDays = (d) => DN.donorSettings({ donor_name_change_days: d }, '');
+    const T14 = NOW + 14 * DAY;   // 'ACME TWO' went live here
+    check('setting: change days 0 → no limit (precheck, submit and the account view agree)',
+          DP.namePrecheck(db, N1, 'Acme Three', { now: T14 + 10, ds: dsDays(0) }) === null &&
+          DP.profileFor(db, N1, { active: true, lastDonatedAt: NOW, now: T14 + 10, ds: dsDays(0) }).name.change_available_at === null &&
+          DP.profileFor(db, N1, { active: true, lastDonatedAt: NOW, now: T14 + 10, ds: dsDays(0) }).name.change_days === 0);
+    check('setting: change days 1 → once a day, available_at = last change + 1 day',
+          (() => { const p = DP.namePrecheck(db, N1, 'Acme Three', { now: T14 + 10, ds: dsDays(1) });
+                   return p.code === 'name_cooldown' && p.available_at === T14 + DAY && /once a day\./.test(p.error); })());
+    check('setting: change days 30 → refused on day 8, the text says 30',
+          (() => { const p = DP.namePrecheck(db, N1, 'Acme Three', { now: T14 + 8 * DAY, ds: dsDays(30) });
+                   return p.code === 'name_cooldown' && p.available_at === T14 + 30 * DAY && /once every 30 days/.test(p.error); })());
+    // Refusals only: a successful change here would move N1's live name under the checks below.
+    check('setting: submitName honours ds too (the post-proof check), and writes nothing when refused',
+          DP.submitName(db, N1, 'Acme Three', Object.assign(ND(T14 + 10), { ds: dsDays(30) })).code === 'name_cooldown' &&
+          DP.submitName(db, N1, 'Acme Three', ND(T14 + 10)).code === 'name_cooldown' &&
+          byStatus(N1, 'name', 'approved')[0].name === 'ACME TWO');
+    check('setting: no ds → the 7-day default, and the view says 7',
+          DP.profileFor(db, N1, { active: true, lastDonatedAt: NOW, now: T14 + 20 }).name.change_days === 7);
     check('C4: the BANNER path is untouched — a banner still lands PENDING and reaches no public view', (() => {
       const r = DP.submitBanner(db, N1, png(800, 200), DONOR);
       const pending = byStatus(N1, 'banner', 'pending');
@@ -583,6 +603,15 @@ try {
     ps.updateSection('incentives', { donor_banner_slots: 5 });
     return back === 3;
   })());
+  check('settings: donor_name_change_days in defaults (7), validator 0..90',
+        PoolSettings.defaults.incentives.donor_name_change_days === 7 && V.donor_name_change_days('0') === 0 && V.donor_name_change_days(90) === 90 &&
+        [91, -1, 'abc', ''].every((x) => throws(() => V.donor_name_change_days(x))));
+  const rd = (v) => DN.donorSettings({ donor_name_change_days: v }, '').nameChangeDays;
+  check('settings: change days read bound — junk → 7, "0" → 0 (0 = no limit, not the default)',
+        ['', 'abc', 91, -1, null, undefined].every((v) => rd(v) === 7) && rd('0') === 0 && rd('30') === 30);
+  check('settings: DP.nameChangeDays re-bounds a raw ds (junk → 7)',
+        DP.nameChangeDays({ nameChangeDays: 'x' }) === 7 && DP.nameChangeDays({ nameChangeDays: 500 }) === 7 &&
+        DP.nameChangeDays({ nameChangeDays: 0 }) === 0 && DP.nameChangeDays(undefined) === 7);
 
   // ══ 7. leagueRank (donor-ledger.js) ════════════════════════════════════════════════════
   console.log('\n[7] leagueRank\n');
@@ -610,8 +639,8 @@ try {
   const rBan = route('post', '/api/account/:addr/donor-profile/banner');
   const rDel = route('delete', '/api/account/:addr/donor-profile/:kind');
   check('routes: all three exist, rate-limited as withdraw', [rName, rBan, rDel].every((r) => r && r.includes("rateLimiter.middleware('withdraw')")));
-  check("routes: all three pass the BOTH-proofs gate with the 'donor_profile' wording",
-        [rName, rBan, rDel].every((r) => r.includes('requireBothProofs(addr, req.body, reqIp, ') && r.includes(", 'donor_profile');")));
+  check('routes: all three pass the ONE-aged-proof gate (requireAgedProof), never the both-proofs gate',
+        [rName, rBan, rDel].every((r) => r.includes('requireAgedProof(addr, req.body, reqIp, ') && !r.includes('requireBothProofs(')));
   check('routes: the banner route refuses BEFORE multer reads the body',
         rBan.indexOf('donorSubmitRefusal(addr)') > 0 && rBan.indexOf('donorSubmitRefusal(addr)') < rBan.indexOf('donorBannerUpload.single('));
   check('routes: the banner route maps LIMIT_FILE_SIZE to banner_too_large', (() => {
@@ -622,13 +651,15 @@ try {
   check('routes: the upload is capped by multer at MAX_BANNER_BYTES + 1, one file',
         src.includes('limits: { fileSize: DonorProfiles.MAX_BANNER_BYTES + 1, files: 1,'));
   check('routes: the submits validate the input BEFORE spending a proof attempt',
-        rName.indexOf('validateName') > 0 && rName.indexOf('validateName') < rName.indexOf('requireBothProofs') &&
-        rBan.indexOf('validateBanner') > 0 && rBan.indexOf('validateBanner') < rBan.indexOf('requireBothProofs'));
+        rName.indexOf('validateName') > 0 && rName.indexOf('validateName') < rName.indexOf('requireAgedProof') &&
+        rBan.indexOf('validateBanner') > 0 && rBan.indexOf('validateBanner') < rBan.indexOf('requireAgedProof'));
   // C4 (§19.17.6 (script07_design_games.md)): the checks that read no word list run before the proofs; the lists, banned
   // and taken only after them, so a stranger holding the address cannot probe the operator's list.
   check('routes: C4 — namePrecheck BEFORE the proofs, submitName (with the rule context) AFTER',
-        rName.indexOf('DonorProfiles.namePrecheck(') > 0 && rName.indexOf('DonorProfiles.namePrecheck(') < rName.indexOf('requireBothProofs') &&
-        rName.indexOf('DonorProfiles.submitName(db, addr, v.name, { isDonor: true, rule: donorNameRule() })') > rName.indexOf('requireBothProofs'));
+        rName.indexOf('DonorProfiles.namePrecheck(') > 0 && rName.indexOf('DonorProfiles.namePrecheck(') < rName.indexOf('requireAgedProof') &&
+        rName.indexOf('DonorProfiles.submitName(db, addr, v.name, { isDonor: true, rule: donorNameRule(), ds })') > rName.indexOf('requireAgedProof'));
+  check('routes: the name route hands BOTH name checks the operator setting (ds), so pre- and post-proof agree',
+        rName.includes('DonorProfiles.namePrecheck(db, addr, v.name, { ds })') && /const ds = donorSettings\(/.test(rName));
   check('routes: C4 — the name route answers status approved, and never sends `hit` (which list matched)',
         rName.includes("status: 'approved'") && !/hit/.test(rName.replace(/\/\/[^\n]*/g, '').replace(/r\.hit|`hit`/g, '')));
   check('routes: C4 — the generic answers are 400 not_allowed / 409 unavailable, one text each',
@@ -643,10 +674,20 @@ try {
         acct.includes('donor_profile: donorProfile') && acct.includes('DonorProfiles.profileFor(') && !acct.includes('donor_requests'));
   check('the Goblin route still calls the gate with the default (destination) wording',
         src.includes("requireBothProofs(addr, req.body, reqIp, 'nostr_destination_register');"));
+  {
+    const aged = src.slice(src.indexOf('const requireAgedProof = async'), src.indexOf('const alertPreviousDestination'));
+    check('gate: requireAgedProof applies the SAME age floor and anchor rule as the destination gate',
+          aged.includes('const minAgeSec = proofMinAgeSec();') && aged.includes('proofLegFails(p, minAgeSec)') &&
+          aged.includes('verifyOwnerProof(db, addr, raw, reqIp)') && aged.includes("'donor_profile'"));
+    check('gate: requireBothProofs reads the same shared floor and leg rule',
+          src.slice(src.indexOf('const requireBothProofs = async'), src.indexOf('const requireAgedProof = async'))
+            .includes('const minAgeSec = proofMinAgeSec();') &&
+          /const proofLegFails = \(p, minAgeSec\) => \{\s*if \(p\.slot === 'anchor'\) return 'anchor_not_accepted_here';/.test(src));
+  }
   // A proof that VERIFIED as the other kind (an IP in the password box, or the reverse) is
   // refused as `wrong_kind`, never with the verifier's own success code `match` (which would
   // read `ok:false, reason:'match'` in the response and the owner-proof audit row).
-  const gate = src.slice(src.indexOf('const requireBothProofs = async'), src.indexOf('const alertPreviousDestination'));
+  const gate = src.slice(src.indexOf('const requireBothProofs = async'), src.indexOf('const requireAgedProof = async'));
   check("gate: a proof verified as the OTHER kind is refused as 'wrong_kind', never with the success code 'match'",
         gate.includes("deny('ip', ipProof.ok ? 'wrong_kind' : (ipProof.reason || 'ip_no_match'))") &&
         gate.includes("deny('password', passProof.ok ? 'wrong_kind' : (passProof.reason || 'password_no_match'))"));
@@ -875,8 +916,10 @@ try {
   check('page: dpCheckName sends the same normalised name the server stores',
     !!page && page.dpCheckName('  Acme \t  Mining ').name === DP.validateName('  Acme \t  Mining ').name);
   const reasons = grab(/const DP_REASONS = \{[\s\S]*?\n        \};/);
-  check("page: DP_REASONS maps the gate's 'wrong_kind' refusal, and no longer a 'match' key",
-    /\n\s+wrong_kind: '/.test(reasons) && !/\n\s+match: '/.test(reasons));
+  // The donor gate is one proof (requireAgedProof), so it never answers the two-box gate's
+  // wrong_kind / ip_no_match / password_no_match; a stale line for them would be dead text.
+  check("page: DP_REASONS maps no_match, no two-box-only code, and no 'match' key",
+    /\n\s+no_match: '/.test(reasons) && !/\n\s+(wrong_kind|ip_no_match|password_no_match|match): '/.test(reasons));
 }
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);

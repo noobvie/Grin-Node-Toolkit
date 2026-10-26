@@ -14,7 +14,7 @@
 //                 not on /api/pool/connect/suggest: the page still measures when that route has
 //                 no answer (no geo-IP), and it never measures without this object.
 //
-// ⚠ scripts/07_grin_mining_public_pool.sh applies the SAME two rules when it writes the CSP
+// ⚠ scripts/lib/07_lib_pool_nginx.sh applies the SAME two rules when it writes the CSP
 // and the /ping server blocks (_pool_latency_probe_domain / _pool_latency_hub_host). The page
 // must never be told to probe a host the CSP blocks, so change both or neither.
 //

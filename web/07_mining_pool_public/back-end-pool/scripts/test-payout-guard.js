@@ -1494,6 +1494,68 @@ async function oneAttemptSection() {
     noLadder(id, `B ${code}`);
   }
   {
+    // Observed live on mainnet #31–33, 2026-10-19: the send's OWN fresh Tor never got check_version answered, while
+    // the probe's long-running Tor still reached the onion. That is the miner's onion not being
+    // findable by a fresh client — not the pool's send path — so no pool alert, and the CLI's own
+    // error line is what the operator reads.
+    const SYNC = 'Client Callback Error: Performing version check (is recipient listening?): Request error: Cannot make request';
+    const NF = Object.assign({}, FALLBACK, { torStage: 'version_check', syncError: SYNC });
+    for (const [probe, code, label] of [
+      [{ online: true, reason: 'reachable' }, 'wallet_not_findable', 'probe ANSWERS'],
+      [OFFLINE, 'wallet_offline', 'probe says OFFLINE (unchanged: still counted)'],
+      [{ online: null, reason: 'tor_unavailable' }, 'wallet_unreachable', 'probe could not look (unchanged)'],
+    ]) {
+      const id = first();
+      db.exec("DELETE FROM alerts WHERE type = 'tor_send_path'");
+      const h = oa({ result: NF, probe, log: [tx({ slate: FB, confirmed: false })] });
+      await quiet(() => h.s.sendWithdrawal(id));
+      ok(`B. version-check fallback, ${label} → fail_code ${code}, balance back NOW`,
+        refundedOk(id) && rowOf(id).fail_code === code, JSON.stringify({ row: rowOf(id) }));
+      ok(`B. …(${code}) raises NO tor_send_path alert (the pool's send path is not the suspect)`, !alertOf('tor_send_path'),
+        JSON.stringify(alertOf('tor_send_path')));
+      const d = String(rowOf(id).fail_detail || '');
+      ok(`B. …(${code}) fail_detail carries the CLI's own error line, the cancelled slate and the probe, ≤ 500 chars`,
+        d.includes(SYNC) && d.includes(FB) && d.includes(probe instanceof Error ? 'probe_error' : probe.reason) && d.length <= 500, d);
+    }
+    {
+      // A fallback with any OTHER cause (no stage: our own Tor did not start, say) still points at the pool.
+      const id = first();
+      db.exec("DELETE FROM alerts WHERE type = 'tor_send_path'");
+      const other = Object.assign({}, FALLBACK, { torStage: null, syncError: 'Tor Process Error: "Timeout"' });
+      await quiet(() => oa({ result: other, probe: { online: true, reason: 'reachable' }, log: [tx({ slate: FB })] }).s.sendWithdrawal(id));
+      ok('B. a fallback NOT at the version check + probe answers → still pool_send_path, alert raised',
+        rowOf(id).fail_code === 'pool_send_path' && !!alertOf('tor_send_path'), JSON.stringify(rowOf(id)));
+    }
+    {
+      // ONE onion not findable is the miner; several DIFFERENT ones is the pool's fresh tor.
+      const PROBE_OK = { online: true, reason: 'reachable' };
+      const run = async (id) => quiet(() => oa({ result: NF, probe: PROBE_OK, log: [tx({ slate: FB })] }).s.sendWithdrawal(id));
+      const next = () => { sends = []; timeline = []; return seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false }); };
+      const id1 = first();
+      db.exec("DELETE FROM alerts WHERE type = 'tor_send_path'");
+      await run(id1);
+      const id2 = next();
+      await run(id2);
+      ok('B. wallet_not_findable twice for the SAME recipient → still no pool alert',
+        rowOf(id2).fail_code === 'wallet_not_findable' && !alertOf('tor_send_path'), JSON.stringify(alertOf('tor_send_path')));
+      const id3 = next();
+      db.prepare('UPDATE withdrawals SET dest_address = ? WHERE id = ?').run('tgrin1' + 'n'.repeat(58), id3);
+      await run(id3);
+      const sp = alertOf('tor_send_path');
+      ok('B. wallet_not_findable for a 2nd DIFFERENT recipient in 24 h → tor_send_path warning naming the spread',
+        rowOf(id3).fail_code === 'wallet_not_findable' && !!sp && sp.level === 'warning' &&
+          sp.message.includes(`#${id3}`) && sp.message.includes('2 different miners'), JSON.stringify(sp));
+    }
+    {
+      // A send killed at the timeout after printing its fallback keeps that fact in fail_detail.
+      const id = first();
+      const hung = Object.assign({}, NF, { cliNote: '(the CLI then hung until the timeout killed it)' });
+      await quiet(() => oa({ result: hung, probe: OFFLINE, log: [tx({ slate: FB })] }).s.sendWithdrawal(id));
+      const d = String(rowOf(id).fail_detail || '');
+      ok('B. a fallback the timeout killed says so in fail_detail', d.includes('hung until the timeout') && d.includes(FB), d);
+    }
+  }
+  {
     // A pool_send_path repeat rolls into the SAME alert (one rolling row, not one per payout).
     const id0 = first();
     db.exec("DELETE FROM alerts WHERE type = 'tor_send_path'");
@@ -2883,6 +2945,34 @@ async function reviewFixesSection() {
     row(12.5, 0, 'confirmed', 'manual');
     const a3 = await audit(12.49);
     ok('F5. control: a hand-recorded MANUAL payout keeps the human tolerance (0.05 GRIN)', a3.matched === 1, JSON.stringify(a3));
+    reset();
+  }
+
+  // ── the audit window edge: a send whose row is just outside never takes another send's row ──
+  // A mainnet false freeze, replayed: two 25.1 GRIN slatepack payouts (net 25.06).
+  // The pool stamped the older one 11 s before the 30-day cutoff, the wallet confirmed it 7 s after.
+  {
+    const { auditWalletSends } = require(path.join(APP, 'lib/reconciliation.js'));
+    const edge = nowS() - 30 * 86400;
+    const tx = (id, slate, when) => ({ id, tx_type: 'TxSent', confirmed: true, tx_slate_id: slate,
+      creation_ts: new Date((when - 300) * 1000).toISOString(), confirmation_ts: new Date(when * 1000).toISOString(),
+      amount_debited: '60000000000', amount_credited: '34917000000', fee: '23000000' });
+    const slatepackRow = db.prepare(`INSERT INTO withdrawals (grin_address, amount, fee_charged, status, method, slate_id, created_at, confirmed_at)
+                VALUES (?, 25.1, 0.04, 'confirmed', ?, ?, ?, ?)`);
+    reset();
+    slatepackRow.run(ADDR, 'slatepack', 'EDGE-OLD', edge - 77, edge - 11);
+    slatepackRow.run(ADDR, 'slatepack', 'EDGE-NEW', edge + 2 * 86400, edge + 2 * 86400 + 94);
+    const a1 = await auditWalletSends(db, { async getTransactions() {
+      return [tx(19, 'EDGE-OLD', edge + 7), tx(29, 'EDGE-NEW', edge + 2 * 86400 + 400)];
+    } }, {});
+    ok('F5e. a send 7 s inside the window whose row is 11 s outside matches its OWN row — the later same-net send is not flagged',
+      a1.matched === 2 && a1.unrecorded.length === 0, JSON.stringify(a1));
+
+    reset();
+    slatepackRow.run(ADDR, 'tor', null, nowS() - 36 * 86400, nowS() - 36 * 86400 + 60);
+    const a2 = await auditWalletSends(db, { async getTransactions() { return [tx(40, 'FRESH', nowS() - 600)]; } }, {});
+    ok('F5e. control: a row read only for that margin cannot absorb a NEW send of the same net by amount',
+      a2.matched === 0 && a2.unrecorded.length === 1, JSON.stringify(a2));
     reset();
   }
 

@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Node Availability — Tiny Explorer</title>
+  <meta name="description" content="How often this Grin node has been reachable: availability over 7, 30 and 90 days, every outage and planned restart, and a hash-chained public history you can verify yourself.">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#ff8c00">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/tiny-explorer.css">
+</head>
+<body data-page="availability">
+
+  <header class="tx-header">
+    <div class="tx-header-inner">
+      <a href="/" class="tx-brand">
+        <img src="/grin-logo.svg" class="tx-logo" alt="Grin logo">
+        <span class="tx-brand-text">
+          <span class="tx-title">Tiny<span class="tx-accent">Explorer</span></span>
+          <span class="tx-slogan" id="tx-slogan">Every Grin block, one link away.</span>
+        </span>
+      </a>
+      <div class="tx-header-spacer"></div>
+      <form class="tx-search" id="tx-search-form" role="search">
+        <input id="tx-search-input" type="text" placeholder="Height, hash, kernel or output…  ( / )" autocomplete="off" spellcheck="false" aria-label="Search by block height, hash, kernel excess or output commitment">
+        <button class="tx-btn" type="submit">Search</button>
+      </form>
+      <div class="tx-tools" id="tx-tools">
+        <button class="tx-toolbtn tx-tools-btn" id="tx-tools-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Tools">
+          <span class="tx-toolbtn-icon">🧰</span><span class="tx-toolbtn-text">Tools</span><span class="tx-tools-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="tx-tools-menu" id="tx-tools-menu" role="menu" hidden>
+          <a class="tx-tools-item" href="/slate" role="menuitem">
+            <span class="tx-tools-ico">🔎</span>
+            <span class="tx-tools-txt"><b>Slate Inspector</b><small>Read a slatepack — amount, fee, step</small></span>
+          </a>
+          <a class="tx-tools-item" href="/proof" role="menuitem">
+            <span class="tx-tools-ico">🧾</span>
+            <span class="tx-tools-txt"><b>Payment Proof Verifier</b><small>Check a proof — signatures and kernel</small></span>
+          </a>
+          <a class="tx-tools-item" href="/wallet-check" role="menuitem">
+            <span class="tx-tools-ico">👛</span>
+            <span class="tx-tools-txt"><b>Wallet Checker</b><small>Address checksum, network and .onion</small></span>
+          </a>
+          <a class="tx-tools-item" href="/emission" role="menuitem">
+            <span class="tx-tools-ico">⏱</span>
+            <span class="tx-tools-txt"><b>Emission &amp; Supply</b><small>Verify 1 ツ/sec · height × 60</small></span>
+          </a>
+          <a class="tx-tools-item" href="/node-check" role="menuitem">
+            <span class="tx-tools-ico">📡</span>
+            <span class="tx-tools-txt"><b>Node Reachability Checker</b><small>Is your node reachable from outside?</small></span>
+          </a>
+          <a class="tx-tools-item" href="/mining" role="menuitem">
+            <span class="tx-tools-ico">⛏</span>
+            <span class="tx-tools-txt"><b>Mining Calculator</b><small>Your G/s → GRIN per day</small></span>
+          </a>
+        </div>
+      </div>
+      <button id="tx-theme-toggle" class="tx-theme-toggle" aria-label="Toggle light/dark theme" title="Toggle theme">☾</button>
+    </div>
+  </header>
+
+  <main class="tx-wrap tx-main">
+    <div class="tx-emit-hero">
+      <h1>Node Availability</h1>
+      <p>A public record of how often the Grin node behind this explorer has answered,
+        written by the node itself. All dates and times are UTC.</p>
+    </div>
+    <div class="tx-note" id="av-none" hidden>
+      The operator has not published an availability record for this node.
+    </div>
+    <div id="av-content" hidden>
+      <div class="tx-emit-big" id="av-state">…</div>
+      <div class="tx-emit-caption" id="av-updated"></div>
+      <div class="tx-list">
+        <h3>Availability</h3>
+        <div class="tx-list-body" style="overflow-x:auto">
+          <table class="tx-compare">
+            <thead><tr><th>Window</th><th>Available</th><th>Observed</th><th>Planned</th><th>Outages</th></tr></thead>
+            <tbody id="av-windows"></tbody>
+          </table>
+          <div class="tx-card-sub">Available = up time / (observed time &minus; planned time). Observed and planned time are shown, not hidden.</div>
+        </div>
+      </div>
+      <div class="tx-emit-grid" style="margin-top:16px">
+        <div class="tx-card">
+          <div class="tx-card-label">Outages</div>
+          <div id="av-outages"></div>
+        </div>
+        <div class="tx-card">
+          <div class="tx-card-label">Planned restarts (not counted)</div>
+          <div id="av-planned"></div>
+        </div>
+        <div class="tx-card">
+          <div class="tx-card-label">Chain compactions</div>
+          <div id="av-compactions"></div>
+        </div>
+      </div>
+      <div class="tx-list" style="margin-top:16px">
+        <h3>Check it yourself</h3>
+        <div class="tx-list-body">
+          <p class="tx-card-sub" id="av-chain"></p>
+          <p>1 &middot; Ask this explorer for the chain tip and compare it with any other node:</p>
+          <pre class="tx-raw" id="av-curl">…</pre>
+          <p>2 &middot; Verify the published history. Each entry holds the SHA-256 of the entry before it,
+            so a changed entry breaks every link after it. Needs <code>curl</code>, <code>jq</code>, <code>sha256sum</code>:</p>
+          <pre class="tx-raw" id="av-verify">…</pre>
+          <p class="tx-card-sub" id="av-browser-check"></p>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <footer class="tx-footer">
+    <div id="tx-footer-text"></div>
+  </footer>
+
+  <div id="tx-toast" class="tx-toast" role="status" aria-live="polite"></div>
+
+  <script src="/js/tiny-explorer.js"></script>
+  <script src="/js/availability.js"></script>
+  <script src="/js/analytics.js"></script>
+</body>
+</html>

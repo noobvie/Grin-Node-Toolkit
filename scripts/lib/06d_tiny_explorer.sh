@@ -353,6 +353,16 @@ tinyx_configure() {
             wallet_probe="false"
         fi
     fi
+    # Where the node event recorder publishes availability.json + history.json for
+    # /api/availability. The server reads only those two names from it and answers
+    # 404 while they are absent, so the default is safe to leave. An existing value
+    # is kept (this function rewrites the whole config), but only if it is a plain
+    # absolute path, since it is written into JSON below.
+    local availability_dir="/opt/grin/node-events/mainnet/public" av_old=""
+    if [[ -f "$TINYX_CONFIG" ]]; then
+        av_old=$(sed -n 's/^[[:space:]]*"availability_dir"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TINYX_CONFIG" 2>/dev/null | head -1)
+        if [[ "$av_old" =~ ^/[A-Za-z0-9_./-]+$ ]]; then availability_dir="$av_old"; fi
+    fi
     local tor_socks_port=9050
     local tor_up="no"
     echo ""
@@ -448,6 +458,7 @@ tinyx_configure() {
   "latest_count":        20,
   "peers_stats_url":     "${peers_stats_url}",
   "wallet_check_probe":  ${wallet_probe},
+  "availability_dir":    "${availability_dir}",
   "tor_socks_host":      "127.0.0.1",
   "tor_socks_port":      ${tor_socks_port},
   "tor_onion_virtual_port": 80,

@@ -13,6 +13,8 @@
        silently commented out every stylesheet link below. -->
   <title>Blog — GRINIUM Mining Pool</title>
   <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
+  <!-- branding.js fetches this at once; the preload starts it alongside the HTML. -->
+  <link rel="preload" href="/api/public/branding" as="fetch" crossorigin>
   <link rel="stylesheet" href="/css/dashboard.css">
   <style>
     .post { max-width: 820px; margin: 0 auto; padding: 2.5rem 1.5rem; }
@@ -56,10 +58,10 @@
 
   <!-- footer injected by /js/public-shell.js -->
 
-  <script src="/js/cms-frame.js"></script>
-  <script src="/js/pages/post.js"></script>
+  <script defer src="/js/cms-frame.js"></script>
+  <script defer src="/js/pages/post.js"></script>
   <script src="/js/public-shell.js"></script>
   <script src="/js/public-theme.js"></script>
-  <script src="/js/branding.js"></script>
+  <script defer src="/js/branding.js"></script>
 </body>
 </html>

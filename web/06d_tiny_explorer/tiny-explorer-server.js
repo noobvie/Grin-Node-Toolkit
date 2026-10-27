@@ -713,6 +713,59 @@ app.get('/api/tip', async (_req, res) => {
   } catch (e) { sendNodeError(res, e); }
 });
 
+// ── Public availability record ────────────────────────────────────────────────
+// The node event recorder on this box publishes two files into availability_dir.
+// They are served as the recorder wrote them (byte-for-byte, so a visitor can
+// hash exactly what was chained) and ONLY these two names are ever opened: the
+// directory also holds the recorder's lock, scan state and the raw chain.
+// A missing, symlinked, oversize or malformed file, or one carrying a key
+// outside the published contract, answers 404 — "not published", never a 500.
+const AVAIL_DIR = config.availability_dir || '/opt/grin/node-events/mainnet/public';
+const AVAIL_MAX_BYTES = 8 * 1024 * 1024;
+const AVAIL_KEYS = {
+  'availability.json': ['v', 'net', 'generated', 'state', 'up_days', 'windows', 'outages',
+                        'planned', 'compactions', 'chain', 'check'],
+  'history.json':      ['v', 'net', 'lines'],
+};
+const availCache = { 'availability.json': makeTtlCache(config.availability_cache_ms || 30000),
+                     'history.json':      makeTtlCache(config.availability_cache_ms || 30000) };
+
+function readAvailability(name) {
+  const keys = AVAIL_KEYS[name];
+  if (!Object.prototype.hasOwnProperty.call(AVAIL_KEYS, name)) return null;
+  const hit = ttlGet(availCache[name]);
+  if (hit) return hit.body;
+  let body = null;
+  try {
+    const file = path.join(AVAIL_DIR, name);
+    const st = fs.lstatSync(file);
+    if (st.isFile() && st.size > 0 && st.size <= AVAIL_MAX_BYTES) {
+      const text = fs.readFileSync(file, 'utf8');
+      const j = JSON.parse(text);
+      if (j && typeof j === 'object' && !Array.isArray(j) && j.v === 1
+          && Object.keys(j).every(k => keys.includes(k))) body = text;
+    }
+  } catch { /* absent or unreadable = not published */ }
+  ttlSet(availCache[name], { body });
+  return body;
+}
+
+function sendAvailability(res, name) {
+  const body = readAvailability(name);
+  if (body === null) return res.status(404).json({ error: 'not published' });
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=30');
+  res.send(body);
+}
+
+// The /availability page is listed in the sitemap, indexable and linked from the
+// footer only while /api/availability answers 200: with publishing off it is a
+// thin "not published" page on every default install.
+function availPublished() { return readAvailability('availability.json') !== null; }
+
+app.get('/api/availability', (_req, res) => sendAvailability(res, 'availability.json'));
+app.get('/api/availability/history', (_req, res) => sendAvailability(res, 'history.json'));
+
 app.get('/api/sync', async (_req, res) => {
   try {
     const s = await getSyncStatus();
@@ -1509,9 +1562,10 @@ app.get('/js/analytics.js', (_req, res) => {
 // With no base_url configured there is no honest absolute URL to publish at
 // all: the sitemap 404s and robots.txt simply omits its Sitemap: line.
 //
-// Only the seven STABLE pages are listed. block/kernel/output are deliberately
-// absent — one URL per chain entity, all noindex (see injectGlobals), and a
-// sitemap is a list of the pages you want indexed, not an inventory of a site.
+// Only the STABLE pages are listed, /availability only while it is published
+// (`listed`). block/kernel/output are deliberately absent — one URL per chain
+// entity, all noindex (see injectGlobals), and a sitemap is a list of the
+// pages you want indexed, not an inventory of a site.
 
 const SITEMAP_PAGES = [
   { path: '/',             file: 'index.html' },
@@ -1521,13 +1575,14 @@ const SITEMAP_PAGES = [
   { path: '/wallet-check', file: 'wallet-check.html' },
   { path: '/emission',     file: 'emission.html' },
   { path: '/node-check',   file: 'node-check.html' },
+  { path: '/availability', file: 'availability.html', listed: availPublished },
 ];
 
 app.get('/sitemap.xml', (_req, res) => {
   if (!baseUrl) {
     return res.status(404).type('text/plain').send('No sitemap: base_url is not configured.');
   }
-  const entries = SITEMAP_PAGES.map(p => {
+  const entries = SITEMAP_PAGES.filter(p => !p.listed || p.listed()).map(p => {
     // lastmod is taken from the page shell's own mtime, never from a date typed
     // into this file. A hand-kept date goes stale the first time someone edits a
     // page and forgets it, and a sitemap that misreports freshness is worse than
@@ -1616,6 +1671,10 @@ const _pageMeta = {
     title: `Grin Node Reachability Checker — ${domain}`,
     desc:  `Check whether your Grin node answers from the public internet on ${domain}: enter host and port and this server POSTs get_tip to /v2/foreign from outside your network. Reports reachability, node version, tip height and how far it drifts from the chain tip. Peer count and sync state are not knowable from outside and are reported as unavailable.`,
   },
+  availability: {
+    title: `Node Availability — ${domain}`,
+    desc:  `How often the Grin node behind ${domain} has been reachable: availability over 7, 30 and 90 days, every outage and planned restart, and a hash-chained public history you can verify yourself with curl.`,
+  },
   notfound: {
     title: `Not found — ${domain}`,
     desc:  `That block or page could not be found on ${domain}. Try a deeper Grin explorer.`,
@@ -1651,6 +1710,7 @@ function injectGlobals(html, pageKey) {
     : pageKey === 'walletcheck' ? '/wallet-check'
     : pageKey === 'proof' ? '/proof'
     : pageKey === 'nodecheck' ? '/node-check'
+    : pageKey === 'availability' ? '/availability'
     : (pageKey === 'block' || pageKey === 'kernel' || pageKey === 'output') ? ''
     : '/404.html';
   const canon = (baseUrl && canonPath) ? `\n<link rel="canonical" href="${baseUrl}${canonPath}">` : '';
@@ -1658,7 +1718,7 @@ function injectGlobals(html, pageKey) {
   // block/kernel/output are one URL per chain entity — millions of them, all
   // sharing this one shell, its title and its description, and all resolved
   // client-side. Indexed, they would be millions of near-duplicate thin pages
-  // competing with the seven that can actually rank; and on a PRUNED node most
+  // competing with the eight that can actually rank; and on a PRUNED node most
   // of them cannot even render a body, because get_block fails below the
   // pruning horizon. So they are noindex — but deliberately still FOLLOW,
   // because the mining pool deep-links into /block/:ref from outside and follow
@@ -1668,8 +1728,9 @@ function injectGlobals(html, pageKey) {
   // still be indexed as a bare listing when something links to it, and a
   // crawler forbidden from fetching the page can never read this tag. Never
   // block a path you want de-indexed.
+  const published = availPublished();
   const robots = (pageKey === 'block' || pageKey === 'kernel' || pageKey === 'output'
-    || pageKey === 'notfound') ? 'noindex, follow' : 'index, follow';
+    || pageKey === 'notfound' || (pageKey === 'availability' && !published)) ? 'noindex, follow' : 'index, follow';
   const ogImage = baseUrl ? `${baseUrl}/grin-logo.svg` : '/grin-logo.svg';
   // Structured data. Each TOOL is a WebApplication — that is what they are:
   // free, browser-run utilities with a single job each. The homepage stays a
@@ -1732,6 +1793,7 @@ window.TINYEXP_BASE_URL=${JSON.stringify(baseUrl)};
 window.TINYEXP_SLOGAN=${JSON.stringify(SLOGAN)};
 window.TINYEXP_FALLBACKS=${JSON.stringify(config.fallback_explorers || [])};
 window.TINYEXP_WALLET_PROBE=${JSON.stringify(walletProbeEnabled)};
+window.TINYEXP_AVAIL=${JSON.stringify(published)};
 </script>`;
 
   // Strip the shell's own title/description/theme-color so the injected block is
@@ -1811,6 +1873,10 @@ app.get('/proof', (_req, res) => sendEntityPage(res, 'proof.html', 'proof'));
 // Self-canonical /node-check.
 app.get('/node-check', (_req, res) => sendEntityPage(res, 'node-check.html', 'nodecheck'));
 
+// Node Availability — the page reads /api/availability[/history] client-side and
+// hides its content when the operator has not enabled publishing. Self-canonical.
+app.get('/availability', (_req, res) => sendEntityPage(res, 'availability.html', 'availability'));
+
 // ── Static files ──────────────────────────────────────────────────────────────
 
 // Every page above has a STATIC TWIN under express.static: /wallet-check.html
@@ -1834,6 +1900,7 @@ const HTML_TWINS = {
   '/wallet-check.html': '/wallet-check',
   '/proof.html':        '/proof',
   '/node-check.html':   '/node-check',
+  '/availability.html': '/availability',
 };
 // The lookup is normalised because Express matches these routes more loosely
 // than it looks: `case sensitive routing` and `strict routing` are both OFF by

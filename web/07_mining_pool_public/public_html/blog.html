@@ -20,6 +20,8 @@
   <meta property="og:image" content="https://pool.grin.money/images/og-image.svg">
   <meta property="og:locale" content="en_US">
   <meta name="twitter:card" content="summary_large_image">
+  <!-- branding.js fetches this at once; the preload starts it alongside the HTML. -->
+  <link rel="preload" href="/api/public/branding" as="fetch" crossorigin>
   <link rel="stylesheet" href="/css/dashboard.css">
   <link rel="alternate" type="application/rss+xml" title="Blog RSS" href="/blog/rss.xml">
   <style>
@@ -105,9 +107,9 @@
 
   <!-- footer injected by /js/public-shell.js -->
 
-  <script src="/js/pages/blog.js"></script>
+  <script defer src="/js/pages/blog.js"></script>
   <script src="/js/public-shell.js"></script>
   <script src="/js/public-theme.js"></script>
-  <script src="/js/branding.js"></script>
+  <script defer src="/js/branding.js"></script>
 </body>
 </html>

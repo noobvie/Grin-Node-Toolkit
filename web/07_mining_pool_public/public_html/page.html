@@ -14,6 +14,8 @@
        which silently commented out every stylesheet link below. -->
   <title>GRINIUM Mining Pool</title>
   <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
+  <!-- branding.js fetches this at once; the preload starts it alongside the HTML. -->
+  <link rel="preload" href="/api/public/branding" as="fetch" crossorigin>
   <link rel="stylesheet" href="/css/dashboard.css">
   <style>
     .content {
@@ -57,10 +59,10 @@
 
     <!-- footer injected by /js/public-shell.js -->
 
-  <script src="/js/cms-frame.js"></script>
-  <script src="/js/pages/page.js"></script>
+  <script defer src="/js/cms-frame.js"></script>
+  <script defer src="/js/pages/page.js"></script>
   <script src="/js/public-shell.js"></script>
   <script src="/js/public-theme.js"></script>
-  <script src="/js/branding.js"></script>
+  <script defer src="/js/branding.js"></script>
 </body>
 </html>

@@ -80,6 +80,43 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
     };
   };
 
+  // ── Wallet side (on-chain = source of truth for coins) ──
+  let walletReachable = false;
+  let walletBalance = { total: 0, held: 0, spendable: 0, locked: 0, immature: 0,
+                        awaiting_confirmation: 0, awaiting_finalization: 0 };
+  if (wallet && typeof wallet.getBalance === 'function') {
+    try {
+      const summary = await wallet.getBalance(forceRefresh);
+      const info = Array.isArray(summary) ? summary[1] : (summary || {});
+      walletBalance = {
+        total: Number(info.total || 0) / 1e9,
+        spendable: Number(info.amount_currently_spendable || 0) / 1e9,
+        locked: Number(info.amount_locked || 0) / 1e9,
+        immature: Number(info.amount_immature || 0) / 1e9,
+        awaiting_confirmation: Number(info.amount_awaiting_confirmation || 0) / 1e9,
+        awaiting_finalization: Number(info.amount_awaiting_finalization || 0) / 1e9,
+      };
+      // HELD = total + locked: every coin this wallet has not yet seen leave on chain.
+      // grin-wallet v5.5.0 `retrieve_info` (min_conf 1, as getBalance passes) puts a payout's
+      // inputs in `amount_locked` and its change in `amount_awaiting_finalization`, and `total`
+      // counts NEITHER — so from the moment a payout locks its inputs until it is mined, `total`
+      // falls by the WHOLE input value (amount + fee + change), not by what was sent. The ledger
+      // still owes that amount (balance_locked), so comparing `total` reads every in-flight
+      // payout as a shortfall and auto-freezes the pool (two miners withdrawing their full balance
+      // at once is enough). Change is NOT added: it is part of the locked inputs.
+      // Residual, on the SAFE side: a Tor payout the ledger already debited (confirmed at send)
+      // but the chain has not mined still counts in `locked`, so HELD over-reads by amount + fee
+      // until it mines — a brief over-coverage, never a false freeze.
+      walletBalance.held = walletBalance.total + walletBalance.locked;
+      walletReachable = true;
+    } catch (e) { walletReachable = false; }
+  }
+
+  // The wallet is read FIRST, and every DB read below runs with no await between them.
+  // getBalance(refresh) is a slow wallet→node scan; while it is awaited the event loop runs
+  // the block monitor, and a matured reward credited mid-scan lands in balance_log but not
+  // in an account total already read — a phantom integrity drift of exactly one reward,
+  // which auto-freezes payouts.
   // ── Ledger side (SQLite = source of truth for who is owed what) ──
   const ledger = db.prepare(
     `SELECT COALESCE(SUM(balance),0) AS sum_balance, COALESCE(SUM(balance_locked),0) AS sum_locked,
@@ -147,38 +184,6 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
   const immatureBlocks = db.prepare(
     `SELECT COUNT(*) AS cnt, COALESCE(SUM(reward),0) AS reward_sum FROM blocks WHERE status='immature'`
   ).get();
-
-  // ── Wallet side (on-chain = source of truth for coins) ──
-  let walletReachable = false;
-  let walletBalance = { total: 0, held: 0, spendable: 0, locked: 0, immature: 0,
-                        awaiting_confirmation: 0, awaiting_finalization: 0 };
-  if (wallet && typeof wallet.getBalance === 'function') {
-    try {
-      const summary = await wallet.getBalance(forceRefresh);
-      const info = Array.isArray(summary) ? summary[1] : (summary || {});
-      walletBalance = {
-        total: Number(info.total || 0) / 1e9,
-        spendable: Number(info.amount_currently_spendable || 0) / 1e9,
-        locked: Number(info.amount_locked || 0) / 1e9,
-        immature: Number(info.amount_immature || 0) / 1e9,
-        awaiting_confirmation: Number(info.amount_awaiting_confirmation || 0) / 1e9,
-        awaiting_finalization: Number(info.amount_awaiting_finalization || 0) / 1e9,
-      };
-      // HELD = total + locked: every coin this wallet has not yet seen leave on chain.
-      // grin-wallet v5.5.0 `retrieve_info` (min_conf 1, as getBalance passes) puts a payout's
-      // inputs in `amount_locked` and its change in `amount_awaiting_finalization`, and `total`
-      // counts NEITHER — so from the moment a payout locks its inputs until it is mined, `total`
-      // falls by the WHOLE input value (amount + fee + change), not by what was sent. The ledger
-      // still owes that amount (balance_locked), so comparing `total` reads every in-flight
-      // payout as a shortfall and auto-freezes the pool (two miners withdrawing their full balance
-      // at once is enough). Change is NOT added: it is part of the locked inputs.
-      // Residual, on the SAFE side: a Tor payout the ledger already debited (confirmed at send)
-      // but the chain has not mined still counts in `locked`, so HELD over-reads by amount + fee
-      // until it mines — a brief over-coverage, never a false freeze.
-      walletBalance.held = walletBalance.total + walletBalance.locked;
-      walletReachable = true;
-    } catch (e) { walletReachable = false; }
-  }
 
   // ── Integrity invariant: account totals vs net of the append-only log ──
   // Composite over rollup + raw. Stays exact after raw pruning because pruning is

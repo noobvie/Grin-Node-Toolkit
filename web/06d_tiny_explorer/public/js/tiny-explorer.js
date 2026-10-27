@@ -111,6 +111,16 @@ function initChrome() {
       `<svg viewBox="0 0 27 18" width="21" height="14" role="img" aria-label="Yellow flag with three red stripes" style="vertical-align:-2px;border-radius:2px">` +
       `<rect width="27" height="18" fill="#FFCD00"/><rect y="4" width="27" height="2" fill="#DA251D"/>` +
       `<rect y="8" width="27" height="2" fill="#DA251D"/><rect y="12" width="27" height="2" fill="#DA251D"/></svg>`;
+    // The server sets TINYEXP_AVAIL to true only while this node's availability
+    // record is published; with publishing off the page is a "not published" note.
+    if (window.TINYEXP_AVAIL === true && ft.firstChild) {
+      const a = document.createElement('a');
+      a.href = '/availability';
+      a.textContent = 'Node availability';
+      const sep = document.createTextNode(' \u00a0·\u00a0 ');
+      ft.insertBefore(sep, ft.firstChild.nextSibling);
+      ft.insertBefore(a, sep);
+    }
   }
 
   const form = document.getElementById('tx-search-form');

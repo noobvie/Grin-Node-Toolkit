@@ -1,15 +1,15 @@
 # Script 086 — Diagnostics & Support Bundle (Implementation)
 
-> **Covers code as of:** 2026-10-03 — §8 only, written against the uncommitted working tree that
+> **Covers code as of:** 2026-10-27 — §9 (public status page), written against the uncommitted working tree after its build and reviews; 2026-10-03 — §8, written against the uncommitted working tree that
 > holds the node event recorder (the recorder and its post-build fixes). §8.15–§8.19 were written by the
 > sessions that built each part and moved here unchanged from `script086_design.md` on 2026-10-03;
 > the file map, §8.20 and §8.21 were read against the code on that day ·
-> **Last verified:** 2026-10-03, PARTIAL — §8 only. The post-build review (§8.19) checked the read-only gate
+> **Last verified:** §9 never verified against a run (test results are described in §9.7); 2026-10-03, PARTIAL — §8 only. The post-build review (§8.19) checked the read-only gate
 > by grep, the transitions and the debounce with a local harness over the pure functions, and the
 > launch command through stubbed `su`/`tmux`/`grin`. The docs-fold session re-read the file map,
 > §8.20 and §8.21 against the libs (function names, paths, unit and logrotate text, the order of
 > `gne_classify`'s rules). **Nothing has been installed or run on a VPS** ·
-> **Product code last changed:** 2026-10-03 — `scripts/lib/grin_node_events.sh`,
+> **Product code last changed:** 2026-10-27 — the §9 public status page (uncommitted): `scripts/lib/grin_node_public.sh`, `grin_node_public_compact.sh`, `grin_node_public_run.sh` (new), `grin_node_events.sh`, `scripts/086_grin_diagnostics.sh`, `089_backup_restore.sh`, `08del_clean_all_grin_things.sh`, `web/04_node_api/`, `web/06d_tiny_explorer/`; 2026-10-03 — `scripts/lib/grin_node_events.sh`,
 > `scripts/lib/086_lib_recorder.sh`, `scripts/lib/grin_alert_send.sh`,
 > `scripts/lib/grin_log_signatures.sh` (all new), `scripts/lib/grin_node_control.sh`,
 > `scripts/lib/grin_node_keepalive.sh`, `scripts/lib/086_lib_diag.sh`, `scripts/086_grin_diagnostics.sh`,
@@ -17,7 +17,7 @@
 > `scripts/03_grin_share_chain_data.sh`, `scripts/07_grin_mining_solo.sh`, `scripts/081_host_monitor_port.sh`,
 > `scripts/08del_clean_all_grin_things.sh`, `scripts/089_backup_restore.sh` (uncommitted)
 
-**Status:** built, reviewed locally, **never run on a VPS** (acceptance and open items: §8.22).
+**Status:** built, reviewed locally, **never run on a VPS** (acceptance and open items: §8.22; the public status page §9: §9.8).
 
 The design is [`script086_design.md`](script086_design.md). Keys 1–6 (health check, support bundle,
 API performance, log triage, consumer load test, saved reports) have no separate as-built record:
@@ -57,6 +57,7 @@ Every part below was built and reviewed locally. **None of it has run on a VPS.*
 /etc/systemd/system/grin-node-events.timer      OnBootSec=60s, OnUnitActiveSec=30s, AccuracySec=1s
 /etc/logrotate.d/grin-node-events               */ledger.jsonl: size 10M, rotate 12, nocopytruncate, create 0644 root root, compress + delaycompress
 /opt/grin/lib/{grin_node_control,grin_node_events,grin_log_signatures,grin_alert_send}.sh   0644 copies the worker sources
+/opt/grin/lib/{grin_node_public,grin_node_public_compact,grin_node_public_run,086_lib_recorder}.sh   0644 public status page (§9.1)
 /opt/grin/conf/node-events/recorder.conf        0600  written only when absent
 /opt/grin/node-events/                          0755  creating it is what turns the planned-stop markers on
   <net>/  0755 (only for nets in the instances conf)   <net>/evidence/  0700
@@ -64,7 +65,7 @@ Every part below was built and reviewed locally. **None of it has run on a VPS.*
 
 - `delaycompress` keeps `ledger.jsonl.1` plain, which is the one rotated file the pool's ingest
   finishes (07 implementation §10.15).
-- `gne_remove` removes the worker, both units, the logrotate stanza and three lib copies. It leaves the
+- `gne_remove` removes the worker, both units, the logrotate stanza, three recorder lib copies and the four public-status libs (§9.1), and takes the two served public files down (§9.6). It leaves the
   `grin_node_control.sh` copy in place, and keeps the state, the evidence and the conf. 08del
   removes those, asking about evidence first.
 - Schemas are as in design §8.8, with the extra flat `status.json` keys listed in §8.15 and §8.16.
@@ -319,10 +320,12 @@ The operator side: 086 has a new key `7`, **Node event recorder**, under a new
   - **down:** inside `[started_at, started_at + duration_s]` of a counted outage. It is an
     interval because the start is backdated (§8.4);
   - **planned:** `stopped` / `starting`;
-  - **auth:** `auth_fail`. The node answers, but this time is judged as neither up nor down;
+  - **auth:** `auth_fail`. The node answers. The sweep keeps it as its own bucket, and the
+    displayed percentage counts it as up (below);
   - **up:** `up`.
 
-  Availability = up ÷ (up + down), floored, so a real outage never shows 100.00 %. MTBF =
+  Availability = (up + auth) ÷ (up + auth + down), floored, so a real outage never shows
+  100.00 %. 086's Availability row and the public page (§9) use this same rule. MTBF =
   up ÷ outages that *started* in the window; mean time to recover = down ÷ outages that
   overlap it.
 - **Three cases the sweep had to learn:**
@@ -445,6 +448,192 @@ the run never answered `get_status`, §8.16).
 | 6 | kernel hung-task line for one of our threads | `kernel.txt` | class `hung` | `hung` / `io_stall` | PROVISIONAL |
 | 7 | `compact` | `notable.txt` | class `hung`, archive node | `hung` / `compaction` (never suppressed) | PROVISIONAL |
 | 8 | `shutdown in progress, please wait` + `shutdown complete` | `notable.txt`, pane | class `unexplained_stop` | `unexplained_stop` / `clean_shutdown` | SEEN |
+### 9. Public status page — as built
+
+The design is [`script086_design.md`](script086_design.md) §9. **Status:** built, reviewed locally,
+not VPS-tested. Accepted limits and acceptance: §9.8.
+
+#### 9.1 The libs and their roles
+
+| File | Role |
+|---|---|
+| `scripts/lib/grin_node_public.sh` (`gnp_*`) | Rendering and the chain: the label map (`gnp_kind_label`, `gnp_error_label`), `gnp_project` (status + ledger → `availability.json`, writes nothing), the privacy gate `gnp_assert_public`, `gnp_write_public` (gate, temp, `chmod 644`, `mv`), the history chain (`gnp_history_sync`, `gnp_history_append`, `gnp_verify_chain`, `gnp_history_json`, `gnp_write_history`), the salt (`_gnp_salt_load`) |
+| `scripts/lib/grin_node_public_compact.sh` (`gnp_*`) | `gnp_compact_scan`: the incremental, read-only scanner of `grin-server.log`, and the compactions object. Sourced by `grin_node_public.sh` from its own dir |
+| `scripts/lib/grin_node_public_run.sh` (`gne_*`, worker side) | When and how to publish: `gne_worker_publish`, `gne_worker_verify_chain`, `_gne_publish_due`, `_gne_publish_net`, `_gne_publish_off`, `_gne_public_traverse`, the `public/.lock` and the time budget. Sourced by `grin_node_events.sh` through `_gne_public_load`; it loads the renderer only when a publish or verify runs (`_gne_public_render_load`), so a plain check stays light |
+| `scripts/lib/086_lib_recorder.sh` (`dgr_*`) | Unchanged code, now ALSO installed to `/opt/grin/lib`. The projection reuses `dgr_availability`, never a copy, so 086, the pool and the page share one sweep |
+
+`gne_install` copies all four through one list, `_GNE_PUBLIC_LIBS` in `grin_node_events.sh`, and
+`gne_remove` removes the same list, so the two cannot drift. A publish or verify-chain needs all
+three of `gnp_history_sync`, `gnp_compact_scan` and `dgr_availability` to be defined; if any lib
+is missing it refuses (rc 1, naming the files) and writes nothing. `086_lib_diag.sh` is not
+copied: the worker path calls no `dg_*`. The repo may be absent on the box.
+
+#### 9.2 Worker subcommands and `recorder.conf` keys
+
+- `grin-node-events publish [net...]`: a net in `PUBLIC_NETS` is published now; any other net
+  loses only its two served files (`_gne_publish_off`; an off net with nothing served gets no
+  `public/` created). rc 1 if any net failed.
+- `grin-node-events verify-chain <net>`: `gnp_verify_chain`, read-only. rc 0 `OK: N lines, head <hex>`,
+  rc 1 `FAIL: line X was changed after it was chained` or no chain, rc 2 bad net. A broken link at
+  line k alone means line k-1 changed; if line k is also malformed, or the link at k+1 is broken
+  too, line k itself changed.
+- `PUBLIC_NETS` (empty = off; net names only, anything else is dropped with a warning) and
+  `PUBLIC_EVERY_S` (default 300, range 60..3600, on the same range check as the other numeric
+  keys). An older `recorder.conf` without them loads as "off". `gne_status` prints one line
+  ("Public status page: mainnet (last run 42s ago)" or "OFF (PUBLIC_NETS empty)").
+- An existing box picks all of this up only by `I) Install / refresh`, like every recorder change.
+
+#### 9.3 Publish order, lock and deadline
+
+- The hook is the last call of `gne_worker_check`, after `_gne_unlock` and after the alerts. A net
+  is due when it is in `PUBLIC_NETS`, its recorder dir exists, and there is no stamp, the stamp is
+  `PUBLIC_EVERY_S` old (or in the future), or an outage closed in this check
+  (`_GNE_PUB_CLOSED`, set in the `close` branch). The stamp `public/.last_publish` is written at the
+  START of a run, so a failing net retries every `PUBLIC_EVERY_S`, not every 30 s. A net that is
+  off is due only while a served file still exists.
+- Due nets run as ONE separate worker process, `timeout -k 5 <left> grin-node-events publish <nets>`,
+  because `timeout` cannot bound a shell function and the unit's `TimeoutStartSec=120` would
+  otherwise kill the whole run. `left` = min(`GNE_PUBLISH_BUDGET_S` 60, the deadline minus the
+  seconds the run already used); the deadline is min(`GNE_PUBLISH_DEADLINE_S` 100,
+  `GAP_FACTOR` x 30 - 30), so a full-budget publish never makes the next check log a `gap`.
+  Under 10 s left, the publish is skipped.
+- Per net, in `_gne_publish_net`: net dir exists, then `_gne_public_traverse`, then `public/`
+  created 0755 before the lock, then the stamp, then `flock` on `public/.lock` (30 s; **no flock
+  binary means no publish**, because two writers fork the chain), then
+  `gnp_history_sync` (rc not 0: publish nothing this cycle) → `gnp_write_history` → `gnp_write_availability`
+  (skipped when history.json failed) → `gnp_compact_scan` (only when the node dir resolves; rc 1 is
+  logged and the run carries on). The scan runs LAST on purpose: a slow scan killed by `timeout` must not stop
+  the state files from refreshing. The compactions a scan appends are served by the next run. After a net's
+  FIRST scan (no `.compact_scan` before the run), both files are rendered once more under the same
+  lock, so `logged:false` is served only after the log has been read once.
+- The recorder's own `.lock` is never taken, and `_gne_lock` is never called, by any publish function.
+- `chmod o+x` on `/opt/grin` (`_gne_public_traverse`) happens only on the enabled path, only when
+  the other-execute bit is missing, never on a symlink, and **only when 06d's unit file exists**
+  (`GNE_TINYX_UNIT`, default `/etc/systemd/system/grin-tiny-explorer.service`; the variable is for
+  tests). A failed chmod warns and the publish goes on. 04 needs no traversal.
+
+#### 9.4 The chain, the salt and the compaction scanner
+
+- **Sync.** With no chain, `gnp_history_sync` builds `chain_start` plus every closed outage and
+  planned span in the whole ledger (all rotations), oldest first, all `"imported":true`, in a temp
+  file that is moved in whole, so a backfill that fails halfway is never live. With a chain it appends
+  the 90-day window's events whose `src` is not in the file yet; an event that closed more than
+  `GNP_LATE_S` (7200 s) ago is marked imported. A line that fits none of the four fixed shapes is never
+  written. An append is one `printf >>`; before it, a torn last line is cut back to the last complete
+  line, and the last complete line must start `{"v":1,"seq":<n-1>,"type":`, else nothing is appended.
+- **Salt.** `<net>/.public_salt` is created by `gnp_history_sync` only when it builds a NEW chain. With
+  a chain and a missing, empty, malformed or symlinked salt, sync and append return rc 1 and write
+  nothing, and `gnp_write_public` refuses. There is no unsalted fallback. The salt reaches only the
+  `printf` builtin, never argv.
+- **Gate.** `gnp_assert_public` has one `case` arm per file. Every `"key":` must be on that file's
+  allow-list and on no forbidden list; after the keys are stripped the values must hold no IPv4,
+  IPv6-like text, `.onion` or 10-digit run. Only `head`/`prev` (64 hex) and `src` (16 hex) are exempt
+  from the digit check, by key and exact shape. `availability.json` also refuses any backslash or
+  newline. `history.json` is checked as the exact `{v,net,lines}` wrapper and each element passes the
+  `history.jsonl` arm. The gate is linear in the number of lines.
+- **Locking.** No `gnp_*` function takes a lock; every writer must run under `flock` on `public/.lock`
+  (sync, append, `gnp_write_history`, `gnp_write_availability`, the scan). A breach is caught by verify
+  (two concurrent syncs gave duplicate `seq` values in a test).
+- **Verify limits.** An edit of the LAST line breaks no link, so verify reports OK; only a reader who
+  kept an earlier `chain.head` sees it.
+- **Compaction scanner.** `gnp_compact_scan <net> <node_dir> [now]` finds the log through
+  `_gne_node_logfile`. Matching is by fields (`<YYYYMMDD> <HH:MM:SS> <LEVEL> grin_chain::... - compact:
+  finished in <n>(ms|s)`), so a peer string in another log line cannot fake one; `skipping` lines never
+  match; `finished in <n>ms` is rounded to whole seconds. Log stamps are local time and are converted
+  with one `date -f -`. State is `public/.compact_scan` (0600, temp + mv): `v1 <inode> <offset> <fp16> <logged>`,
+  where `fp` is a hash of the file's first line. On a roll (inode or fingerprint changed, or the file shrank)
+  it reads the rolled `grin-server.log.N.gz` whose fingerprint matches, from the saved offset, then newer
+  rolled files whole, then the live file. Per call it reads at most `GNP_SCAN_MAX_BYTES` (64 MiB)
+  and appends at most `GNP_SCAN_MAX_EVENTS` (60), saving progress inside a rolled file when a cap hits.
+  It writes only `public/.compact_scan` and `history.jsonl`, holds no grin file open, and never writes
+  into a node dir. The compactions object is built from the compaction lines already in `history.jsonl`.
+
+#### 9.5 086 menu `P` (recorder sub-menu)
+
+`rec_public` is reached by `P` ("Public status page", under Set up). Per net it shows PUBLISHING or
+OFF with the last run's age. Arms: `1`/`2` toggle mainnet/testnet, `3` interval (range from
+`gne_num_specs`), `4` preview, `5` verify chain, `6` whether `www-data` can read the served file,
+`7` where it is served, `0` back; every arm is `|| true`-guarded. `_rec_pub_ready` gates toggle and
+verify: the recorder must be installed and the worker must contain `publish)`, else the screen
+points at `I) Install / refresh`. Enabling states that the page becomes public and takes only an
+explicit `y`; it then runs `gne_conf_set PUBLIC_NETS` and `timeout 120 grin-node-events publish <net>`.
+Disabling needs no prompt and says the chain is kept. Preview of a published net is `cat` of the
+served file, byte for byte; for a net never published it prints `gnp_project` / `gnp_history_json`
+from the repo libs, labelled "preview only", because the first publish also creates the salt and the
+chain (so `chain` and `generated` cannot match). It never lists `public/`. "Where it is served" prints
+`https://<this box's node API domain>/rest/...` and the 06d routes, never a hard-coded host.
+086's Availability row (`_rec_pct`) now uses (up + auth) / (up + auth + down), and its row label is
+"Auth fault (counted up)".
+
+#### 9.6 Lifecycle and the readers
+
+- **089.** Backup adds `public/history.jsonl` and `<net>/.public_salt` per net (regular files, not
+  symlinks; manifest tag `node-events-public:`; the archive is encrypted afterwards). Served
+  files, `.compact_scan` and locks are not archived. Restore handles the pair in its own loop: both
+  come back only if the box has NEITHER file for that net; an archive holding one of the two restores
+  nothing (warns); the salt is written with `install -m 600 -o root -g root`, and a failed salt step
+  rolls the history back.
+- **08del STEP 3c.** The `/opt/grin/lib` list gained the four public libs. `public/` and `.public_salt`
+  are removed for both nets only when the evidence step succeeded (`ok=1`). On the "No = move" path the
+  chain and the salt are first saved beside the ledger (`install -m 644` / `-m 600` into the 700 keep
+  dir); a failure sets `ok=0` and nothing is deleted. The confirm prompt names "public status history".
+  Everything is if-forms (errexit is live there).
+- **`gne_remove`** also removes the two served files (never the chain or salt; a symlinked `public/` is
+  left alone).
+- **04.** `web/04_node_api/node-collector.py`, `sync_public_files(port, rest_dir, grin_data_dir)`, runs
+  after `node.json` is written, in its own `try`. The net comes from the port (3413 mainnet, 13413
+  testnet) or the data-dir name; it still takes three arguments. It copies ONLY `availability.json`
+  and `history.json` by name from `/opt/grin/node-events/<net>/public/` (`EVENTS_ROOT`), byte for byte,
+  atomically, 0644. A source that is gone, a symlink, over 8 MiB, not valid JSON or not UTF-8 removes the
+  served copy. No nginx change (the `^/rest/[^/]+\.json$` rule serves them). The status page has an
+  "Availability" section (`web/04_node_api/public_html/` `index.html`, `css/status.css`, availability script): hidden
+  unless `/rest/availability.json` is 200 with `v:1` and at least one window; text only
+  (`textContent`); a record whose `generated` is over 3 h old reads `Unknown`; a "check it yourself"
+  `get_tip` POST on `/v2/foreign` plus the verify recipe; a browser-side chain check with
+  `crypto.subtle`. `node-status.js` lists both files in "Available endpoints" ("when published").
+- **06d.** `tiny-explorer-server.js`: `readAvailability(name)` accepts only the two names, requires a
+  regular file (a symlink is refused), 1 byte to 8 MiB, an object with `v:1` whose top-level keys are on
+  the published list, and serves the raw text unchanged with `Cache-Control: public, max-age=30` and a
+  30 s TTL cache (`availability_cache_ms`). `GET /api/availability` and `/api/availability/history`
+  answer 404 `{"error":"not published"}` on any miss, never a 500. The page is `GET /availability`
+  (`web/06d_tiny_explorer/public/availability.html` and its availability script, via `sendEntityPage`; `/availability.html`
+  redirects to it through `HTML_TWINS`). Config key `availability_dir` (default
+  `/opt/grin/node-events/mainnet/public`), written by `scripts/lib/06d_tiny_explorer.sh` and read back
+  only if it is a plain absolute path. **Sitemap gate:** `availPublished()` is true exactly when
+  `/api/availability` would answer 200 (same cache). The sitemap row is listed, `index, follow` is
+  served, `window.TINYEXP_AVAIL` is true and `tiny-explorer.js` adds the footer link "Node availability"
+  only while it is; with publishing off the page is `noindex, follow` and unlisted. Compaction rows
+  of 0 s render as "< 1 s" on both pages (the JSON keeps integer seconds).
+
+#### 9.7 Tests, as run
+
+Harnesses are scratchpad-only and are not in the repo; what they exercised:
+
+- **Core and privacy:** every key of both public files is on its allow-list; an open outage, a
+  `reason`, IPs, onions, quotes, newlines and `\037` never reach a public file; hostile class/sub
+  values publish as `unknown`/`null`; window percentages match hand-computed values; all rows of the
+  label map; the gate refused dozens of hostile payloads and wrappers. A brute-force search of every
+  published `src` over its date finds nothing (and finds the exact second when the salt is supplied).
+- **Chain:** rerun adds no lines; one edited byte makes verify name the line; a torn tail is cut,
+  never chained over; the shell recipe walks every link with the served bytes (with a stand-in for
+  `jq`).
+- **Compaction scanner:** both log forms and units, rotation (one roll, two rolls, inode reuse,
+  truncation, a missing `.gz`), local-time conversion across midnight, the 64 MiB / 60-event caps, a
+  node-dir snapshot that is identical before and after.
+- **Worker:** install and remove copy and remove the four libs; files appear within one cycle; an
+  empty `PUBLIC_NETS` writes nothing; disabling removes only the served files; a re-enable extends the
+  same chain; a missing lib or salt fails closed; the hook runs after unlock; a hung publish is cut
+  and the check still returns 0; the stale-record and `gne_remove` cases.
+- **Menu, lifecycle, web:** the menu arms against the real worker; the 089 restore rules and the
+  08del move path on fixtures; the 04 page (fake DOM that throws on `innerHTML`) in six hide/show
+  cases; the collector copy and removal with real Python; the 06d routes with an in-memory fs and
+  once against a live local server; `npm test` in `web/06d_tiny_explorer`.
+- **Linux:** the main fixtures were re-run under WSL (real `mawk`, real `flock`, real modes and
+  symlinks): a 9,000-line chain renders and gates in about 9 s.
+
+Not tested: a real browser, real `jq`, `timeout` killing under systemd, `stat -c %a` on a real
+`/opt/grin`, a real grin log from a patched node.
+
 ## Runbook
 
 - **Install or refresh the recorder:** 086 key 7 → `I` (re-running it is how a box picks up a toolkit update; it offers to regenerate the sync watchdog when that has no `capture` line). Script 01 offers it in its wizard and installs it in Super Auto.
@@ -452,6 +641,7 @@ the run never answered `get_status`, §8.16).
 - **Remove:** key 7 → `R`, or 08del STEP 3c (asks about the alert tokens in `conf/node-events/` and, separately, the evidence bundles).
 - **What reaches an installed box, and when:** the table in §8.20.
 - **Acceptance procedure (testnet first, then mainnet):** §8.22.
+- **Publish the node page:** key 7 → `P` (per-net on/off, interval, preview, verify chain, readability by `www-data`, where it is served). By hand: `grin-node-events publish <net>`, `grin-node-events verify-chain <net>`. Details and the acceptance list: §9, §9.8.
 
 ## Build notes — obstacles & lessons
 
@@ -499,13 +689,24 @@ A tamper alert must not depend on anything else on the box still being intact, s
 ### Operator side
 
 #### Availability is a sweep, not a state walk
-Each second of a window goes into exactly one bucket, precedence unobserved > down > state; availability = up ÷ (up + down), floored so a real outage never shows 100.00 %. Three cases the sweep had to learn: a `boot` that closes an outage leaves the reboot window unobserved (while a `boot` after an `up` over-counts a few minutes per reboot); a `recorder_start` line makes the span since the previous line unobserved and ends any outage still open; a ledger with no `status.json` beside it ends at its own last line, not at "now". **Lesson:** make every instant belong to exactly one bucket, then state the precedence.
+Each second of a window goes into exactly one bucket, precedence unobserved > down > state; availability = (up + auth) ÷ (up + auth + down), floored so a real outage never shows 100.00 % (an `auth_fail` node answers, so it counts as up; 086's row and the public page agree). Three cases the sweep had to learn: a `boot` that closes an outage leaves the reboot window unobserved (while a `boot` after an `up` over-counts a few minutes per reboot); a `recorder_start` line makes the span since the previous line unobserved and ends any outage still open; a ledger with no `status.json` beside it ends at its own last line, not at "now". **Lesson:** make every instant belong to exactly one bucket, then state the precedence.
 
 #### Export is public, so it masks more than the support bundle
 An upstream issue is public and a peer's /24 is still a fingerprint there, so export masks IPv4 /24 and IPv6 /48 fully after `dg_maskip`, replaces the box's own hostname (5+ characters, not a common word), and swaps bundle names out around `dg_redact` (24+ character tokens would be eaten). The tarball's `ledger_last200.jsonl` and `status.json` are IP-masked but not redacted, because ledger ids are 20+ characters and are the point of those files.
 
 #### Fixed `hub 08 → 7` pointer
 `gne_import_alert_channels`' error pointed at "hub 08 → 7", which is Disk Cleanup; Provider Access Watch is key `2`.
+
+### Public status page
+
+#### The history gate was quadratic
+**Symptom:** at 2,000 history lines the `history.json` gate alone took longer than the 60 s publish budget on Linux, `timeout` killed it on every run, and `availability.json` was never rewritten again, so the page kept saying `up` while the node was down. **Cause:** the gate cut the rest of the body once per line, and each `=~` recompiled its regex. **Fix:** one substitution turns the separators into newlines and the gate tries only the shape the line's `type` names; the render is one `head | sed | paste` pipeline. **Lesson:** time a gate at a realistic size on the real OS (WSL), not on the dev shell.
+
+#### A scan before the state files starved them
+**Symptom (found in review):** the compaction scan ran before the writes, so a slow scan killed by `timeout` left the served state frozen. **Fix:** the writes run first and the scan last. **Lesson:** order optional, slow work after the work that keeps the page honest.
+
+#### A freshness check on the readers
+**Symptom (found in review):** after `gne_remove`, or with a dead timer, the last `availability.json` stayed in `public/` and both pages kept showing "up". **Fix:** `gne_remove` takes the served files down and both pages treat a `generated` over 3 h old as Unknown. **Lesson:** a page fed by a producer must notice that the producer stopped.
 
 ## Open items
 
@@ -550,4 +751,37 @@ An upstream issue is public and a peer's /24 is still a fingerprint there, so ex
 - **Deferred** (design §8.14): the watchdog backing off on `corrupted`; a fleet view in 081; the
   `gnc_owner_get_status` argv fix (F-3); converging Script 03's older `lib/grin_alerts.sh` onto
   `grin_alert_send.sh` (§8.17).
+- The public status page (§9) has its own accepted limits and acceptance steps in §9.8.
 - When acceptance passes, record it in this header's *Last verified* with its scope.
+
+### 9.8 Public status page: accepted limits, and what is owed
+
+**Status:** built, not VPS-tested.
+
+**Accepted limits** (the operator accepted each on 2026-10-27):
+
+- **`stopped` shows as `down`.** The node does not answer; planned time is still kept out of the percentage.
+- **A watchdog restart with no down line is not in history.** It is not an outage and has no duration.
+- **A span cut by `recorder_start` is not listed.** It has no measured end; the sweep still counts its time.
+- **An open outage's start can be derived to about a minute** (the 7-day percentage times observed time, or the forced publish's `generated` plus a duration). The live `state` already gives it away and no timestamp field is published.
+- **Labels are frozen when a line is appended.** A reclass lands about 20 s after the down, before any close, so the two views agree in practice.
+- **Rolled `.gz` logs are not back-filled on the first scan.** A first scan has no inode to key them on, so only compactions after enabling are listed.
+- **Inode reuse at the same offset could hide one compaction.** It needs the same inode number and byte offset; the key is salted.
+- **A publish can delay the NEXT check's start** by up to about 75 s at the default, at most once per `PUBLIC_EVERY_S` or per closed outage. The watchdog's capture never waits (different lock).
+- **`public/.last_publish` and `public/.lock` are 0644.** No reader serves them; the stamp is about the public `generated`.
+- **04's section is hidden until the collector's next minute, and for good if 04's collector is not installed.** By design: 06d reads the file directly.
+- **"Not logged by this grin build" can be served until a later scan** if the very first scan on a net is killed by `timeout`, or the first live log is over 64 MiB. Closing it needs a public "not scanned yet" signal, which is a change to the contract in design §9.4, so that contract is kept frozen.
+- **06d reads the files only after the first publish adds `o+x`** on `/opt/grin`; until then, or if that chmod fails (a warning on stderr), `/api/availability` answers 404 and the page says "not published".
+- **06d checks top-level keys only.** The recorder's gate is the real control; the server check is defence in depth.
+- **089 restore needs the complete pair in the archive;** an archive from before publishing was enabled has none.
+- **The collector can lose a race with the publisher's removal** between `lexists` and `open`: a warning only, recovered the next minute.
+- **The head can briefly differ from the history** (separate caches: 30 s on 06d, 1 min on 04). Both pages then print "entries link correctly" without "head matches", never a false alarm.
+- **The pages use inline `style=` attributes, px font sizes and no `defer`,** matching the pages around them.
+- **Capacity.** The gate costs about 1 ms per history line on Linux (9,000 lines, about 9 s). At the fastest expected pace (an archive node on a build that logs compactions) that stays under the 60 s budget for years; revisit with a batch gate if the chain passes about 40,000 lines.
+
+**Owed at VPS acceptance (operator):**
+
+- **Time the first archive-box publish** (a capped scan slice on a large log); the cap and the budget were sized from a Windows run.
+- **A real browser and real `jq`.** The verify recipe and the `curl` lines were run only with stand-ins for `jq`; no browser has opened either page.
+- **Also unproven here:** `timeout` killing the worker under systemd, `stat -c %a` on a real `/opt/grin`, and a real log from a patched node.
+- **The acceptance steps, testnet first:** enable from 086 → recorder → `P` and the page shows `up`; `kill -9` the node and, after recovery, one outage row with kind `killed` appears; `verify-chain` prints OK; edit one byte of a copy of `history.jsonl` and verify names the line; the `curl` line answers. Then mainnet on the node-API box, then the archive box. Record the result in this doc with its scope.

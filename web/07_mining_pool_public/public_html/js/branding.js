@@ -330,9 +330,10 @@
   // blank. This pass fixes every one of them by ORIGIN rather than by listing tags to set,
   // so a page that adds another absolute tag is covered without a second edit here.
   //
-  // ⚠ This is the JS-client half only. A crawler that does not run scripts, and any unfurler
-  // that reads the raw HTML, still sees the hardcoded domain — that half needs the 56 static
-  // tags themselves edited and is a product decision, recorded as OPEN in audit §J15-3.
+  // ⚠ This is the JS-client half only. Crawlers and unfurlers read the raw HTML; for them the
+  // pool vhost rewrites the placeholder host with sub_filter as the page is served
+  // (pool_setup_nginx in 07_lib_pool_nginx.sh). On an nginx built without http_sub_module
+  // they still see pool.grin.money.
   function reclaimSeoHost(siteUrl, serverSeo) {
     var base;
     try { base = new URL(siteUrl || location.href); } catch (e) { return; }
@@ -1311,6 +1312,18 @@
     if (stack.children.length) document.body.insertBefore(stack, document.body.firstChild);
   }
 
+  // The branding read starts as soon as this script runs, not on DOMContentLoaded: the
+  // homepage's LCP element is the [data-brand] hero heading, so its text waits on this answer.
+  // Every page's <head> preloads the same URL (rel=preload as=fetch crossorigin), and this
+  // fetch must keep matching it (no custom headers, credentials same-origin) to reuse that
+  // response. Other scripts read the answer through window.GriniumBranding.ready instead of
+  // fetching it again; it resolves to the full {data: …} body, or null on any failure.
+  var ready = fetch(ENDPOINT, { credentials: 'same-origin' })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (json) { return (json && json.data) ? json : null; })
+    .catch(function () { return null; });
+  window.GriniumBranding = { ready: ready };
+
   function load() {
     // window.Explorer is usable immediately (defined synchronously above); inject its style now
     // so chain deep-links render correctly even before the branding fetch resolves.
@@ -1318,9 +1331,7 @@
     // The header/footer + base nav are now injected synchronously by public-shell.js
     // (single source of truth, no flash). branding.js only ENHANCES that chrome:
     // logo/slogan, [data-brand] hooks, and the incentives-gated prize-pool links.
-    fetch(ENDPOINT, { credentials: 'same-origin' })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (json) { if (json && json.data) apply(json.data); })
+    ready.then(function (json) { if (json) apply(json.data); })
       .catch(function () { /* keep page defaults */ });
   }
 

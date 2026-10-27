@@ -511,6 +511,11 @@ step_remove_event_recorder() {
         /opt/grin/lib/grin_node_events.sh
         /opt/grin/lib/grin_log_signatures.sh
         /opt/grin/lib/grin_alert_send.sh
+        # the public status page libs, plus the recorder lib they source
+        /opt/grin/lib/grin_node_public.sh
+        /opt/grin/lib/grin_node_public_compact.sh
+        /opt/grin/lib/grin_node_public_run.sh
+        /opt/grin/lib/086_lib_recorder.sh
     )
     local -a found=() bundles=()
     local f kb keep_dir="" net ok=1
@@ -536,7 +541,7 @@ step_remove_event_recorder() {
         echo -e "  lines saved at past failures. You may want them for an upstream grin report."
     fi
 
-    if ! confirm_step "Remove the node event recorder (timer, worker, config, ledger, status)?"; then
+    if ! confirm_step "Remove the node event recorder (timer, worker, config, ledger, status, public status history)?"; then
         info "Skipped — recorder kept."
         if [[ ${#bundles[@]} -gt 0 ]]; then
             warn "STEP 4 removes /opt/grin, which holds $ev_root — decline STEP 4 to keep the evidence."
@@ -560,6 +565,16 @@ step_remove_event_recorder() {
                     for f in "$ev_root/$net"/ledger.jsonl* "$ev_root/$net/status.json"; do
                         if [[ -f "$f" ]]; then cp -p -- "$f" "$keep_dir/$net/" 2>/dev/null || ok=0; fi
                     done
+                    # The public chain and its secret salt travel together; the
+                    # salt keeps 0600 root (keep_dir is already 700), the history 0644.
+                    f="$ev_root/$net/public/history.jsonl"
+                    if [[ -f "$f" && ! -L "$f" ]]; then
+                        if install -m 644 -- "$f" "$keep_dir/$net/history.jsonl" 2>/dev/null; then :; else ok=0; fi
+                    fi
+                    f="$ev_root/$net/.public_salt"
+                    if [[ -f "$f" && ! -L "$f" ]]; then
+                        if install -m 600 -- "$f" "$keep_dir/$net/.public_salt" 2>/dev/null; then :; else ok=0; fi
+                    fi
                 done
             else
                 ok=0
@@ -586,6 +601,19 @@ step_remove_event_recorder() {
     # recorder.conf holds the alert channel tokens — never left behind.
     if [[ -d "$conf_dir" ]]; then
         if rm -rf -- "$conf_dir"; then log "[STEP 3c] DELETED: $conf_dir"; else warn "Could not remove $conf_dir"; fi
+    fi
+    # The public status chain and its secret salt go too: disabling publishing
+    # keeps them on purpose, so only a full wipe removes them. Skipped when an
+    # evidence move failed (ok=0): the dir is then kept whole for a manual copy.
+    if [[ $ok -eq 1 ]]; then
+        for net in mainnet testnet; do
+            if [[ -e "$ev_root/$net/public" || -L "$ev_root/$net/public" ]]; then
+                if rm -rf -- "$ev_root/$net/public"; then log "[STEP 3c] DELETED: $ev_root/$net/public"; else warn "Could not remove $ev_root/$net/public"; fi
+            fi
+            if [[ -e "$ev_root/$net/.public_salt" || -L "$ev_root/$net/.public_salt" ]]; then
+                if rm -f -- "$ev_root/$net/.public_salt"; then log "[STEP 3c] DELETED: $ev_root/$net/.public_salt"; else warn "Could not remove $ev_root/$net/.public_salt"; fi
+            fi
+        done
     fi
     if [[ $ok -eq 1 && -d "$ev_root" ]]; then
         if rm -rf -- "$ev_root"; then log "[STEP 3c] DELETED: $ev_root"; else warn "Could not remove $ev_root"; fi

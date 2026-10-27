@@ -253,9 +253,13 @@
     themes: THEMES
   };
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
+  // Runs as soon as <body> exists, not on DOMContentLoaded. This script is one of the two
+  // plain (non-defer) scripts at the end of <body>, so the saved theme lands before the
+  // first paint; waiting for DOMContentLoaded would wait behind every deferred script and
+  // paint the default theme first.
+  if (document.body) {
     init();
+  } else {
+    document.addEventListener('DOMContentLoaded', init);
   }
 })();

@@ -67,6 +67,8 @@
   }
   </script>
 
+  <!-- branding.js fetches this at once; the preload starts it alongside the HTML. -->
+  <link rel="preload" href="/api/public/branding" as="fetch" crossorigin>
   <link rel="stylesheet" href="/css/dashboard.css">
   <link rel="stylesheet" href="/css/themes.css">
   <link rel="stylesheet" href="/css/reactor.css">
@@ -1085,19 +1087,19 @@
 
     <!-- footer injected by /js/public-shell.js -->
 
-    <script src="/js/auth.js"></script>
-    <script src="/js/vendor/chart.umd.min.js"></script>
-    <script src="/js/charts-init.js"></script>
+    <script defer src="/js/auth.js"></script>
+    <script defer src="/js/vendor/chart.umd.min.js"></script>
+    <script defer src="/js/charts-init.js"></script>
     <!-- Payout-rail registry, then one file per self-contained rail. Load order matters:
          a rail registers itself at parse time, so the registry must exist first, and both
          must run before the page script below reads the registry. Deleting a rail's script
          tag removes the rail — nothing in the page script names it. -->
-    <script src="/js/num-format.js"></script>
-    <script src="/js/payout-methods.js"></script>
-    <script src="/js/payout-goblin.js"></script>
-    <script src="/js/pages/account-settings.js"></script>
+    <script defer src="/js/num-format.js"></script>
+    <script defer src="/js/payout-methods.js"></script>
+    <script defer src="/js/payout-goblin.js"></script>
+    <script defer src="/js/pages/account-settings.js"></script>
     <script src="/js/public-shell.js"></script>
     <script src="/js/public-theme.js"></script>
-    <script src="/js/branding.js"></script>
+    <script defer src="/js/branding.js"></script>
 </body>
 </html>

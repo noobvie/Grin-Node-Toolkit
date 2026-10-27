@@ -616,7 +616,7 @@ saved_reports() {
 #    its read side lib/086_lib_recorder.sh)
 # =============================================================================
 # Everything here READS the recorder's files, except: Install/Remove, Alert
-# settings (recorder.conf only) and "Capture evidence now" (a new bundle, no
+# settings, Public status page (recorder.conf only) and "Capture evidence now" (a bundle, no
 # ledger line). Data goes out with printf '%s', never echo -e: a ledger reason
 # or a log line holding "\c" would cut the rest of the screen off
 # (reference_echo_e_backslash_c_truncation).
@@ -672,9 +672,11 @@ _rec_kb() {
     if (( kb < 1024 )); then printf '%d KB' "$kb"; else printf '%d.%d MB' $(( kb / 1024 )) $(( kb % 1024 * 10 / 1024 )); fi
 }
 
-# _rec_pct <up_s> <down_s> → "99.82 %" (floored, so a real outage never reads 100.00).
+# _rec_pct <up_s> <auth_s> <down_s> → "99.82 %" (floored, so a real outage never
+# reads 100.00). auth_fail time counts as up (the node answers; only a secret is
+# wrong), the same rule as the public status page, so both show one number.
 _rec_pct() {
-    local up=$(_dg_num "$1") dn=$(_dg_num "$2") p
+    local up=$(( $(_dg_num "$1") + $(_dg_num "$2") )) dn=$(_dg_num "$3") p
     if (( up + dn == 0 )); then printf 'n/a'; return 0; fi
     p=$(( up * 10000 / (up + dn) ))
     if (( dn > 0 && p >= 10000 )); then p=9999; fi
@@ -820,7 +822,7 @@ _rec_avail_net() { # <net> <now>
         up=$(_dg_num "${A[$w.up]:-}"); dn=$(_dg_num "${A[$w.down]:-}"); pl=$(_dg_num "${A[$w.planned]:-}")
         au=$(_dg_num "${A[$w.auth]:-}"); un=$(_dg_num "${A[$w.unobs]:-}")
         oc=$(_dg_num "${A[$w.outages]:-}"); sti=$(_dg_num "${A[$w.started]:-}")
-        cav+=("$(_rec_pct "$up" "$dn")")
+        cav+=("$(_rec_pct "$up" "$au" "$dn")")
         cdn+=("$(dgr_dur "$dn")")
         coc+=("$oc")
         if (( sti > 0 )); then cmtbf+=("$(dgr_dur $(( up / sti )))"); else cmtbf+=("no failure"); fi
@@ -845,7 +847,7 @@ _rec_avail_net() { # <net> <now>
     _rec_row "Longest outage"           "${clg[@]}"
     _rec_row "  its class"              "${clc[@]}"
     _rec_row "Planned / starting"       "${cpl[@]}"
-    _rec_row "Auth fault (not judged)"  "${cau[@]}"
+    _rec_row "Auth fault (counted up)"  "${cau[@]}"
     _rec_row "Not observed"             "${cun[@]}"
     _rec_row "Restarts wd/toolkit/?"    "${crs[@]}"
     _rec_row "Planned stops"            "${cst[@]}"
@@ -884,9 +886,11 @@ rec_availability() {
     report=$(
         for net in "${nets[@]}"; do echo ""; _rec_avail_net "$net" "$now"; done
         echo ""
-        echo -e "  ${DIM}Availability = up ÷ (up + counted down). Planned stops, start and boot windows, auth${RESET}"
-        echo -e "  ${DIM}faults and unobserved time (recorder not running, a gap) count as neither. A window${RESET}"
-        echo -e "  ${DIM}the recorder only partly observed says so in 'Not observed'. Times UTC.${RESET}"
+        echo -e "  ${DIM}Availability = (up + auth fault) ÷ (up + auth fault + counted down): an auth fault${RESET}"
+        echo -e "  ${DIM}means the node answers, so it counts as up, as on the public status page. Planned${RESET}"
+        echo -e "  ${DIM}stops, start and boot windows and unobserved time (recorder not running, a gap) count${RESET}"
+        echo -e "  ${DIM}as neither. A window the recorder only partly observed says so in 'Not observed'.${RESET}"
+        echo -e "  ${DIM}Times UTC.${RESET}"
         ui_end "availability · nothing was changed"
     )
     _page <<< "$report"
@@ -1242,6 +1246,121 @@ rec_status() {
     pause
 }
 
+# ── 7.P Public status page (publishing is driven through the worker) ─────────
+# The worker publishes under $GNE_EVENTS_DIR/<net>/public/; 04's collector and 06d
+# serve from there. This screen only edits PUBLIC_NETS / PUBLIC_EVERY_S and calls
+# "$GNE_BIN" publish | verify-chain, so it runs the same /opt/grin/lib copies the timer does.
+_rec_pub_ready() {
+    dgr_installed && grep -q 'publish)' "$GNE_BIN" 2>/dev/null && return 0
+    warn "The recorder worker here predates the public status page — use I) Install / refresh first."
+    return 1
+}
+
+_rec_pub_toggle() { # <net>
+    local net="$1" n new="" on=0
+    _rec_pub_ready || return 1
+    for n in ${GNE_C_PUBLIC_NETS:-}; do
+        if [[ "$n" == "$net" ]]; then on=1; else new+="${new:+ }$n"; fi
+    done
+    if (( on )); then
+        gne_conf_set PUBLIC_NETS "$new" || return 1
+        success "$net: publishing OFF — the served files are removed; the chain history is kept."
+    else
+        echo -e "\n  Turning ON makes this node's status ${BOLD}public${RESET}: its state, uptime %, dated outage history"
+        echo -e "  with a known error type, and a hash-chained copy of it. Preview (4) shows the exact bytes."
+        _rec_no "Publish the $net node's status page?" || { info "Cancelled — nothing changed."; return 0; }
+        gne_conf_set PUBLIC_NETS "${new:+$new }$net" || return 1
+        success "$net: publishing ON"
+    fi
+    if ! timeout 120 "$GNE_BIN" publish "$net"; then warn "The first publish did not finish — the recorder retries within ${GNE_C_PUBLIC_EVERY_S:-300} s."; fi
+    return 0
+}
+
+# Prints, per net, each file exactly as served; a net that is not published yet
+# shows what its first publish would write (the render functions write nothing).
+_rec_pub_preview() {
+    local net f p
+    source "$SCRIPT_DIR/lib/grin_node_public.sh" || { error "Cannot load lib/grin_node_public.sh."; return 1; }
+    for net in "${GNE_NETS[@]}"; do
+        [[ -d "$GNE_EVENTS_DIR/$net" ]] || continue
+        p=$(gnp_public_dir "$net")
+        for f in availability history; do
+            if [[ -f "$p/$f.json" ]]; then
+                echo -e "\n${BOLD}$net · $f.json${RESET} ${GREEN}SERVED${RESET}"
+                cat "$p/$f.json" || warn "Cannot read $p/$f.json."
+            else
+                echo -e "\n${BOLD}$net · $f.json${RESET} ${YELLOW}NOT PUBLISHED — preview only; the first publish also starts the hash chain${RESET}"
+                if [[ "$f" == availability ]]; then gnp_project "$net" || warn "Nothing to render."
+                else gnp_history_json "$net" || warn "Nothing to render."; fi
+                printf '\n'
+            fi
+        done
+    done
+    return 0
+}
+
+_rec_pub_readable() {
+    local net f p; local -a as
+    if ! id www-data >/dev/null 2>&1; then info "No www-data user here — nothing to check."; return 0; fi
+    if command -v sudo >/dev/null 2>&1; then as=(sudo -u www-data); else as=(runuser -u www-data --); fi
+    echo -e "  ${DIM}04's collector copies as root; 06d reads these files as www-data.${RESET}"
+    for net in "${GNE_NETS[@]}"; do
+        p="$GNE_EVENTS_DIR/$net/public"
+        for f in availability history; do
+            [[ -f "$p/$f.json" ]] || { printf '  %-8s %-18s %bnot published%b\n' "$net" "$f.json" "$DIM" "$RESET"; continue; }
+            if "${as[@]}" test -r "$p/$f.json"; then printf '  %-8s %-18s %breadable by www-data%b\n' "$net" "$f.json" "$GREEN" "$RESET"
+            else printf '  %-8s %-18s %bNOT readable by www-data — publishing again re-opens /opt/grin%b\n' "$net" "$f.json" "$RED" "$RESET"; fi
+        done
+    done
+    return 0
+}
+
+rec_public() {
+    local c net ts now key def min max val
+    while true; do
+        _rec_banner "Public status page"
+        gne_conf_load
+        now=$(date +%s)
+        echo ""
+        for net in "${GNE_NETS[@]}"; do
+            ts=""; if [[ -r "$GNE_EVENTS_DIR/$net/public/.last_publish" ]]; then read -r ts 2>/dev/null < "$GNE_EVENTS_DIR/$net/public/.last_publish" || ts=""; fi
+            if [[ " ${GNE_C_PUBLIC_NETS:-} " == *" $net "* ]]; then
+                printf '  %-8s %bPUBLISHING%b  %s\n' "$net" "$GREEN" "$RESET" "$([[ "$ts" =~ ^[0-9]+$ ]] && echo "last run $(( now - ts )) s ago" || echo "not run yet")"
+            else printf '  %-8s %bOFF%b\n' "$net" "$DIM" "$RESET"; fi
+        done
+        echo -e "  ${DIM}Refreshed every ${GNE_C_PUBLIC_EVERY_S:-300} s, and at once when an outage closes. Default OFF.${RESET}"
+        echo -e "  ${GREEN}1${RESET})  mainnet  on / off"
+        echo -e "  ${GREEN}2${RESET})  testnet  on / off"
+        echo -e "  ${CYAN}3${RESET})  Interval"
+        echo -e "  ${CYAN}4${RESET})  Preview                   ${DIM}the exact bytes served, or about to be${RESET}"
+        echo -e "  ${CYAN}5${RESET})  Verify chain              ${DIM}every link of the public history${RESET}"
+        echo -e "  ${CYAN}6${RESET})  Readable by the web user  ${DIM}www-data check${RESET}"
+        echo -e "  ${CYAN}7${RESET})  Where it is served"
+        echo -e "  ${DIM}0${RESET})  Back"
+        echo -ne "${BOLD}Select [1-7 / 0]: ${RESET}"
+        read -r c || return 0
+        case "$c" in
+            0) return 0 ;;
+            1) _rec_pub_toggle mainnet || true; pause ;;
+            2) _rec_pub_toggle testnet || true; pause ;;
+            3) read -r key def min max < <(gne_num_specs | grep "^PUBLIC_EVERY_S ") || true
+               if ui_ask_num val "Seconds between publishes" "${GNE_C_PUBLIC_EVERY_S:-$def}" "$min" "$max"; then gne_set_num PUBLIC_EVERY_S "$val" && success "PUBLIC_EVERY_S=$val" || true; fi
+               sleep 1 ;;
+            4) echo ""; _rec_pub_preview || true; pause ;;
+            5) echo ""
+               if _rec_pub_ready; then for net in "${GNE_NETS[@]}"; do [[ -d "$GNE_EVENTS_DIR/$net" ]] || continue; printf "%s: " "$net"; "$GNE_BIN" verify-chain "$net" || true; done; fi
+               pause ;;
+            6) echo ""; _rec_pub_readable || true; pause ;;
+            7) echo -e "\n  Source: $GNE_EVENTS_DIR/<net>/public/{availability,history}.json"
+               echo -e "  Node API status page ${DIM}(after the 04 page is installed)${RESET}: https://<this box's node API domain>/rest/availability.json"
+               echo -e "    + /rest/history.json (testnet: the testnet node API domain)"
+               echo -e "  Tiny Explorer ${DIM}(after the 06d page is installed; mainnet)${RESET}: /availability · /api/availability · /api/availability/history"
+               pause ;;
+            *) warn "Invalid option."; sleep 1 ;;
+        esac
+    done
+}
+
 rec_menu() {
     local c now net
     while true; do
@@ -1269,12 +1388,13 @@ rec_menu() {
         echo ""
         echo -e "${BOLD}  Set up${RESET}"
         echo -e "  ${CYAN}5${RESET})  Alert settings            ${DIM}channels · import · test · thresholds${RESET}"
+        echo -e "  ${CYAN}P${RESET})  Public status page        ${DIM}publish this node's uptime · preview · verify${RESET}"
         echo -e "  ${CYAN}I${RESET})  Install / refresh"
         echo -e "  ${YELLOW}R${RESET})  Remove                    ${DIM}keeps the ledger, evidence and config${RESET}"
         echo -e "  ${CYAN}S${RESET})  Status"
         echo -e "  ${DIM}0${RESET})  Back to Diagnostics"
         echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -ne "${BOLD}Select [1-5 / C I R S / 0]: ${RESET}"
+        echo -ne "${BOLD}Select [1-5 / C P I R S / 0]: ${RESET}"
         read -r c || return 0
         # Every arm ||-guarded, as in main().
         case "${c,,}" in
@@ -1284,6 +1404,7 @@ rec_menu() {
             4) rec_export         || true ;;
             c) rec_capture_now    || true ;;
             5) rec_alert_settings || true ;;
+            p) rec_public         || true ;;
             i) rec_install        || true ;;
             r) rec_remove         || true ;;
             s) rec_status         || true ;;

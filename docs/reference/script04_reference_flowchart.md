@@ -3,8 +3,8 @@
 ╚══════════════════════════════════════════════════════════════════════════╝
 
 
-> **Covers code as of:** 2026-05-24 · **Last verified:** never systematically verified
-> **Product code last changed:** 2026-07-19 — `scripts/04_grin_node_foreign_api.sh`, `web/04_node_api/`
+> **Covers code as of:** 2026-05-24 (the Availability section: 2026-10-27) · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-10-27 — `web/04_node_api/` (Availability section, collector copy; uncommitted); 2026-07-19 — `scripts/04_grin_node_foreign_api.sh`, `web/04_node_api/`
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   PORTS & SERVICES
@@ -29,6 +29,7 @@
   REST collector cron:
     www-data  every 60 s  →  rest-collector.py  →  /var/www/grin-node-api/rest/
     root      every 60 s  →  node-collector.py  →  /var/www/grin-node-api/rest/node.json
+                                                    + availability.json, history.json (copied, see below)
 
   REST JSON endpoints (GET, CORS * allowed, Cache-Control 60 s):
     /rest/stats.json        height, supply, difficulty, hash, versions
@@ -37,6 +38,25 @@
     /rest/difficulty.json   total network difficulty
     /rest/emission.json     emission schedule (static)
     /rest/node.json         peers, chain_size_mb, archive_mode
+    /rest/availability.json public status page record (only while the operator publishes it)
+    /rest/history.json      its hash-chained outage history (same condition)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  AVAILABILITY SECTION (public node status page; design in script086_design.md §9)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Off by default. The node event recorder (Script 086, key 7 → P) writes
+  /opt/grin/node-events/<net>/public/{availability,history}.json. After writing node.json,
+  node-collector.py (sync_public_files) copies exactly those two files, byte for byte,
+  atomically (www-data, 0644), into its rest dir. It derives the net from the port
+  (3413 mainnet, 13413 testnet) or from the data-dir name; it still takes 3 arguments.
+  A source that is gone, a symlink, over 8 MiB, not JSON or not UTF-8 removes the copy.
+  No nginx change: the existing *.json REST location in the nginx block below serves both files.
+  The status page (web/04_node_api/public_html/index.html + its availability script) shows an
+  "Availability" section only while /rest/availability.json answers with a valid record:
+  state, 7/30/90 d availability with observed and planned time, outages, planned restarts,
+  compactions, and a "check it yourself" get_tip curl plus the chain-verify recipe. Text is
+  set with textContent only. A record older than 3 h reads "Unknown".
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   KEY PATHS

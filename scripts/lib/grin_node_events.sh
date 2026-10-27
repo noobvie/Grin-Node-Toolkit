@@ -15,6 +15,7 @@
 #   gne_set_channel / gne_set_num  validated recorder.conf writes (086's menu)
 #
 # Worker: /usr/local/bin/grin-node-events  check | capture | show [net] | test-alert
+#   | publish [net…] | verify-chain <net>   (public status page: lib/grin_node_public_run.sh)
 #   (generated from a QUOTED heredoc; sources only the /opt/grin/lib/ copies)
 #   `capture <net> watchdog_restart <reason>` is the watchdog's one hook (§8.9):
 #   it records restart_by_watchdog and saves the pane BEFORE the restart kills it.
@@ -102,6 +103,7 @@ _GNE_NUM_KEYS=(
     "ALERT_LOOP_COUNT 3 2 50"
     "ALERT_LOOP_WINDOW_MIN 60 5 1440"
     "ALERT_UNCLEAN_BOOT 1 0 1"
+    "PUBLIC_EVERY_S 300 60 3600"
 )
 
 # Alert channel keys — the same names as 082's alert.conf, so the import is a
@@ -139,7 +141,7 @@ gne_conf_load() {
         printf -v "GNE_C_$key" '%s' "$def"
     done
     for key in "${_GNE_CHAN_KEYS[@]}"; do printf -v "GNE_C_$key" '%s' ""; done
-    GNE_C_ENABLED_NETS="mainnet testnet"
+    GNE_C_ENABLED_NETS="mainnet testnet"; GNE_C_PUBLIC_NETS=""
     [[ -r "$GNE_CONF" ]] || return 0
 
     while IFS= read -r line || [[ -n "$line" ]]; do
@@ -161,15 +163,15 @@ gne_conf_load() {
         v="${v%%#*}"                                   # trailing comment
         v="${v%"${v##*[![:space:]]}"}"                 # trailing blanks
         v="${v#\"}"; v="${v%\"}"; v="${v#\'}"; v="${v%\'}"
-        if [[ "$k" == ENABLED_NETS ]]; then
+        if [[ "$k" == ENABLED_NETS || "$k" == PUBLIC_NETS ]]; then
             local n out=""
             for n in $v; do
                 case "$n" in
                     mainnet|testnet) out+="$n " ;;
-                    *) GNE_CONF_WARNINGS+="ENABLED_NETS: ignored '$n'"$'\n' ;;
+                    *) GNE_CONF_WARNINGS+="$k: ignored '$n'"$'\n' ;;
                 esac
             done
-            GNE_C_ENABLED_NETS="${out% }"
+            printf -v "GNE_C_$k" '%s' "${out% }"
             continue
         fi
         for spec in "${_GNE_NUM_KEYS[@]}"; do
@@ -222,6 +224,13 @@ ALERT_LOOP_WINDOW_MIN=60
 # 1 = alert when the host rebooted WITHOUT a clean shutdown while a node was up.
 ALERT_UNCLEAN_BOOT=1
 
+# Public status page: nets published to /opt/grin/node-events/<net>/public/.
+# Empty = off. Taking a net out removes only the served .json files; its
+# hash-chained history is kept. Publish every PUBLIC_EVERY_S s, and at once
+# when an outage closes.
+PUBLIC_NETS=
+PUBLIC_EVERY_S=300
+
 # Off-box alert channels, under 082's key names. Empty = off. This file is the
 # recorder's own: it never reads Provider Access Watch's alert.conf on its own;
 # 086's recorder menu can IMPORT those channels on request.
@@ -246,7 +255,7 @@ CONF
 # control characters (a newline would inject a second line).
 gne_conf_set() {
     local k="$1" v="$2" spec key ok=0 tmp line done_=0 re
-    [[ "$k" == ENABLED_NETS || " ${_GNE_CHAN_KEYS[*]} " == *" $k "* ]] && ok=1
+    [[ "$k" == ENABLED_NETS || "$k" == PUBLIC_NETS || " ${_GNE_CHAN_KEYS[*]} " == *" $k "* ]] && ok=1
     for spec in "${_GNE_NUM_KEYS[@]}"; do read -r key _ <<< "$spec"; [[ "$k" == "$key" ]] && ok=1; done
     (( ok )) || { error "recorder.conf: unknown key $k."; return 1; }
     [[ "$v" == *[[:cntrl:]]* ]] && { error "recorder.conf: $k contains a control character."; return 1; }
@@ -1906,7 +1915,7 @@ gne_check_net() {
         fi
         _gne_append_ledger "$lfile" "$(_gne_ledger_json "$net" "$now" "$_GNE_ID" "$ev" "$st" "$cl" "$ci" "$sb" \
             "$oid" "$sa" "$du" "$pid" "$GNE_I_P_LAST_PID" "$rc" "$by" "$rs" "$evn" "$gv" "$cs" "$gp")" || true
-        if [[ "$oc" == close ]]; then a_cl_oid="$cur_oid"; a_cl_du="$du"; a_cl_ev="$ev"; a_cl_class="$cl"; cur_oid=""; fi
+        if [[ "$oc" == close ]]; then a_cl_oid="$cur_oid"; a_cl_du="$du"; a_cl_ev="$ev"; a_cl_class="$cl"; cur_oid=""; _GNE_PUB_CLOSED+=" $net"; fi
         if [[ "$ev" == boot ]]; then a_boot_cs="$cs"; fi
     done
     local o_id="$GNE_O_OUTAGE_ID"
@@ -1991,6 +2000,7 @@ _gne_conf_warn_once() {
 
 # gne_worker_check — the timer's run: both nets, under the shared lock.
 gne_worker_check() {
+    local t0=$SECONDS
     [[ -d "$GNE_EVENTS_DIR" ]] || { echo "grin-node-events: $GNE_EVENTS_DIR missing — re-install from 086." >&2; return 1; }
     gne_conf_load
     _gne_alerts_setup
@@ -2000,14 +2010,17 @@ gne_worker_check() {
     _GNE_CTX_CLK=$(getconf CLK_TCK 2>/dev/null || echo 100)
     _GNE_CTX_CRON=$(crontab -l 2>/dev/null || true); _GNE_CTX_CLEAN=""
     local net
+    _GNE_PUB_CLOSED=""
     for net in "${GNE_NETS[@]}"; do
         gne_check_net "$net" || echo "grin-node-events: $net check failed." >&2
     done
     _gne_prune_daily
     _gne_unlock
     # After the lock: a slow channel delays only the next check (the timer is
-    # OnUnitActiveSec), never the watchdog's capture.
+    # OnUnitActiveSec), never the watchdog's capture. Publishing likewise.
     _gne_alerts_deliver || true
+    if _gne_public_load quiet; then _gne_publish_due "$t0" || true
+    elif [[ -n "$GNE_C_PUBLIC_NETS" ]]; then _gne_public_load || true; fi
     return 0
 }
 
@@ -2275,6 +2288,22 @@ gne_worker_show() {
 }
 
 # =============================================================================
+# PUBLIC STATUS PAGE — scheduling, locks and publish: lib/grin_node_public_run.sh
+# =============================================================================
+_GNE_PUB_CLOSED=""        # nets whose outage closed in this check (publish at once)
+# Installed beside this lib in /opt/grin/lib (install and remove share the list).
+_GNE_PUBLIC_LIBS=(grin_node_public.sh grin_node_public_compact.sh grin_node_public_run.sh 086_lib_recorder.sh)
+
+# _gne_public_load [quiet] — source the publish lib from this lib's dir (the
+# /opt/grin/lib copy for the worker). rc 1 = missing: nothing is published.
+_gne_public_load() { # shellcheck source=grin_node_public_run.sh
+    if [[ -r "$_GNE_LIB_DIR/grin_node_public_run.sh" ]]; then source "$_GNE_LIB_DIR/grin_node_public_run.sh"; fi
+    if declare -F gne_worker_publish >/dev/null 2>&1; then return 0; fi
+    if [[ -z "${1:-}" ]]; then echo "grin-node-events: $_GNE_LIB_DIR/grin_node_public_run.sh missing — re-install from 086." >&2; fi
+    return 1
+}
+
+# =============================================================================
 # INSTALL / REMOVE / STATUS
 # =============================================================================
 _gne_copy_lib() { # <src> <dest>
@@ -2314,8 +2343,10 @@ case "${1:-}" in
     capture)    shift; gne_worker_capture "$@" || true ;;
     show)       gne_worker_show "${2:-}" ;;
     test-alert) gne_worker_test_alert; exit $? ;;
+    publish)    shift; _gne_public_load && gne_worker_publish "$@"; exit $? ;;
+    verify-chain) _gne_public_load && gne_worker_verify_chain "${2:-}"; exit $? ;;
     *)
-        echo "Usage: grin-node-events check | capture <mainnet|testnet> <watchdog_restart|manual> [reason] | show [mainnet|testnet] | test-alert"
+        echo "Usage: grin-node-events check | capture <mainnet|testnet> <watchdog_restart|manual> [reason] | show [mainnet|testnet] | test-alert | publish [mainnet|testnet] | verify-chain <mainnet|testnet>"
         exit 2
         ;;
 esac
@@ -2410,6 +2441,10 @@ gne_install() {
     _gne_copy_lib "$src" "$GNE_LIB_INSTALL_DIR/grin_node_events.sh" || return 1
     _gne_copy_lib "$GNE_SIG_LIB" "$GNE_LIB_INSTALL_DIR/grin_log_signatures.sh" || return 1
     _gne_copy_lib "$GNE_ALERT_LIB" "$GNE_LIB_INSTALL_DIR/grin_alert_send.sh" || return 1
+    local pl
+    for pl in "${_GNE_PUBLIC_LIBS[@]}"; do
+        _gne_copy_lib "$_GNE_LIB_DIR/$pl" "$GNE_LIB_INSTALL_DIR/$pl" || return 1
+    done
     _gne_write_worker || return 1
     _gne_write_units || return 1
     _gne_write_logrotate || return 1
@@ -2431,8 +2466,19 @@ gne_remove() {
     # (082 inlines the lib into its own worker), so the copy goes with it.
     rm -f "$GNE_TIMER" "$GNE_SERVICE" "$GNE_BIN" "$GNE_LOGROTATE" "$GNE_LIB_INSTALL_DIR/grin_node_events.sh" \
         "$GNE_LIB_INSTALL_DIR/grin_log_signatures.sh" "$GNE_LIB_INSTALL_DIR/grin_alert_send.sh" \
+        "${_GNE_PUBLIC_LIBS[@]/#/$GNE_LIB_INSTALL_DIR/}" \
         || { error "Could not remove every recorder file — check $GNE_BIN and $GNE_SERVICE."; return 1; }
     systemctl daemon-reload 2>/dev/null || true
+    # Nothing refreshes the public page any more: withdraw the served files, or
+    # 04 and 06d keep serving its last state. The chain and salt stay.
+    local n pd
+    for n in "${GNE_NETS[@]}"; do
+        pd="$GNE_EVENTS_DIR/$n/public"
+        if [[ -d "$pd" && ! -L "$pd" ]]; then
+            rm -f -- "$pd/availability.json" "$pd/history.json" \
+                || { error "Could not remove the served status files in $pd."; return 1; }
+        fi
+    done
     success "Node event recorder removed (state kept: $GNE_EVENTS_DIR, config kept: $GNE_CONF)."
     return 0
 }
@@ -2449,6 +2495,12 @@ gne_status() {
     local ch=""
     if [[ -r "$GNE_CONF" ]]; then gne_conf_load; ch=$(_gne_alert_channels); fi
     if [[ -n "$ch" ]]; then info "Alerts: $ch"; else warn "Alerts: OFF (no channel configured in $GNE_CONF)."; fi
+    local pn="" n l
+    for n in ${GNE_C_PUBLIC_NETS:-}; do
+        l=""; read -r l 2>/dev/null < "$GNE_EVENTS_DIR/$n/public/.last_publish" || true; l=$(_gne_int "$l")
+        if [[ -n "$l" ]]; then pn+=" $n (last run $(( $(_gne_now) - l ))s ago)"; else pn+=" $n (not run yet)"; fi
+    done
+    info "Public status page:${pn:- OFF (PUBLIC_NETS empty)}"
     local net s now age st
     now=$(_gne_now)
     for net in "${GNE_NETS[@]}"; do

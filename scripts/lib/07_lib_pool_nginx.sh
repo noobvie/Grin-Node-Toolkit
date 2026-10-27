@@ -521,6 +521,24 @@ include $hdr_common;
 add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
 HDREOF
 
+    # SEO host rewrite for the static public pages (audit §J15-3). Their canonical / og:url /
+    # og:image / twitter:* / hreflang / JSON-LD tags are written against the placeholder host
+    # pool.grin.money. branding.js corrects them in a browser, but crawlers and link unfurlers
+    # read the raw HTML, so nginx rewrites the placeholder to this pool's canonical host as the
+    # page is served. Done here, not at deploy time, because 3) Deploy web files runs before
+    # this step knows the subdomain, and re-running 4) after a domain change must re-point it.
+    # sub_filter only touches text/html; JS, CSS and the app-rendered pages are untouched.
+    local seo_host_filter="" _nginx_build
+    _nginx_build=$(nginx -V 2>&1 || true)
+    if [[ "$_nginx_build" == *--with-http_sub_module* ]]; then
+        seo_host_filter="        sub_filter 'pool.grin.money' '$subdomain';
+        sub_filter_once off;
+        sub_filter_last_modified on;"
+    else
+        warn "This nginx build has no http_sub_module: the static pages keep the placeholder"
+        warn "  host pool.grin.money in their canonical/og tags for crawlers (browsers are fixed by branding.js)."
+    fi
+
     info "Writing nginx vhost (${POOL_NET_LABEL}): $POOL_NGINX_CONF"
     local ping_block; ping_block=$(_pool_nginx_ping_block "$hdr_page")
     # UNQUOTED heredoc (it needs the ${…} expansions), so a backtick anywhere in the next
@@ -566,6 +584,15 @@ $cf_realip_include
     # it MUST re-include the snippet. That is why /admin/, / , /uploads/ and /custom/ all
     # carry an include line. See audit §I1 before adding a header anywhere in this file.
     include $hdr_page;
+
+    # Compression. nginx gzips only text/html unless told otherwise, which left the ~570 KB
+    # of CSS/JS a public page loads going out raw. JSON is left out on purpose: API and admin
+    # responses can carry a session token next to request-reflected input (BREACH).
+    gzip on;
+    gzip_vary on;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_types text/css application/javascript text/javascript image/svg+xml text/plain application/xml application/rss+xml;
 
     # ── Admin panel + admin API. Network gate is OPEN by default (empty admin_allowlist
     # → allow all) for the testing phase; app-layer JWT + captcha + lockout + auto-ban +
@@ -847,6 +874,7 @@ ${ping_block}
         # X-Frame-Options on EVERY public page (this block serves them all). See audit §I1.
         include $hdr_page;
         add_header Cache-Control "no-cache" always;
+$seo_host_filter
         try_files \$uri \$uri/ \$uri.html =404;
     }
 

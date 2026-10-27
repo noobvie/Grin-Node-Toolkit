@@ -1,6 +1,6 @@
 # Script 086 — Diagnostics & Support Bundle
 
-> **Covers code as of:** 2026-09-25 for §1–7 · 2026-10-03 for §8.1–§8.14 (DESIGN, written
+> **Covers code as of:** 2026-09-25 for §1–7 · 2026-10-03 for §8.1–§8.14 and 2026-10-27 for §9 (DESIGN, written
 > before the code against `grin_node_control.sh`, `grin_node_keepalive.sh`, `086_lib_diag.sh`
 > and `082_provider_access_watch.sh` as committed at `65d5061`; §8.5 and §8.13 also carry the
 > launch-contract decisions). The recorder and its post-build fixes are built, uncommitted and never run; where the
@@ -9,7 +9,7 @@
 > **Last verified:** 2026-10-03, PARTIAL — §8 only, by the post-build review (implementation §8.19):
 > §8.2's read-only gate by grep, §8.4/§8.5's transitions and §8.10's debounce by a local harness
 > over the pure functions. Nothing installed or run on a VPS; §1–7 never systematically verified
-> **Product code last changed:** 2026-10-03 — `scripts/086_grin_diagnostics.sh` (key 7: recorder
+> **Product code last changed:** 2026-10-27 — the §9 public status page (uncommitted): `scripts/lib/grin_node_public.sh`, `grin_node_public_compact.sh`, `grin_node_public_run.sh` (new), `grin_node_events.sh`, `scripts/086_grin_diagnostics.sh`, `089_backup_restore.sh`, `08del_clean_all_grin_things.sh`, `web/04_node_api/`, `web/06d_tiny_explorer/` (§9 was not checked against a run) ; 2026-10-03 — `scripts/086_grin_diagnostics.sh` (key 7: recorder
 > sub-menu; support bundle file 10), `scripts/lib/086_lib_recorder.sh` (new: the recorder's read
 > side), `scripts/01_build_new_grin_node.sh`, `scripts/08del_clean_all_grin_things.sh`,
 > `scripts/089_backup_restore.sh` (recorder lifecycle), `scripts/lib/grin_node_events.sh` (new: recorder core
@@ -24,7 +24,8 @@ log-triage and TOML-flattening functions on sample data have run.
 **Files:** `scripts/086_grin_diagnostics.sh` (menu, rendering, bundle),
 `scripts/lib/086_lib_diag.sh` (probes, log triage, collectors),
 `scripts/lib/grin_log_signatures.sh` (the log signature table, shared with the §8 recorder),
-`scripts/lib/086_lib_recorder.sh` (key 7's read side of the §8 recorder). The recorder's own
+`scripts/lib/086_lib_recorder.sh` (key 7's read side of the §8 recorder),
+`scripts/lib/grin_node_public*.sh` (the §9 public status page). The recorder's own
 files and its as-built record are in [`script086_implementation.md`](script086_implementation.md).
 
 ---
@@ -707,3 +708,196 @@ The as-built record moved out of this design on 2026-10-03 and kept its numbers,
 | 8.22 | Status, the VPS acceptance list, open items |
 
 Where the build differs from §8.1–§8.14 above, the implementation doc wins.
+
+---
+
+## 9. Public status page
+
+**Status:** designed and built, not VPS-tested. As-built → [`script086_implementation.md`](script086_implementation.md) §9.
+
+### 9.1 Goal
+
+Each node box can publish a small public page about its own node, derived from the recorder
+(§8) and nothing else:
+
+- the current state (`up` / `starting` / `down` / `unknown`) and "up N days";
+- availability over 7 / 30 / 90 days;
+- a history of closed outages: UTC date, duration, kind and the known error type;
+- planned restarts, listed but never counted against availability;
+- grin compaction durations, when the grin build logs them;
+- a way to check the page: an append-only, hash-chained history and a "check it yourself" `curl`.
+
+It is outward-facing, so it is **off by default and opt-in per net**. The same mechanism serves
+mainnet and testnet. On the node-API box the page is the 04 status page; on the archive/explorer
+box it is the Tiny Explorer (06d) `/availability` page.
+
+### 9.2 What is published, and what never is
+
+Only the allow-listed keys of §9.4 are ever written. Every item below is refused by a gate
+(`gnp_assert_public`) before a file is written, and each has a test:
+
+| Never published | Why |
+|---|---|
+| grin log text, pane text, evidence, the ledger `reason`, the watchdog's reason | holds peer IPs and onion addresses; `reason` is free text |
+| the timestamps of an OPEN outage (`started_at`, `since`, `first_fail_ts`) | the health-API rule: "up N days" only, never a timestamp |
+| exact times in history | a UTC **date** and a duration rounded to the **minute** |
+| pid, boot id, node dir, grin version, evidence names, `by`, the rc of a planned stop | host fingerprinting with no value to a visitor |
+| an open outage in the list | it appears only once closed |
+| alert config, `recorder.conf` | secrets |
+
+An error type is shown only if it is on the label allow-list (§9.5); anything else is printed
+as the class's kind with no error. A grin log line never reaches a public file.
+
+### 9.3 Design decisions and why
+
+- **The chain covers a PUBLIC history file, not the ledger.** Visitors never see `ledger.jsonl`,
+  so a chain over it could only be checked by root, who can rewrite the ledger and its chain
+  together. A chain over the published records can be checked by anyone who kept an earlier copy:
+  today's file must extend yesterday's byte for byte. The ledger and the pool's ingest are untouched.
+- **Availability counts `auth_fail` as up.** `% = up / (observed - planned)`: the node answers,
+  so it is available. Unobserved time and planned time are printed next to the percentage
+  ("99.41 % · 29.6 of 30 d observed · 12 min planned"), never hidden. 086's own Availability row
+  uses the same rule, so the screen and the page show one number.
+- **One producer, two readers.** The recorder writes only its own `public/` dir and never a web
+  root. 04's root `node-collector.py` copies the two files into its REST dir (it already does
+  this for `node.json`, and nginx's existing `*.json` rule serves them). 06d's Express server
+  reads the files directly, because the archive box may not run 04.
+- **Error detail is the label only,** from an allow-list. A free-text error would leak log content.
+- **Planned restarts** carry a date and a duration. The operator's marker `reason` is not published.
+- **Backfill is honest.** The first enable starts the chain with a `chain_start` line, and outages
+  already in the ledger are imported with `"imported":true`, so the chain says they were written
+  after the fact. The same flag is set for any event that closed more than 2 h before it was
+  appended, which covers a re-enable and an 089 ledger restore.
+- **Compactions are listed only from `compact: finished` lines.** A grin build that logs nothing
+  at Info makes the page say "Not logged by this grin build", rather than show an empty list as
+  if nothing happened.
+- **Disabling keeps the chain.** Taking a net out of `PUBLIC_NETS` removes only the two SERVED
+  files. The chain (`history.jsonl`) and the salt stay, so a re-enable extends the same chain and
+  a visitor's earlier copy still matches. A full wipe is 08del's job.
+- **The `src` of a history line is salted.** An unsalted `sha256(outage_id)` plus the published
+  date brute-forces back to the down line's exact second, which §9.2 forbids. A per-net secret
+  salt fixes that. A missing salt beside an existing chain fails closed.
+- **Publishing never delays the watchdog's capture.** It runs after the check has released the
+  recorder's lock, under its own lock and time budget.
+
+### 9.4 File contracts (`v:1`)
+
+All files are in `/opt/grin/node-events/<net>/public/`. Only the first two are served.
+
+**`availability.json`**, rewritten whole, one object. The only keys allowed:
+
+```json
+{"v":1,"net":"mainnet","generated":"2026-10-26T14:05Z","state":"up","up_days":12,
+ "windows":{"7":{"pct":100.0,"observed_d":7.0,"planned_min":0,"outages":0},"30":{},"90":{}},
+ "outages":[{"date":"2026-10-20","duration_min":95,"kind":"hung","error":"thread panic"}],
+ "planned":[{"date":"2026-10-18","duration_min":6}],
+ "compactions":{"logged":true,"last":[{"date":"2026-10-25","duration_s":41}],
+                "d30":{"count":30,"median_s":38,"max_s":610}},
+ "chain":{"lines":57,"head":"<sha256 hex of the last history line>"},
+ "check":{"method":"get_tip"}}
+```
+
+(`"30"` and `"90"` carry the same four keys as `"7"`; shortened here.)
+
+- `generated` has minute precision and is the render time, not an outage time.
+- `state` is `unknown` when `status.json` is older than 120 s; `up_days` is null unless `up`.
+  A page treats a record whose `generated` is more than 3 h old as `Unknown`, so a dead
+  recorder cannot keep a stale "up" on show.
+- `outages` and `planned` hold the newest 50 within 90 d; the full list is `history.json`.
+
+**`history.jsonl`** (recorder side, append-only, never rotated, about one line per event):
+
+```json
+{"v":1,"seq":12,"type":"outage","date":"2026-10-20","duration_min":95,"kind":"hung","error":"thread panic","src":"<16 hex>","prev":"<sha256 of line 11>"}
+```
+
+- `type` is `chain_start`, `outage`, `planned` or `compaction`. Line 0 is `chain_start` with
+  `"prev":null`. `prev` is the sha256 (hex) of the previous line's exact bytes, without the newline.
+  `imported:true` is present on a line written after the fact. `date` is the event's UTC start date.
+- `src` is an opaque dedupe key, always 16 hex = `sha256(salt || key)[0:16]`, where key is the
+  ledger `outage_id` (a planned span: the id of the ledger line that opened it; a compaction:
+  `c-<log-inode>-<offset>`). A re-run therefore never appends the same event twice.
+- The salt is `/opt/grin/node-events/<net>/.public_salt` (64 hex, 0600, root, outside `public/`),
+  created together with a new chain.
+
+**`history.json`** is the served form: `{"v":1,"net":...,"lines":["<raw line>",...]}`. The raw lines
+are carried as strings, so a visitor hashes exactly the bytes that were chained. It is `.json`
+because 04's REST rule serves only `*.json`.
+
+### 9.5 Public labels
+
+The map lives in one place, `gnp_kind_label` / `gnp_error_label` in `scripts/lib/grin_node_public.sh`.
+The web readers print `kind` and `error` as text (`textContent`), never as HTML.
+
+| Recorder class → `kind` | | Recorder sub → `error` | |
+|---|---|---|---|
+| `hung` | hung | `thread_panic` | thread panic |
+| `wedged` | sync stalled | `panic` | panic |
+| `crashed` | crashed | `verify_failed:<mmr>` | PMMR verify failed (mmr is kernel, output or rangeproof only) |
+| `killed` | killed | `oom`, `oom_start` | out of memory |
+| `corrupted` | chain data corrupted | `lmdb` | LMDB error |
+| `failed_start` | failed to start | `chain_error` | chain-state error |
+| `unexplained_stop` | stopped (unexplained) | `io_stall` | disk I/O stall |
+| `restart_by_watchdog` (with no down line) | restarted by watchdog | `compaction` | compaction |
+| | | `timeout` / `port_closed` / `clean_shutdown` | API timeout / API port closed / clean shutdown |
+| | | `rc=137` | SIGKILL; any other `rc=<n>` (1-3 digits, at most 255) gives `exit code <n>` |
+
+An unknown class gives kind `unknown`; an unknown sub gives `error: null`.
+
+### 9.6 Architecture: one producer, two readers
+
+```
+recorder worker (root, 30 s timer)                          readers
+  check ──(unchanged)──► ledger.jsonl / status.json
+  publish (after the check unlocks; every PUBLIC_EVERY_S      04 node-collector.py (root, 1 min)
+           s, and at once when an outage closes)                public/{availability,history}.json
+     ├─ history.jsonl     (hash-chained, append-only)            → <04 rest dir>/ → nginx /rest/*.json
+     ├─ history.json      (served, atomic, 0644)                 → 04 status page "Availability"
+     ├─ availability.json (served, atomic, 0644)
+     └─ compaction scan   (reads grin-server.log, read-only)   06d tiny-explorer-server.js
+                                                                  reads the same two files by name
+                                                                  → /api/availability[/history], /availability
+```
+
+- `publish` takes its own lock (`public/.lock`), never the recorder's, and runs after the check
+  has unlocked. A slow publish cannot delay the watchdog's capture.
+- A visitor verifies by fetching `history.json`, hashing every raw line, and checking each
+  `prev`; the last line's hash must equal `availability.json` `chain.head`:
+
+  ```
+  curl -s URL/history.json | jq -r '.lines[]' | { p=null; n=0; while IFS= read -r l; do
+    q=$(printf '%s' "$l" | jq -r '.prev // "null"'); [ "$q" = "$p" ] || echo "BROKEN at line $n"
+    p=$(printf '%s' "$l" | sha256sum | cut -c1-64); n=$((n+1)); done; echo "$n lines, head $p"; }
+  short form: curl -s URL/history.json | jq -r '.lines[-1]' | head -c -1 | sha256sum   # = chain.head
+  ```
+
+  A chain proves that history was not edited behind a visitor's earlier copy. It cannot show an
+  edit of the LAST line (nothing links to it yet), and it cannot show events that were never
+  written. Only a reader who kept an earlier `chain.head` can detect a rewrite of the newest line.
+
+### 9.7 Lifecycle
+
+- **Enable / disable.** `PUBLIC_NETS` in `recorder.conf` (empty = off), set from 086 → recorder →
+  `P`. Enabling states that the page becomes public and needs an explicit `y`. Disabling removes
+  only the two served files and keeps the chain and salt (§9.3).
+- **Backup (089).** `history.jsonl` and `<net>/.public_salt` are backed up as a pair: losing
+  either breaks the chain or its dedupe. A restore puts the pair back only where the box has
+  neither, and restores nothing from an incomplete pair.
+- **Wipe (08del).** STEP 3c removes `public/` and `.public_salt` with the rest of the recorder
+  state. Where the operator chooses the "move" path for evidence bundles, 08del first saves the
+  chain and the salt beside the ledger, so the evidence and the ability to continue the chain
+  both leave the box.
+- **Remove (086 → recorder → `R`).** Takes the two served files down as well, so a removed
+  recorder cannot leave a stale "up" on show; the chain and salt stay.
+- **Traversal.** 06d runs as `www-data`; `/opt/grin` is created by the toolkit with whatever mode
+  the umask gave. The publish adds `o+x` on `/opt/grin` only when the 06d unit file exists.
+  04 needs nothing, its collector runs as root.
+
+### 9.8 Verifying a box
+
+On the box: `grin-node-events publish <net>` once, then `grin-node-events verify-chain <net>`
+must print `OK: N lines, head <hex>`, and that head must equal `availability.json`
+`chain.head`. Edit one byte in the middle of a copy of `history.jsonl` and verify must name
+the line. Fetch the served URL from outside and run the recipe of §9.6 with real `jq`. On
+testnet, `kill -9` of the node must produce, after recovery, one outage row with kind `killed`.
+The acceptance list, with what is still owed, is implementation §9.8.

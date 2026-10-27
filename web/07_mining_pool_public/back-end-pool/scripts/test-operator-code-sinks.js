@@ -329,7 +329,7 @@ for (const [page, payload, wrap] of [['page.html', 'json.data.html', 'content'],
   ok(`D22-4 closed: ${page}'s fallback (no cms-frame.js) is a textContent sentence, not innerHTML`,
     /textContent = 'This (page|post) could not be shown\. Reload to try again\.';\s*host\.appendChild\([a-z]\);/.test(sbBody) && !/innerHTML/.test(sbBody), sbBody.slice(0, 200));
   ok(`D22-4 closed: ${page} loads /js/cms-frame.js before its own script`,
-    /<script src="\/js\/cms-frame\.js"><\/script>\s*<script>/.test(html));
+    /<script defer src="\/js\/cms-frame\.js"><\/script>\s*<script defer>/.test(html));
 }
 
 // ═══ [3] lib/ads.js behaviour ═══════════════════════════════════════════════

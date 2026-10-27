@@ -55,6 +55,8 @@
   }
   </script>
 
+  <!-- branding.js fetches this at once; the preload starts it alongside the HTML. -->
+  <link rel="preload" href="/api/public/branding" as="fetch" crossorigin>
   <link rel="stylesheet" href="/css/dashboard.css">
   <link rel="stylesheet" href="/css/themes.css">
   <link rel="stylesheet" href="/css/reactor.css">
@@ -456,10 +458,10 @@
 
     <!-- footer injected by /js/public-shell.js -->
 
-    <script src="/js/num-format.js"></script>
-    <script src="/js/pages/donate.js"></script>
+    <script defer src="/js/num-format.js"></script>
+    <script defer src="/js/pages/donate.js"></script>
     <script src="/js/public-shell.js"></script>
     <script src="/js/public-theme.js"></script>
-    <script src="/js/branding.js"></script>
+    <script defer src="/js/branding.js"></script>
 </body>
 </html>

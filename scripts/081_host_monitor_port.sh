@@ -59,6 +59,11 @@ if [[ -f "$SCRIPT_DIR/lib/081_lib_binary_push.sh" ]]; then
 else
     warn "Binary push library missing ($SCRIPT_DIR/lib/081_lib_binary_push.sh) - keys f/g unavailable until a toolkit update."
 fi
+# Bulk add servers with a one-time root password (Manage Servers key 6)
+if [[ -f "$SCRIPT_DIR/lib/081_lib_bulk_add.sh" ]]; then
+    # shellcheck source=lib/081_lib_bulk_add.sh
+    source "$SCRIPT_DIR/lib/081_lib_bulk_add.sh"
+fi
 
 # ─── Runtime state (global associative arrays) ────────────────────────────────
 declare -A RESULTS      # key="host:port"  → "UP" or "DOWN"
@@ -1032,9 +1037,10 @@ mass_deploy_manage() {
         echo -e "  ${CYAN}3${RESET}) Remove server"
         echo -e "  ${CYAN}4${RESET}) Test connections"
         echo -e "  ${CYAN}5${RESET}) Bootstrap SSH keys"
+        echo -e "  ${CYAN}6${RESET}) Bulk add servers   ${DIM}one-time root password → deploy key${RESET}"
         echo -e "  ${DIM}0${RESET}) Back"
         echo ""
-        echo -ne "${BOLD}Select [0-5]: ${RESET}"
+        echo -ne "${BOLD}Select [0-6]: ${RESET}"
         local _choice
         read -r _choice
         case "$_choice" in
@@ -1043,6 +1049,8 @@ mass_deploy_manage() {
             3) _md_remove_server ;;
             4) _md_test_all ;;
             5) _md_bootstrap_keys ;;
+            6) if declare -F _mdb_bulk_add >/dev/null; then _mdb_bulk_add || true
+               else warn "bulk add lib not installed — run Push toolkit update"; sleep 2; fi ;;
             0) break ;;
             *) warn "Invalid selection."; sleep 1 ;;
         esac

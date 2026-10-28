@@ -891,15 +891,18 @@ _md_add_server() {
 }
 
 # -----------------------------------------------------------------------------
-# _md_remove_server — remove a server entry from mass_deploy.conf
+# _md_remove_server — remove servers for good: revoke this controller's deploy
+# key on the target FIRST (the step that actually ends access, and the only one
+# that needs the key to still work), then drop the conf line by exact label,
+# then forget the host key. Several servers at once: "2,5,7".
 # -----------------------------------------------------------------------------
 _md_remove_server() {
     if ! _md_load_conf; then
-        echo "Press Enter to continue..."; read -r
-        return
+        echo "Press Enter to continue..."; read -r || true
+        return 0
     fi
     echo ""
-    echo -e "  ${BOLD}Remove Server${RESET}"
+    echo -e "  ${BOLD}Remove Servers${RESET}  ${DIM}(revokes the deploy key on each target)${RESET}"
     echo ""
     local _i
     for (( _i=0; _i<${#_md_labels[@]}; _i++ )); do
@@ -907,20 +910,71 @@ _md_remove_server() {
             "$((_i+1))" "${_md_labels[$_i]}" "${_md_users[$_i]}" "${_md_hosts[$_i]}"
     done
     echo ""
-    echo -ne "  ${BOLD}Remove server number (or Enter to cancel): ${RESET}"
-    local _sel
-    read -r _sel
-    [[ -z "$_sel" ]] && return
-    if [[ "$_sel" =~ ^[0-9]+$ ]] && (( _sel >= 1 && _sel <= ${#_md_labels[@]} )); then
-        local _idx=$((_sel-1))
-        local _label="${_md_labels[$_idx]}"
-        sed -i "/^${_label}|/d" "$MASS_DEPLOY_CONF"
-        success "Removed server '$_label'."
-    else
-        warn "Invalid selection."
-    fi
+    echo -ne "  ${BOLD}Server number(s) to remove, comma-separated (Enter to cancel): ${RESET}"
+    local _sel _n
+    read -r _sel || _sel=""
+    if [[ -z "$_sel" ]]; then return 0; fi
+    local -a _pick=()
+    IFS=',' read -ra _nums <<< "$_sel"
+    for _n in "${_nums[@]}"; do
+        _n="${_n// /}"
+        if [[ "$_n" =~ ^[0-9]+$ ]] && (( _n >= 1 && _n <= ${#_md_labels[@]} )); then
+            _pick+=("$((_n-1))")
+        else
+            warn "Ignoring invalid selection: $_n"
+        fi
+    done
+    if [[ ${#_pick[@]} -eq 0 ]]; then warn "Nothing selected."; return 0; fi
+
     echo ""
-    echo "Press Enter to continue..."; read -r
+    for _i in "${_pick[@]}"; do echo -e "    ${RED}-${RESET} ${_md_labels[$_i]}  ${_md_users[$_i]}@${_md_hosts[$_i]}"; done
+    echo -ne "  ${RED}${BOLD}Revoke access and remove these ${#_pick[@]} server(s)? [y/N]: ${RESET}"
+    local _confirm
+    read -r _confirm || _confirm=""
+    if [[ ! "$_confirm" =~ ^[Yy]$ ]]; then info "Cancelled."; return 0; fi
+
+    # Match the key by its base64 blob, so only THIS controller's key goes —
+    # never another admin's key that happens to share the comment.
+    local _blob=""
+    [[ -f /root/.ssh/grin_deploy.pub ]] && _blob=$(awk '{print $2}' /root/.ssh/grin_deploy.pub 2>/dev/null || true)
+    if [[ ! "$_blob" =~ ^[A-Za-z0-9+/=]+$ ]]; then
+        warn "No readable /root/.ssh/grin_deploy.pub - keys cannot be revoked, only list entries removed."
+        _blob=""
+    fi
+
+    local _label _host _port _user _key _out _ans _tmp="$MASS_DEPLOY_CONF.tmp.$$"
+    for _i in "${_pick[@]}"; do
+        _label="${_md_labels[$_i]}"; _host="${_md_hosts[$_i]}"; _port="${_md_ports[$_i]}"
+        _user="${_md_users[$_i]}";   _key="${_md_keys[$_i]}"
+        echo ""
+        echo -e "  ${BOLD}[$_label]${RESET}  $_user@$_host:$_port"
+        if [[ -n "$_blob" ]]; then
+            # cat > keeps the file's owner and mode; grep -v exits 1 on an empty result, so `;`.
+            _out=$(_md_ssh "$_label" "$_host" "$_port" "$_user" "$_key" \
+                "f=~/.ssh/authorized_keys; if [ -f \$f ]; then grep -vF '$_blob' \$f > \$f.gnt; cat \$f.gnt > \$f && rm -f \$f.gnt && echo __REVOKED__; else echo __REVOKED__; fi" 2>&1) || true
+            if grep -q "__REVOKED__" <<< "$_out"; then
+                success "Deploy key revoked on the target."
+            else
+                warn "Could not revoke the key (unreachable or no key login): ${_out:0:120}"
+                echo -ne "  Remove '$_label' from the list anyway? The key stays on the target. [y/N]: "
+                read -r _ans || _ans=""
+                if [[ ! "$_ans" =~ ^[Yy]$ ]]; then info "Kept '$_label'."; continue; fi
+            fi
+        fi
+        if awk -F'|' -v l="$_label" '$1 != l' "$MASS_DEPLOY_CONF" > "$_tmp" && mv -f "$_tmp" "$MASS_DEPLOY_CONF"; then
+            success "Removed '$_label' from $MASS_DEPLOY_CONF."
+        else
+            rm -f "$_tmp"; error "Could not rewrite $MASS_DEPLOY_CONF - '$_label' still listed."; continue
+        fi
+        ssh-keygen -R "$_host" >/dev/null 2>&1 || true
+        [[ "$_port" != 22 ]] && { ssh-keygen -R "[$_host]:$_port" >/dev/null 2>&1 || true; }
+        info "Host key forgotten."
+        local _rv="skipped"; [[ -n "$_blob" ]] && _rv="attempted"
+        log "[REMOVE SERVER] $_label $_user@$_host:$_port removed (key revoke: $_rv)"
+    done
+    echo ""
+    echo "Press Enter to continue..."; read -r || true
+    return 0
 }
 
 # -----------------------------------------------------------------------------
@@ -1034,7 +1088,7 @@ mass_deploy_manage() {
         echo ""
         echo -e "  ${CYAN}1${RESET}) List servers"
         echo -e "  ${CYAN}2${RESET}) Add server"
-        echo -e "  ${CYAN}3${RESET}) Remove server"
+        echo -e "  ${CYAN}3${RESET}) Remove servers     ${DIM}revoke deploy key + forget host${RESET}"
         echo -e "  ${CYAN}4${RESET}) Test connections"
         echo -e "  ${CYAN}5${RESET}) Bootstrap SSH keys"
         echo -e "  ${CYAN}6${RESET}) Bulk add servers   ${DIM}one-time root password → deploy key${RESET}"
@@ -1046,7 +1100,7 @@ mass_deploy_manage() {
         case "$_choice" in
             1) _md_list_servers ;;
             2) _md_add_server ;;
-            3) _md_remove_server ;;
+            3) _md_remove_server || true ;;
             4) _md_test_all ;;
             5) _md_bootstrap_keys ;;
             6) if declare -F _mdb_bulk_add >/dev/null; then _mdb_bulk_add || true

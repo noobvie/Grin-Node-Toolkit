@@ -910,13 +910,19 @@ _md_remove_server() {
             "$((_i+1))" "${_md_labels[$_i]}" "${_md_users[$_i]}" "${_md_hosts[$_i]}"
     done
     echo ""
-    echo -ne "  ${BOLD}Server number(s) to remove, comma-separated (Enter to cancel): ${RESET}"
+    echo -ne "  ${BOLD}Server number(s) to remove, comma-separated, or 'all' (Enter to cancel): ${RESET}"
     local _sel _n
     read -r _sel || _sel=""
+    _sel="${_sel// /}"
     if [[ -z "$_sel" ]]; then return 0; fi
-    local -a _pick=()
-    IFS=',' read -ra _nums <<< "$_sel"
-    for _n in "${_nums[@]}"; do
+    local -a _pick=() _nums=()
+    # 'all' must be typed: Enter cancels here, unlike the other server pickers.
+    if [[ "${_sel,,}" == "all" ]]; then
+        for (( _i=0; _i<${#_md_labels[@]}; _i++ )); do _pick+=("$_i"); done
+    else
+        IFS=',' read -ra _nums <<< "$_sel"
+    fi
+    for _n in ${_nums[@]+"${_nums[@]}"}; do
         _n="${_n// /}"
         if [[ "$_n" =~ ^[0-9]+$ ]] && (( _n >= 1 && _n <= ${#_md_labels[@]} )); then
             _pick+=("$((_n-1))")

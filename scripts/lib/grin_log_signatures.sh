@@ -32,20 +32,22 @@ DG_SIG_RE=(
     'permission denied|error loading config'
     'lock file|already locked|another grin process|failed to lock'
     'out of memory|memory allocation of|cannot allocate'
+    'submitted too late'
+    'rejected due to low difficulty|failed to validate (solution|share)'
     'invalid ?root|corrupt|txhashset.*(invalid|fail)'
     'lmdb|mdb_|store error|db error'
     'too far in the future|clock'
-    'wallet_listener|build_coinbase'
+    'wallet[_ ]listener|build_coinbase'
     'stratum'
     'api http server error'
     'header_sync|body_sync|state_sync|sync.*(error|fail|stall)'
     'peer|connection refused|connection reset|timed out|broken pipe|ban'
 )
 DG_SIG_NAME=(panic incomplete-message fd-limit disk-full permission node-lock
-             out-of-memory chain-corrupt lmdb clock wallet-listener stratum
-             api-other sync p2p)
-DG_SIG_ORIGIN=(upstream client host host toolkit toolkit host chain chain host
-               config consumer client network network)
+             out-of-memory stale-share bad-share chain-corrupt lmdb clock
+             wallet-listener stratum api-other sync p2p)
+DG_SIG_ORIGIN=(upstream client host host toolkit toolkit host consumer consumer
+               chain chain host config consumer client network network)
 DG_SIG_HINT=(
     "A Rust panic inside grin: an upstream bug or an unhandled condition. The backtrace is in the tmux pane capture. Search github.com/mimblewimble/grin/issues for the message before suspecting the toolkit."
     "An API client hung up before the node answered — a slow node (disk/RAM pressure) or a client timeout shorter than the call. Check which process holds connections to the API port. Not a node fault on its own."
@@ -54,6 +56,8 @@ DG_SIG_HINT=(
     "Root-owned files in the node dir, or grin started as root / without HOME=<node dir>. Restart the node through the toolkit — it chowns the dir and relaunches as grin. Never test by running grin as root."
     "Two grin processes on one node dir (a root-socket and a gtmux session). Stop the node through the toolkit — it kills both tmux servers — then start it once."
     "The kernel or the allocator ran out of memory. Check the OOM lines in the host section and the swap size."
+    "A share arrived after the node moved to a new tip. A steady rate (10 or more in the window) points to slow template builds on the node; bursts point to quick blocks or a reorg. Measure it with Diagnostics key 8."
+    "The node rejected a miner's submission as invalid or below the share difficulty. Check the miner's config; key 8 lists these per hour."
     "Chain-state validation errors. A PEER sending bad data (during sync or a fork) produces the same words, so first check whether the node is stuck or behind. If it is, restore chain data (Script 03) or resync; if it recurs on FRESH data, it is an upstream issue."
     "LMDB/store error. Check disk health and free space first; if the disk is fine, compare against upstream issues."
     "Block timestamps rejected — check the host clock (NTP sync in the host section)."

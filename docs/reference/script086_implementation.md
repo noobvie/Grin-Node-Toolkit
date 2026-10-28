@@ -1,15 +1,15 @@
 # Script 086 — Diagnostics & Support Bundle (Implementation)
 
-> **Covers code as of:** 2026-10-27 — §9 (public status page), written against the uncommitted working tree after its build and reviews; 2026-10-03 — §8, written against the uncommitted working tree that
+> **Covers code as of:** 2026-10-28 — §10 (key 8, mining / stratum latency), written against the uncommitted working tree after its build: `scripts/lib/086_lib_stratum.sh`, `086_lib_stratum_stack.sh`, `086_lib_stratum_baseline.sh`, `086_lib_stratum_screen.sh`; 2026-10-27 — §9 (public status page), written against the uncommitted working tree after its build and reviews; 2026-10-03 — §8, written against the uncommitted working tree that
 > holds the node event recorder (the recorder and its post-build fixes). §8.15–§8.19 were written by the
 > sessions that built each part and moved here unchanged from `script086_design.md` on 2026-10-03;
 > the file map, §8.20 and §8.21 were read against the code on that day ·
-> **Last verified:** §9 never verified against a run (test results are described in §9.7); 2026-10-03, PARTIAL — §8 only. The post-build review (§8.19) checked the read-only gate
+> **Last verified:** §10 never run on a VPS; local harnesses only (fake stratum node, rejects fixtures, sub-menu render, `bash -n`); §9 never verified against a run (test results are described in §9.7); 2026-10-03, PARTIAL — §8 only. The post-build review (§8.19) checked the read-only gate
 > by grep, the transitions and the debounce with a local harness over the pure functions, and the
 > launch command through stubbed `su`/`tmux`/`grin`. The docs-fold session re-read the file map,
 > §8.20 and §8.21 against the libs (function names, paths, unit and logrotate text, the order of
 > `gne_classify`'s rules). **Nothing has been installed or run on a VPS** ·
-> **Product code last changed:** 2026-10-27 — the §9 public status page (uncommitted): `scripts/lib/grin_node_public.sh`, `grin_node_public_compact.sh`, `grin_node_public_run.sh` (new), `grin_node_events.sh`, `scripts/086_grin_diagnostics.sh`, `089_backup_restore.sh`, `08del_clean_all_grin_things.sh`, `web/04_node_api/`, `web/06d_tiny_explorer/`; 2026-10-03 — `scripts/lib/grin_node_events.sh`,
+> **Product code last changed:** 2026-10-28 — key 8 (uncommitted): the four `scripts/lib/086_lib_stratum*.sh` (new), `scripts/086_grin_diagnostics.sh`, `scripts/lib/086_lib_diag.sh`, `scripts/lib/grin_log_signatures.sh`; 2026-10-27 — the §9 public status page (uncommitted): `scripts/lib/grin_node_public.sh`, `grin_node_public_compact.sh`, `grin_node_public_run.sh` (new), `grin_node_events.sh`, `scripts/086_grin_diagnostics.sh`, `089_backup_restore.sh`, `08del_clean_all_grin_things.sh`, `web/04_node_api/`, `web/06d_tiny_explorer/`; 2026-10-03 — `scripts/lib/grin_node_events.sh`,
 > `scripts/lib/086_lib_recorder.sh`, `scripts/lib/grin_alert_send.sh`,
 > `scripts/lib/grin_log_signatures.sh` (all new), `scripts/lib/grin_node_control.sh`,
 > `scripts/lib/grin_node_keepalive.sh`, `scripts/lib/086_lib_diag.sh`, `scripts/086_grin_diagnostics.sh`,
@@ -17,12 +17,12 @@
 > `scripts/03_grin_share_chain_data.sh`, `scripts/07_grin_mining_solo.sh`, `scripts/081_host_monitor_port.sh`,
 > `scripts/08del_clean_all_grin_things.sh`, `scripts/089_backup_restore.sh` (uncommitted)
 
-**Status:** built, reviewed locally, **never run on a VPS** (acceptance and open items: §8.22; the public status page §9: §9.8).
+**Status:** built, reviewed locally, **never run on a VPS** (acceptance and open items: §8.22; the public status page §9: §9.8; key 8 §10: §10.7).
 
 The design is [`script086_design.md`](script086_design.md). Keys 1–6 (health check, support bundle,
 API performance, log triage, consumer load test, saved reports) have no separate as-built record:
 their design doc §1–7 was written with the code on 2026-09-25 and doubles as one. This file holds
-the as-built record of the **node event recorder** (key 7).
+the as-built record of the **node event recorder** (key 7), the **public status page** (§9) and **Mining / stratum latency** (key 8, §10).
 
 **The section numbers continue the design's §8.** The design's §8.1–§8.14 are the recorder's
 design; §8.15 onward are here. Code comments that say "086 §8.15" or "086 §8.18" therefore resolve
@@ -639,6 +639,134 @@ Harnesses are scratchpad-only and are not in the repo; what they exercised:
 Not tested: a real browser, real `jq`, `timeout` killing under systemd, `stat -c %a` on a real
 `/opt/grin`, a real grin log from a patched node.
 
+### 10. Mining / stratum latency (key 8) — as built
+
+**Status:** built 2026-10-28, uncommitted, **never run on a VPS**. The design is
+[`script086_design.md`](script086_design.md) §10 (the contract); this section records where the build
+differs from it or fixed something the design left open. Each delta has its reason. The numbers
+10.1–10.7 below are this file's own; they are not the design's §10.1–§10.10.
+
+#### 10.1 The four libs
+
+Key 8 lives in four files under `scripts/lib/`, sourced by `086_grin_diagnostics.sh` in this fixed
+order:
+
+| File | Holds |
+|---|---|
+| `086_lib_stratum.sh` | shared state and helpers, the probe (`dgs_probe_prepare` / `_run` / `_cleanup`), the gate, build-log timing, `dgs_rejects`, thread CPU |
+| `086_lib_stratum_stack.sh` | `dgs_stack_capture` and its post-check |
+| `086_lib_stratum_baseline.sh` | binary fingerprint, baseline JSON, screen copy, compare, `dgs_quick_baseline` |
+| `086_lib_stratum_screen.sh` | `stratum_latency` (key 8), the verdict, the report render, the sub-menu, `dgs_quick_finding`, `dgs_bundle_file` |
+
+- **Split into four, not one file.** The whole feature is about 3,500 lines; one lib would break the
+  repo's 1,500-line rule. The seams follow dependencies: the first file is the base, `_stack` and
+  `_baseline` need only it, `_screen` needs all three. Each of the three guards its own source
+  (`_DGS_*_LOADED`) and sources the base if it is missing, so a harness can load one alone.
+
+#### 10.2 The key 8 flow and its sub-menu
+
+- **Probe on entry.** Key 8 picks a node, runs `dgs_probe_prepare`, then the gate, then the probe,
+  then shows the report and opens the sub-menu. *Reason:* the useful number is the probe's; the
+  other views are follow-ups.
+- **Blocks prompt.** `Blocks to measure (3, 5 or 10)`, default 5; any other answer becomes 5.
+  *Reason:* the probe waits for real blocks (about a minute each), so the length is the operator's
+  choice and bounded.
+- **Auto-save on at least one block.** A run that measured at least one block writes the baseline
+  JSON and the screen copy without asking (`dgs_baseline_save`, `dgs_save_screen`); with no block
+  (`no_blocks`), no python3 or an error it saves nothing and says why. *Reason:* the A/B compare is
+  the point of key 8, and a baseline nobody remembered to save is a lost comparison; a zero-block
+  file would only read as "0 blocks" in key 1.
+- **Sub-menu.** `1` Build log, `2` Rejects per hour, `3` Thread CPU, `4` Stack capture, `5` Save
+  baseline, `R` Run the probe again, `C` Compare baselines, `0` back. Every arm is `|| true`.
+  - **`R` re-runs the same flow for the same node** (`_dgss_flow rerun`): gate, blocks prompt, probe,
+    auto-save, report. It reuses `DGS_PID/DIR/NET/API_*`, skips the node picker and returns to the
+    sub-menu's own loop instead of opening a second menu. *Reason:* the A/B procedure runs key 8
+    twice, and recursing into a new menu per run would nest a level each time.
+  - `stratum_latency` is a one-line wrapper over `_dgss_flow first`.
+
+#### 10.3 Probe results and refusals
+
+- **`api_auth`.** Polls answering 401/403 before the first good one end the probe as `api_auth`, not
+  as `node_down`; the screen points at `grin-secret-sync` and `api_secret_path`. *Reason:* a rejected
+  secret and a dead node need different fixes, and calling it an outage would send the operator to
+  the wrong place.
+- **10 failed polls in a row after the first good one end the probe as `api_lost`** (`MAX_POLL_FAILS`).
+  The rows measured so far are kept. *Reason:* a probe that waits forever on a node that went away
+  holds a stratum connection; one slow poll must not end it, ten in a row means it is gone.
+- **An unset `wallet_listener_url` asks.** The gate refuses only on a loopback wallet listener that
+  does not answer; with no URL set it cannot prove the wallet alive, so it asks (default No) and says
+  the listener could not be checked. `burn_reward = true` and a non-loopback URL ask too. *Reason:* a
+  missing URL is a legitimate setup (a burn-reward test node), not proof of a dead wallet.
+- **`no_clients` refusal (stack capture).** With no established stratum client on the node's stratum
+  port the stratum thread is idle, so a capture would pause the node for nothing; the capture
+  refuses before asking. *Reason:* ptrace stops the whole node.
+- **`pre_stopped` refusal (stack capture).** A node already in state `T` or traced is neither resumed
+  nor attached to. *Reason:* it is not 086's stop to undo, and a second tracer would fail anyway.
+- **One SIGCONT, then no further captures.** If a capture leaves the node stopped,
+  `dgs_stack_postcheck` sends at most one SIGCONT per run and records `stop_after`; no later capture
+  of that run happens. It is the only signal 086 sends. *Reason:* a tracer killed between attach and
+  detach can leave the node stopped, and more captures on a node that just misbehaved are worse than
+  a shorter result.
+- **The stack trigger polls `get_status` when Debug is off.** With `file_log_level` Debug or Trace the
+  capture waits for a fresh `resend updated block` log line; otherwise it watches the tip through
+  `get_status` and fires on a change. *Reason:* the feature must work at the default Info level, so
+  the log cannot be the only trigger.
+- **`dgs_probe_cleanup` runs on 086's EXIT path** (with `dgs_stack_cleanup`). It sends SIGTERM to a
+  probe or watcher still running, waits up to 2 s, then SIGKILLs it. *Reason:* a signal the probe's
+  own traps do not cover must not leave an extra stratum connection on the node.
+
+#### 10.4 Provenance, baselines and compare
+
+- **Provenance comes from the running exe, then the install record.** `dgs_binary_fingerprint` hashes
+  `/proc/<pid>/exe`, then reads `<dir>/.grin_binary_info`: `source_build` (a `source_ref` or commit),
+  `archived_release` (a recorded sha256), `release` (an "official release" header), `no_record` (no
+  file: the normal state after Script 01's release install, which deletes it). If the recorded
+  artifact, or the recorded sha256, no longer hashes to the running exe, the provenance becomes
+  `swapped` and `record_provenance` keeps what the record said. *Reason:* three tools write the
+  record in different shapes and it goes stale; the running image is the only fact.
+- **Compare noise rule.** Two runs of the same sha whose p50 or p95 differ by more than 2x above
+  0.5 s show "Same binary, very different numbers: host noise likely, repeat both". *Reason:* without
+  it a noisy neighbour reads as a binary regression in an upstream report.
+- **Time-ordered default.** The compare screen defaults to A = the older run, B = the newer, so
+  Δ = B − A reads as "what the later binary changed" (the baseline list itself is newest first).
+  Rows whose config differs (attempt time, log level) are marked as not comparable.
+- **Quick-check scope (key 1).** `dgs_quick_finding` reads the newest saved baseline whose sha is the
+  running exe's, for nodes with `enable_stratum_server = true`. It never runs a probe: one block takes
+  about a minute and key 1 is a 30 s check. Outcomes: no saved run for this binary (INFO), under 3
+  blocks (INFO), p95 over 2 s (WARN, origin a lean from steal and CPU pressure), otherwise OK.
+
+#### 10.5 Rejects
+
+- **The `steady` pattern needs at least 10 stale lines in the window** (the burst rule's minimum),
+  and stale lines in 75 % of the window's hours. Below 10 the pattern is `scattered`, and the screen
+  says so ("under 10 stale shares, too few to call"). *Reason:* with 6 hours and 6 stale lines,
+  "steady, the signature of slow template builds" is one stale share an hour, which any healthy node
+  has. The `stale-share` triage rule keys on counts and the 3 % share, not on the pattern, so it
+  is unchanged; the signature's description now says the 10-line minimum.
+
+#### 10.6 The `wallet[_ ]listener` signature fix
+
+- `grin_log_signatures.sh` matched `wallet_listener`, but the node logs "Can't connect to wallet
+  listener" with a space. The pattern is now `wallet[_ ]listener|build_coinbase`. *Reason:* the phrase
+  this feature tells the operator to look for did not match its own signature.
+- **The recorder's copy updates only on re-install.** The recorder runs from
+  `/opt/grin/lib/grin_log_signatures.sh`, copied by `gne_install`; an installed box picks up this fix
+  with 086 key 7 → `I`. Keys 4 and 8 read the toolkit's copy and have it at once.
+
+#### 10.7 Status and what is owed
+
+**Status:** built, not VPS-tested. Local checks run: `bash -n` on the four libs, the rejects fixtures
+(the steady / scattered boundary at 10 lines), the sub-menu render, the `R` path against the local fake
+node (a second baseline saved for the same node, back in the sub-menu), and the solo collector tests.
+
+**Owed at VPS acceptance (Part 6, operator):**
+
+- Key 8 on a node with a connected miner and on one with none (the gate paths), at Info and at Debug.
+- The A/B procedure end to end on two real binaries (Runbook), including `R`.
+- A real stack capture with `eu-stack` or `gdb`, on a node with symbols and on a stripped one.
+- The solo card's ⚑ and hint on a real binary change (solo flowchart, "Node binary change marker").
+- Re-run 086 key 7 → `I` on boxes that run the recorder, to pick up the `wallet[_ ]listener` fix.
+
 ## Runbook
 
 - **Install or refresh the recorder:** 086 key 7 → `I` (re-running it is how a box picks up a toolkit update; it offers to regenerate the sync watchdog when that has no `capture` line). Script 01 offers it in its wizard and installs it in Super Auto.
@@ -647,6 +775,29 @@ Not tested: a real browser, real `jq`, `timeout` killing under systemd, `stat -c
 - **What reaches an installed box, and when:** the table in §8.20.
 - **Acceptance procedure (testnet first, then mainnet):** §8.22.
 - **Publish the node page:** key 7 → `P` (per-net on/off, interval, preview, verify chain, readability by `www-data`, where it is served). By hand: `grin-node-events publish <net>`, `grin-node-events verify-chain <net>`. Details and the acceptance list: §9, §9.8.
+- **Compare two grin binaries (key 8, the A/B procedure):**
+  1. 086 key 8 on binary A. Pick the node and answer the blocks prompt (5 or 10 gives a usable p95); the
+     run auto-saves.
+  2. Roll back or swap the binary through Script 01 → key G (binary store). The node restarts.
+  3. 086 key 8 again on binary B (`R` in the sub-menu re-runs it for the same node). It saves too.
+  4. Key 8 → `C` compare. The default is the older run as A and the newer as B. When it says "host noise
+     likely", repeat both runs before concluding.
+- **Attach the evidence to an upstream grin issue.** The files are under `/opt/grin/reports/diag/`, mode
+  600: the screen copy of each run (`stratum_<net>_<stamp>.txt`), the stack capture
+  (`stratum_stack_<net>_<stamp>.txt`, key 8 → `4`) and, for the build log, the key 8 → `1` view (not
+  saved to a file: copy its text from the terminal, as with the compare screen of key 8 → `C`). The
+  `.json` baselines are local records, not for upload. The support bundle's `11_stratum_<net>.txt`
+  (key 2) holds config, build log, rejects and threads in one file.
+  - **What 086 already masks:** the reject lines drawn by key 8 → `2` have IP addresses masked and
+    tokens of 20 or more characters removed; the support bundle file goes through `dg_redact` as a
+    whole. The owner secret, pre_pow, nonces and proofs are never written. A shown sha is the first 12
+    hex only.
+  - **What 086 does not mask:** the saved screen copy and the stack capture file are written as drawn,
+    with no redaction pass. Check them, and anything you copy from the terminal, by hand before posting:
+    the hostname and the full paths of your node dir, the wallet listener URL, any pool or miner name
+    in log lines, the install record's `source_ref` and patch names if the build is private, and the
+    frame addresses in the stack file if you do not want to disclose the binary. The masking that does
+    exist is pattern-based, not a guarantee.
 
 ## Build notes — obstacles & lessons
 

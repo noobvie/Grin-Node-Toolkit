@@ -242,6 +242,9 @@
   #quality-table .qv.green, #quality-worker-table .qv.green { color: var(--green); }
   #quality-table .qv.yellow, #quality-worker-table .qv.yellow { color: var(--yellow); }
   #quality-table .qv.red, #quality-worker-table .qv.red { color: var(--red); }
+  #quality-table .qflag { display: inline-block; width: 1.2em; height: 1em; line-height: 1; margin-left: .25rem; text-align: center; vertical-align: baseline; color: var(--yellow); }
+  #quality-table .qflag[role="img"] { cursor: help; }
+  #quality-binary .qflag-key { color: var(--yellow); }
   #quality-table .dimv, #quality-worker-table .dimv { color: var(--muted); }
   #quality-table .qcap, #quality-worker-table .qcap { color: var(--muted); font-size: .8rem; white-space: nowrap; }
   .split-sub { font-size: 1.02rem; margin: 1.3rem 0 .55rem; }
@@ -620,6 +623,7 @@
     <h2>Solo Health · <span style="color:var(--main)">Mainnet</span> <span class="tz-badge fixed" title="Daily counts are bucketed by UTC day (a pre-aggregated series that can't be re-bucketed per visitor).">UTC days</span></h2>
   </div>
   <p class="split-meta" id="quality-meta">—</p>
+  <p class="split-meta" id="quality-binary" style="display:none"></p>
   <div class="table-scroll"><table id="quality-table"><tbody></tbody></table></div>
 
   <!-- Per-worker breakdown: which miner is losing the effective hashrate, so the operator
@@ -641,7 +645,7 @@
   <p class="split-empty" id="quality-empty" style="display:none"></p>
   <details class="info-toggle">
     <summary>ⓘ About this card</summary>
-    <p class="split-foot">At equal <b>effective</b> hashrate, solo and a pool earn the same on average (minus the pool fee) — solo just has higher variance. A persistent shortfall vs a pool usually means lost effective hashrate, and these are the two culprits. <b>Orphaned</b> = a block you found that lost the propagation race and was reorged out (earns nothing) — high orphan&nbsp;% points to poor peering / slow block propagation, so <b>raise your node's peer count</b>. <b>Stale</b> = a solution that arrived after the chain moved on (pure latency loss) — high stale&nbsp;% points to slow job refresh or miner↔node latency. <b>Rejected</b> = invalid/duplicate submissions. Stale/rejected counts depend on the node logging at <code>INFO</code>; verify the parser caught your node's wording with <code>--dry-run</code>. The <b>By worker</b> table lists only workers that currently have a problem (orphaned or stale/rejected&nbsp;> 0), ranked worst-first so you can spot which rig to fix — clean workers are hidden (the count is noted under the table) and a long problem list is capped at the worst 25. Orphans are attributed exactly (to the worker whose share found the block), while stale/rejected are attributed to the worker only when your node names the login on its reject lines — any that don't are counted as <b>unattributed</b> in the note under the table (not shown as a worker row, since they belong to no single rig). <code>--dry-run</code> reports how many of your reject lines carry a login.</p>
+    <p class="split-foot">At equal <b>effective</b> hashrate, solo and a pool earn the same on average (minus the pool fee) — solo just has higher variance. A persistent shortfall vs a pool usually means lost effective hashrate, and these are the two culprits. <b>Orphaned</b> = a block you found that lost the propagation race and was reorged out (earns nothing) — high orphan&nbsp;% points to poor peering / slow block propagation, so <b>raise your node's peer count</b>. <b>Stale</b> = a solution that arrived after the chain moved on (pure latency loss) — high stale&nbsp;% points to slow job refresh or miner↔node latency. <b>Rejected</b> = invalid/duplicate submissions. Stale/rejected counts depend on the node logging at <code>INFO</code>; verify the parser caught your node's wording with <code>--dry-run</code>. The <b>By worker</b> table lists only workers that currently have a problem (orphaned or stale/rejected&nbsp;> 0), ranked worst-first so you can spot which rig to fix — clean workers are hidden (the count is noted under the table) and a long problem list is capped at the worst 25. Orphans are attributed exactly (to the worker whose share found the block), while stale/rejected are attributed to the worker only when your node names the login on its reject lines — any that don't are counted as <b>unattributed</b> in the note under the table (not shown as a worker row, since they belong to no single rig). <code>--dry-run</code> reports how many of your reject lines carry a login. The <b>Node binary</b> line shows which node build is running and when the collector last saw it change (up to 5 minutes after the swap). If stale&nbsp;% rose in the windows marked ⚑ (the node binary changed there), measure how long the node takes to hand out a new job: in the toolkit menu, Admin &amp; Maintenance → Diagnostics &amp; Support → Mining / stratum latency (keys 8 → 6 → 8).</p>
     <p class="split-foot"><b>Why "found" here can be lower than the "All blocks we found" total:</b> Solo Health only counts a block once its fate is chain-verified at <b>1440-block maturity</b> (~24&nbsp;h), so it can be classified as matured or orphaned. Your most recently found blocks are still immature — they show in the all-blocks list but aren't counted here yet, so a small gap (e.g. 33 found vs 31 matured+orphaned) just means those last blocks haven't matured. They'll roll in within ~a day. For the same reason, very recent windows can read 0 orphans.</p>
   </details>
 </section>
@@ -1606,11 +1610,19 @@
     // bound and converge to a slow-moving average that stops being actionable, so the
     // lifetime totals go in the meta line below instead of an ever-growing row.
     var order = [['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly']];
+    var nb = d.quality.node_binary;
+    var nbWin = (nb && Array.isArray(nb.in_windows)) ? nb.in_windows : [];
     var rows = order.map(function (o) {
       var w = q[o[0]] || {};
+      // Every row carries the fixed-width flag slot, empty or not, so the column widths
+      // and row heights do not move when the marker appears or ages out of a window.
+      var flagText = 'Node binary changed inside this window (' + qbTime(nb && nb.since) + ')';
+      var flag = nbWin.indexOf(o[0]) >= 0
+        ? '<span class="qflag" role="img" title="' + flagText + '" aria-label="' + flagText + '">⚑</span>'
+        : '<span class="qflag" aria-hidden="true">&nbsp;</span>';
       var found = (w.matured || 0) + (w.orphan || 0);
       var submitted = (w.accepted || 0) + (w.stale || 0) + (w.rejected || 0);
-      return '<tr><td><span class="w">' + o[1] + '</span></td>'
+      return '<tr><td><span class="w">' + o[1] + '</span>' + flag + '</td>'
         + metricCell(w.orphan_pct || 0, 2, 5, w.orphan || 0, found, found > 0)
         + metricCell(w.stale_pct || 0, 3, 8, w.stale || 0, submitted, submitted > 0)
         + metricCell(w.reject_pct || 0, 1, 5, w.rejected || 0, submitted, submitted > 0)
@@ -1624,7 +1636,50 @@
       + '</b> found block' + (allFound === 1 ? '' : 's')
       + ' · <b>' + fmtQ(all.stale || 0) + '</b> stale + <b>' + fmtQ(all.rejected || 0)
       + '</b> rejected shares';
+    renderQualityBinary(nb);
     renderQualityWorkers();
+  }
+
+  // Node binary marker: split_main.json `quality.node_binary` {version, sha, since,
+  // tracked_since, previous, in_windows}. Always UTC (the card is "UTC days"), whatever the
+  // 🕓 toggle says. Text goes in via textContent because the version string comes from the
+  // node. `in_windows` is computed by the collector, so no window maths is redone here.
+  function qbTime(iso, dayOnly) {
+    var t = new Date(iso);
+    if (isNaN(t.getTime())) return '—';
+    var P = dparts('utc');
+    return P.Y(t) + '-' + pad2(P.M(t) + 1) + '-' + pad2(P.D(t))
+      + (dayOnly ? '' : ' ' + pad2(P.h(t)) + ':' + pad2(P.m(t)) + ' UTC');
+  }
+  function renderQualityBinary(nb) {
+    var el = document.getElementById('quality-binary');
+    if (!el) return;
+    if (!nb || !nb.sha) { el.style.display = 'none'; el.textContent = ''; return; }
+    var cur = (nb.version || 'unknown') + ' · ' + nb.sha;
+    var txt;
+    if (nb.since) {
+      txt = 'Node binary ' + cur + ' — changed ' + qbTime(nb.since);
+      if (nb.previous && nb.previous.sha) {
+        txt += ' (was ' + (nb.previous.version || 'unknown') + ' · ' + nb.previous.sha + ')';
+      }
+    } else {
+      txt = 'Node binary ' + cur + ' — unchanged since tracking began '
+        + qbTime(nb.tracked_since, true) + ' UTC';
+    }
+    el.textContent = txt;
+    // The table's ⚑ has only a hover title, which touch screens never show, so the line
+    // carries its key, in the flag's colour.
+    if (nb.since && Array.isArray(nb.in_windows) && nb.in_windows.length) {
+      var key = document.createElement('span');
+      key.className = 'qflag-key';
+      key.setAttribute('role', 'img');
+      key.setAttribute('aria-label', 'the flag');
+      key.textContent = '⚑';
+      el.appendChild(document.createTextNode(' · '));
+      el.appendChild(key);
+      el.appendChild(document.createTextNode(' marks the windows it falls in'));
+    }
+    el.style.display = '';
   }
 
   // ── Solo Health · per-worker breakdown ──

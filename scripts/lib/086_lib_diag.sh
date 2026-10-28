@@ -230,6 +230,9 @@ dg_triage() {
     # copy from the PREVIOUS node would otherwise be reported as this one's.
     : > "$DG_TMP/other"
     local total; total=$(_dg_num "$(wc -l < "$DG_TMP/ew")")
+    # Accepted shares are info! lines, so the ERROR/WARN filter above drops them;
+    # the stale-share severity needs them as its denominator (design §10.8).
+    DG_TRIAGE_ACC=$(_dg_num "$(grep -aic 'got share at height' "$wf" 2>/dev/null || true)")
 
     # count / first / last per signature; unmatched lines go to $DG_TMP/other
     awk -F'\t' -v other="$DG_TMP/other" '
@@ -276,6 +279,15 @@ _dg_triage_finding() {
         # chain-corrupt is WARN, not CRIT: the same words come from a peer's bad block.
         chain-corrupt|lmdb|clock|wallet-listener)                    sev=WARN ;;
         incomplete-message|api-other) dg_fgt "$rate" 20 && sev=WARN ;;
+        # Stale shares: Solo Health turns yellow at 3 % of (accepted + stale).
+        # Without accepted lines in the window, more than 10 an hour.
+        stale-share)
+            if (( ${DG_TRIAGE_ACC:-0} > 0 )); then
+                awk -v s="$cnt" -v a="${DG_TRIAGE_ACC:-0}" 'BEGIN{exit !(s * 100 / (a + s) > 3)}' && sev=WARN
+            else
+                dg_fgt "$rate" 10 && sev=WARN
+            fi ;;
+        bad-share)                    dg_fgt "$rate" 10 && sev=WARN ;;
         p2p|sync|stratum)             dg_fgt "$rate" 600 && sev=WARN ;;
     esac
     dg_add "$sev" "Log $net" "${DG_SIG_ORIGIN[$idx]}" \

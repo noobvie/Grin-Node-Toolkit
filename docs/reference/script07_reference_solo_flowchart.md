@@ -1,10 +1,11 @@
 # Script 07 — Solo Private Pool Flowchart (Reference)
 
 > **Covers code as of:** 2026-07-06 (the flowchart's own stamp)
-> **Last verified:** never systematically verified (the Code layout section was checked against the split files 2026-10-18; the flowchart itself was not)
+> **Last verified:** never systematically verified (the Code layout section was checked against the split files 2026-10-18; the flowchart itself was not; the "Node binary change marker" section's references were read against `add-ons` at `cdbf2d2` on 2026-10-28, when it was written as a design, and re-read by a separate design review the same day)
 > **Product code last changed:** 2026-10-04 (`a6b0e1b`: planned-stop marker before the stratum-config restart in `07_grin_mining_solo.sh`)
 > Prose last edited 2026-10-12 (moved out of `script07_design.md`, where it was the closing appendix; text unchanged).
 > Code layout section added 2026-10-18 (script split into entry + 3 libs; flowchart text unchanged).
+> "Node binary change marker" section added 2026-10-28 as a design; built and updated to the as-built hint wording and window-day edge the same day (uncommitted, not VPS-tested).
 
 **Product:** `scripts/07_grin_mining_solo.sh` — solo private mining (separate from the public pool,
 [`script07_design.md`](script07_design.md)).
@@ -532,3 +533,206 @@ STATUS: BUILT on `add-ons` 2026-07-22, node --check + integration smoke tests (t
 disposition weights/remainder, reserved+banned exclusion, grandfather, over-balance reject;
 below-min adminOverride locks funds + one-pending cap blocks a 2nd send; recorder dedup
 rejects duplicate kernel/slate/recent, no double-debit — all verified). NOT YET VPS-tested.
+
+---
+
+## Node binary change marker (Solo Health)
+
+**Status:** built 2026-10-28 (collector `07_mining_block_collector.py` and `web/07_mining_pool_solo/index.html`), uncommitted, not VPS-tested. Where the build differs from the text below, the code wins: see the hint sentence and the window rule.
+
+Line references are to the `add-ons` branch at `cdbf2d2`.
+
+### Why it exists
+
+On 2026-10-28 the stale cell in "Solo Health · Mainnet" turned yellow after the operator swapped
+the node binary. The card showed the symptom, but nothing on it said the binary had changed.
+
+The marker puts that fact next to the stale rate. The cause is still measured in Diagnostics &
+Support Bundle (hub 08, key 6) → key 8, Mining / stratum latency
+([`script086_design.md`](script086_design.md) §10).
+
+Solo gets only the marker and one hint sentence. It does not try to diagnose anything.
+
+### Where the collector reads it
+
+There is one new function, `track_node_binary(conn, net, status, now)`, in
+`scripts/lib/07_mining_block_collector.py`. `main()` calls it right after
+`status = query_node_status(args.net)` (`:1706`), on both nets. It runs inside its own
+`try`, so a failure prints one stderr line and never stops the collector run. (cron discards
+that line, `07_solo_stats_page.sh:647`; `--dry-run` shows it.)
+
+- **`--dry-run`** computes the version and the sha and prints them with what it would record
+  ("tracking starts", "unchanged", "change from <sha> to <sha>"). It writes nothing: the
+  dry-run branch returns before `db_connect` (`:1636-1679`), and the marker keeps it that way.
+- **Count-once stays intact.** The function runs after `scan_increment` and before
+  `save_state_db`. It writes only its own table and its own `meta` key, never `log_pos` or a table
+  `save_state_db` rewrites. A crash between the two commits re-reads the same log span on the
+  next run, as it already does, and finds the same sha, so no duplicate row is written.
+
+- **Version.** Taken from `status["user_agent"]`, the running node's `get_status`
+  (`query_node_status`, `:561-581`; grin `api/src/types.rs:76`).
+  - grin builds the string as `MW/Grin <version>[.<git short hash>]` (`p2p/src/msg.rs:49-55`,
+    v5.5.2), so a source build already names its commit. Whether an official release binary
+    carries a hash too is UNVERIFIED.
+  - The `MW/Grin ` prefix is stripped. What remains must match `[0-9A-Za-z.+-]{1,40}`, or the
+    version is stored as null.
+  - If the node is down (`status` is None), the version is null for that run.
+- **sha256.** The hash of `<node_dir(net)>/grin` (`node_dir`, `:527-540`).
+  - The collector runs as root from cron (`scripts/lib/07_solo_stats_page.sh:646-649`), so the
+    file is readable.
+  - The file is hashed again only when its `(st_ino, st_size, st_mtime_ns)` differs from the
+    cached stat. The binary is tens of MB, so it is not hashed every 5 minutes.
+  - **This is the file on disk, not the running image.** Script 01's key G stops the node, swaps
+    the file and starts it again (`01_lib_source_build.sh:893-937`), so the two agree within a run.
+    The version above always comes from the running node, which covers the gap (see change
+    detection).
+
+### Storage
+
+The marker uses the collector's SQLite state database, `solo_mining_stats_<key>.db`
+(`:1593`).
+
+- **A new table** goes into `DB_SCHEMA` (`:307-321`). `db_connect` runs the schema on every
+  connect (`:338`), so the table is created on the next run with no migration:
+
+  ```sql
+  CREATE TABLE IF NOT EXISTS node_binary_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,          -- detection time, epoch seconds
+    sha256 TEXT NOT NULL,      -- full hex; only 12 chars are ever published
+    version TEXT,              -- user_agent without "MW/Grin ", or NULL
+    first INTEGER NOT NULL DEFAULT 0   -- 1 = first row ever: tracking started, not a change
+  );
+  ```
+
+- **The stat cache** is a `meta` row, `node_binary_stat` = `{"ino","size","mtime_ns","sha256"}`,
+  written with `_meta_set` (`:353-354`).
+- **The table is append-only.** It is deliberately not part of `save_state_db` (`:389-426`),
+  which deletes and rewrites every table it owns on each run. `track_node_binary` writes in its
+  own `with conn:` transaction.
+- **Backup.** The table lives in the same `.db`, so the existing tar backup of
+  `/opt/grin/solo-stats/` (`:300-306`) carries it.
+- **Retention.** The `first = 1` row and the newest 20 change rows are kept. Older change rows
+  are deleted in the same transaction. The `first = 1` row is never deleted, because
+  `tracked_since` comes from it.
+
+### Change detection
+
+- **Changes are keyed on the sha.** A new row is written when the sha differs from the newest
+  row's sha. The version alone cannot detect a change: a staging build may keep its version
+  string, and a build without a git checkout adds no commit hash.
+- **`ts` is when the collector noticed,** up to 5 minutes (one cron period) after the swap. The
+  page says "changed", and the ⓘ text does not promise minute precision.
+- **The first run ever** writes one row with `first = 1`. Installing or upgrading the collector
+  is not a binary change, and the page never calls it one.
+- **Swap now, restart later.** While the sha equals the newest row's sha, a different non-null
+  version only **updates** that row's `version`. So a swap followed by a restart a few minutes
+  later is one change, not two.
+- **An unreadable file or a missing hash** writes nothing and keeps the last state. A missing
+  binary does not count as a change.
+
+### JSON field
+
+The marker is published only in `split_main.json` (mainnet). The Solo Health card reads only
+that file, and the card is hidden without it (`index.html:617`). The field sits inside the
+`quality` block, next to `windows`. `main()` adds it to the dict `build_quality` returns
+(`:1268-1274`) before `save_json_atomic` (`:1742-1753`):
+
+```json
+"quality": {
+  "windows": { "...": "unchanged" },
+  "node_binary": {
+    "version": "5.5.2.ab12cd3",
+    "sha": "9f3c1e0a7b2d",
+    "since": "2026-10-27T18:04:11+00:00",
+    "tracked_since": "2026-09-01T00:05:02+00:00",
+    "previous": {"version": "5.5.2", "sha": "41d07c9e55aa"},
+    "in_windows": ["daily", "weekly", "monthly"]
+  }
+}
+```
+
+- `since` is the newest `first = 0` row, or `null` when nothing has changed since tracking
+  began. `previous` is `null` in that case too.
+- `in_windows` names the windows whose span contains `since`, computed by the collector with the
+  same `now` as `build_quality` (`:1263-1274`) and the same day granularity: daily is today (UTC),
+  weekly is `utc_day(since) >= utc_day(now - 7 d)` and monthly is `utc_day(since) >= utc_day(now - 30 d)`.
+  `build_quality` counts shares by UTC day, so a change on the first day of a window is inside it even
+  when it is older than exactly N × 24 h. The page reads the list and never redoes the window maths,
+  so the two cannot drift. It is `[]` when `since` is null.
+- The older change rows stay in the database only. No page reads them, so they are not
+  published.
+- Times use `iso_utc()` (`:240-247`), which carries `+00:00`. They never use `iso()`
+  (`:236-237`), which is naive local time and which the browser would read in the visitor's
+  zone.
+- `node_binary` is omitted entirely when the table is empty. Old pages then ignore it, and a
+  new page shows no line.
+- Testnet rows are kept in the testnet database but never published, since there is no testnet
+  split file.
+
+### How `renderQuality()` shows it
+
+`renderQuality()` is in `web/07_mining_pool_solo/index.html:1595-1640`.
+
+- **New element.** A `<p class="split-meta" id="quality-binary">` sits directly under
+  `#quality-meta` (`:622`). It is hidden when `d.quality.node_binary` is absent.
+- **Text,** set with `textContent`, never `innerHTML`, because the version string comes from the
+  node:
+  - with a change: `Node binary 5.5.2.ab12cd3 · 9f3c1e0a7b2d — changed 2026-10-27 18:04 UTC
+    (was 5.5.2 · 41d07c9e55aa)`;
+  - without one: `Node binary 5.5.2 · 41d07c9e55aa — unchanged since tracking began
+    2026-09-01 UTC`.
+- **Always UTC.** Times are formatted with `dparts('utc')` (`:1108-1120`), whatever the page's
+  🕓 toggle says. The card is already labelled "UTC days" (`:620`), so the marker uses
+  the same zone and says "UTC" once in its line.
+- **Window flag.** Each Daily, Weekly or Monthly row named in `in_windows` gets a `⚑` after its
+  label. Its `title` reads "Node binary changed inside this window (2026-10-27 18:04 UTC)". A
+  stale rate that rose in exactly the windows carrying the flag is the pattern to look for.
+- **Narrow screens.** The line is an ordinary wrapping `<p>`, with no `nowrap`, so at 360 px it
+  wraps instead of scrolling sideways. It sits outside `.table-scroll`, so the table's layout
+  does not change.
+- Nothing else on the card changes. `metricCell`'s 3 % / 8 % thresholds (`:805-810, 1615`) stay
+  as they are.
+
+### Hint sentence (the card's ⓘ text)
+
+One sentence is appended to the first `split-foot` paragraph under "ⓘ About this card"
+(`index.html:643-646`):
+
+> If stale&nbsp;% rose in the windows marked ⚑ (the node binary changed there), measure how long
+> the node takes to hand out a new job: in the toolkit menu, Admin &amp; Maintenance → Diagnostics &amp;
+> Support → Mining / stratum latency (keys 8 → 6 → 8).
+
+As built, the sentence names the menu path the operator types (keys 8 → 6 → 8), not the hub number.
+
+### What is public, and what never is
+
+- **Published:** the version string (sanitised, at most 40 characters) and the first 12 hex
+  characters of the sha.
+- **Never published:**
+  - the binary's path or node dir;
+  - the hostname;
+  - the source ref, commit message or artifact name;
+  - toolkit patch names;
+  - the full sha.
+  - Those stay in the database (the full sha) or are never read (the rest).
+- `health.json` is unchanged. It stays booleans and counts only (`:790-809`).
+- A short sha fingerprints a custom build. That is the purpose, and it says nothing about the
+  host.
+
+### Open items
+
+- **The running image.** Hashing `/proc/<pid>/exe` instead of the file would catch a swap with
+  no restart. But the collector has no pid discovery, and it would need the exe-only match
+  (`gnc_grin_pids_for_dir`, `scripts/lib/grin_node_control.sh:222-235`) ported to python.
+  Deferred.
+- **`node_dir()` prefers the `-full` dir over the running node when both dirs exist.** To be fixed as a
+  separate task by porting the tmux preference of `grin_live_node_dir` (`scripts/lib/grin_node_secrets.sh:65`)
+  into the collector. Not part of the marker's build.
+- **Which dir is hashed.** `node_dir()` picks by conf vars and the presence of a toml
+  (`:527-540`), not by the running process. On a box that still holds both a `-full` and a
+  `-prune` dir after a rebuild, it can name the dir that is not running. The version (from the
+  running node) then changes while the sha does not, and no change row is written. The same
+  choice already decides which log and secret the collector reads.
+- **Pages without the payout split.** With the split disabled there is no `split_main.json`,
+  so neither the card nor the marker exists. This is inherited from the card.

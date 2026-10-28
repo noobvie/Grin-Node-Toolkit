@@ -17,13 +17,18 @@
 #   7  Node event recorder    timeline · availability % · evidence · export for
 #                             an upstream issue · alert settings · install
 #                             (086 design §8; the recorder is lib/grin_node_events.sh)
+#   8  Mining / stratum latency  template delay, stale shares, thread CPU, baselines
+#                             (086 design §10; lib/086_lib_stratum*.sh)
 #
-# ⚠ READ-ONLY, with two deliberate, announced exceptions:
+# ⚠ READ-ONLY, with deliberate, announced exceptions:
 #   · Option 5 stops and restarts explorer services, behind a typed "yes".
 #     It restarts ONLY units it stopped, and does so from an EXIT trap too, so
 #     Ctrl+C mid-test does not leave an explorer down.
 #   · Option 3's IncompleteMessage experiments add one or two lines to the node
 #     log. They are off unless the operator says yes.
+#   · Option 8 adds one stratum connection while it probes, and may install
+#     elfutils/gdb or pause the node briefly for a stack capture, each behind a
+#     typed y. It never changes a toml key or restarts a node.
 #   Option 7 installs/removes the recorder and edits ITS config when asked to;
 #   the recorder itself never signals a node.
 #
@@ -81,6 +86,12 @@ source "$SCRIPT_DIR/lib/086_lib_diag.sh"
 # recorder's capture hook.
 source "$SCRIPT_DIR/lib/086_lib_recorder.sh"
 source "$SCRIPT_DIR/lib/grin_node_keepalive.sh"
+# Mining / stratum latency (option 8). Fixed order: the first file holds the
+# shared state, _stack and _baseline depend on it, _screen on all three.
+source "$SCRIPT_DIR/lib/086_lib_stratum.sh"
+source "$SCRIPT_DIR/lib/086_lib_stratum_stack.sh"
+source "$SCRIPT_DIR/lib/086_lib_stratum_baseline.sh"
+source "$SCRIPT_DIR/lib/086_lib_stratum_screen.sh"
 
 # ─── Scratch + restart-on-exit ────────────────────────────────────────────────
 DG_TMP=$(mktemp -d /tmp/grin-diag.XXXXXX) || { error "mktemp failed"; exit 1; }
@@ -88,6 +99,10 @@ chmod 700 "$DG_TMP" 2>/dev/null || true
 STOPPED_UNITS=()
 _cleanup() {
     local u
+    # A stratum probe still running is stopped (socket closed); a stack
+    # capture that was interrupted may have left the node stopped.
+    dgs_probe_cleanup
+    dgs_stack_cleanup
     for u in "${STOPPED_UNITS[@]}"; do
         echo "  restarting $u"
         systemctl start "$u" 2>/dev/null || echo "  !! could not restart $u — run: systemctl start $u"
@@ -273,6 +288,7 @@ quick_check() {
         for n in "${DG_NODES[@]}"; do
             IFS='|' read -r pid dir net host port <<< "$n"
             dg_check_node "$pid" "$dir" "$net" "$host" "$port"
+            dgs_quick_finding "$pid" "$dir" "$net"
             lf=$(dg_node_logfile "$dir")
             dg_log_window "$lf" "$(_since_str "$since_e")" "$since_e" \
                 | dg_log_filter "$(_since_str "$since_e")" > "$DG_TMP/win" 2>/dev/null || true
@@ -370,6 +386,12 @@ build_bundle() {
         > "$dir/09_proc_sample.txt" 2>&1
     info "Node event recorder state..."
     dgr_support_section > "$dir/10_recorder.txt" 2>&1
+    for n in "${DG_NODES[@]}"; do
+        IFS='|' read -r pid dir_n net _ _ <<< "$n"
+        [[ "$(dg_tv "$dir_n/grin-server.toml" enable_stratum_server)" == true ]] || continue
+        info "Node $net — stratum latency (config, build log, rejects, threads)..."
+        dgs_bundle_file "$pid" "$dir_n" "$net" 2>&1 | dg_redact > "$dir/11_stratum_$net.txt"
+    done
 
     {
         echo "Grin Node Toolkit — diagnostics support bundle"
@@ -399,6 +421,7 @@ build_bundle() {
         echo "  08_history.txt       sar history (yesterday + today)"
         echo "  09_proc_sample.txt   30 s CPU/disk per node and toolkit service"
         echo "  10_recorder.txt      node event recorder: status + last 20 ledger events per net"
+        echo "  11_stratum_<net>.txt stratum latency: config, build log, rejects, threads, last probe"
     } > "$dir/00_summary.txt" 2>&1
 
     tar -czf "$REPORT_DIR/$name.tar.gz" -C "$REPORT_DIR" "$name" 2>/dev/null \
@@ -596,15 +619,17 @@ saved_reports() {
     ls -lht "$REPORT_DIR" 2>/dev/null | tail -n +2 | awk '{printf "  %6s  %s %s %s  %s\n", $5, $6, $7, $8, $9}'
     echo ""
     echo -e "  ${DIM}Total: $(du -sh "$REPORT_DIR" 2>/dev/null | cut -f1)${RESET}"
+    echo -e "  ${DIM}Stratum latency screens (stratum_*.txt) are deleted with the rest; the .json baselines are kept${RESET}"
+    echo -e "  ${DIM}so a before/after compare still works. Remove one by hand if you no longer need it.${RESET}"
     echo ""
     local days
     ui_ask days "Delete reports older than how many days? (q = keep all)" || { info "Kept everything."; pause; return 0; }
     [[ "$days" =~ ^[0-9]+$ ]] || { warn "Not a number — nothing deleted."; pause; return 0; }
     local cnt
     cnt=$(find "$REPORT_DIR" -maxdepth 1 -type f -mtime +"$days" \
-          \( -name 'grin_diag_*' -o -name 'api_perf_*' -o -name 'consumer_load_*' \) 2>/dev/null | wc -l)
+          \( -name 'grin_diag_*' -o -name 'api_perf_*' -o -name 'consumer_load_*' -o -name 'stratum_*.txt' \) 2>/dev/null | wc -l)
     find "$REPORT_DIR" -maxdepth 1 -type f -mtime +"$days" \
-        \( -name 'grin_diag_*' -o -name 'api_perf_*' -o -name 'consumer_load_*' \) -delete 2>/dev/null \
+        \( -name 'grin_diag_*' -o -name 'api_perf_*' -o -name 'consumer_load_*' -o -name 'stratum_*.txt' \) -delete 2>/dev/null \
         || { error "Delete failed."; pause; return 1; }
     success "Deleted $cnt file(s) older than $days day(s)."
     log "[086] deleted $cnt reports older than $days days"
@@ -1446,6 +1471,7 @@ show_menu() {
     echo -e "  ${CYAN}3${RESET})   Node API performance      ${DIM}get_block cold/warm · parallel burst${RESET}"
     echo -e "  ${CYAN}4${RESET})   Node log triage           ${DIM}known error signatures · hourly timeline${RESET}"
     echo -e "  ${YELLOW}5${RESET})   Consumer load test        ${DIM}pauses explorers ~1 min (asks first)${RESET}"
+    echo -e "  ${CYAN}8${RESET})   Mining / stratum latency  ${DIM}template delay · stale shares · threads${RESET}"
     echo ""
     echo -e "${BOLD}  Over time${RESET}"
     echo -e "  ${CYAN}7${RESET})   Node event recorder       ${DIM}timeline · availability % · evidence · alerts${RESET}"
@@ -1453,9 +1479,9 @@ show_menu() {
     echo -e "  ${DIM}6${RESET})   Saved reports             ${DIM}list · delete old${RESET}"
     echo -e "  ${DIM}0${RESET})   Return to admin centre"
     echo ""
-    echo -e "  ${DIM}Read-only except option 5 (and 7's install/settings). Reports: $REPORT_DIR${RESET}"
+    echo -e "  ${DIM}Read-only except option 5 (and 7's install/settings, 8's optional installs). Reports: $REPORT_DIR${RESET}"
     echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [0-7]: ${RESET}"
+    echo -ne "${BOLD}Select [0-8]: ${RESET}"
 }
 
 main() {
@@ -1473,6 +1499,7 @@ main() {
             "5") consumer_load_test || true ;;
             "6") saved_reports      || true ;;
             "7") rec_menu           || true ;;
+            "8") stratum_latency    || true ;;
             "0") break ;;
             *)   warn "Invalid option." ; sleep 1 ;;
         esac

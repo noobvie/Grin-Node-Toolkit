@@ -30,6 +30,9 @@ REGISTRY="$SCRIPT_DIR/../extensions/grinmasternodes.json"
 MASTER_LOG_FILE="$LOG_DIR/grin_master_nodes_status_$(date +%Y%m%d_%H%M%S).log"
 MASS_DEPLOY_CONF="$CONF_DIR/mass_deploy.conf"
 GITHUB_REPO_DEFAULT="noobvie/Grin-Node-Toolkit"
+# accept-new trusts a host on first contact but refuses a CHANGED host key, so a
+# swapped or spoofed server never receives commands or binaries silently.
+MD_SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=yes -o LogLevel=ERROR"
 
 # ─── Colors (disabled when not a terminal) ────────────────────────────────────
 if [[ -t 1 ]]; then
@@ -48,6 +51,14 @@ info()    { echo -e "${CYAN}[INFO]${RESET}  $*"; }
 success() { echo -e "${GREEN}[OK]${RESET}    $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; }
 error()   { echo -e "${RED}[ERROR]${RESET} $*"; }
+
+# Binary push / rollback (Remote Node Control keys f, g)
+if [[ -f "$SCRIPT_DIR/lib/081_lib_binary_push.sh" ]]; then
+    # shellcheck source=lib/081_lib_binary_push.sh
+    source "$SCRIPT_DIR/lib/081_lib_binary_push.sh"
+else
+    warn "Binary push library missing ($SCRIPT_DIR/lib/081_lib_binary_push.sh) - keys f/g unavailable until a toolkit update."
+fi
 
 # ─── Runtime state (global associative arrays) ────────────────────────────────
 declare -A RESULTS      # key="host:port"  → "UP" or "DOWN"
@@ -705,7 +716,7 @@ _md_load_conf() {
 _md_ssh() {
     local _label="$1" _host="$2" _port="$3" _user="$4" _key="$5"
     shift 5
-    local _ssh_opts="-o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes -o LogLevel=ERROR"
+    local _ssh_opts="$MD_SSH_OPTS"
     [[ -n "$_key" && -f "$_key" ]] && _ssh_opts="$_ssh_opts -i $_key"
     ssh $_ssh_opts -p "$_port" "$_user@$_host" "$@" 2>&1
 }
@@ -740,7 +751,7 @@ _md_select_servers() {
         for _n in "${_nums[@]}"; do
             _n="${_n// /}"
             if [[ "$_n" =~ ^[0-9]+$ ]] && (( _n >= 1 && _n <= ${#_md_labels[@]} )); then
-                _md_selected_idx+="$((_n-1))"
+                _md_selected_idx+=("$((_n-1))")
             else
                 warn "  Ignoring invalid selection: $_n"
             fi
@@ -772,7 +783,7 @@ _md_run_on_servers() {
         _user="${_md_users[$_idx]}"
         _key="${_md_keys[$_idx]}"
         printf "  ${BOLD}[%-16s]${RESET}  %s@%s  ... " "$_label" "$_user" "$_host"
-        local _ssh_opts="-o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes -o LogLevel=ERROR"
+        local _ssh_opts="$MD_SSH_OPTS"
         [[ -n "$_key" && -f "$_key" ]] && _ssh_opts="$_ssh_opts -i $_key"
         local _out
         _out=$(echo "$_remote_script" | ssh $_ssh_opts -p "$_port" "$_user@$_host" "bash -s" 2>&1) || true
@@ -1109,7 +1120,7 @@ cp -rf /tmp/gnt-update/\$extracted/. '${_tpath}'/ && \
 chmod +x '${_tpath}'/grin-node-toolkit.sh '${_tpath}'/scripts/*.sh 2>/dev/null || true && \
 rm -rf /tmp/gnt-update && \
 echo __OK__"
-        local _ssh_opts="-o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes -o LogLevel=ERROR"
+        local _ssh_opts="$MD_SSH_OPTS"
         [[ -n "$_key" && -f "$_key" ]] && _ssh_opts="$_ssh_opts -i $_key"
         local _out
         _out=$(echo "$_remote_script" | ssh $_ssh_opts -p "$_port" "$_user@$_host" "bash -s" 2>&1) || true
@@ -1343,39 +1354,145 @@ echo __OK__
 }
 
 # -----------------------------------------------------------------------------
-# _md_ctrl_upgrade — download latest grin release and restart on selected servers
+# _md_ctrl_upgrade — upgrade selected servers to the latest OFFICIAL grin release
+#
+# The remote script is self-contained (remote boxes have no toolkit libs) and
+# runs in this order so a bad download can never take a node down:
+#   1. fetch the release JSON, pick the linux-x86_64 tarball (the asset the
+#      local installer in lib/01_lib_node_ops.sh picks), download into a
+#      mktemp dir, extract, locate the `grin` binary;
+#   2. refuse unless the new binary runs and prints a version; verify the
+#      sha256 asset when the release publishes one — the node is untouched
+#      up to here;
+#   3. stop the nodes, then per node dir: keep the old binary as grin.prev,
+#      install the new one via grin.new + mv (a running binary cannot be
+#      overwritten in place — "Text file busy"), write .grin_binary_info in
+#      the format lib/01_lib_source_build.sh writes;
+#   4. start the nodes again. A dir that fails after the stop gets its
+#      grin.prev put back, and the start step still runs, so the upgrade
+#      never leaves a node down. `__OK__` is printed only if every dir worked.
+# No `set -e`: every fallible step carries its own guard.
+# Restart goes through the shared stop+start snippets: stop clears sessions on
+# BOTH tmux servers and sweeps grin processes; start relaunches grin-owned on
+# grin's tmux socket (gtmux) — never root-run.
 # -----------------------------------------------------------------------------
 _md_ctrl_upgrade() {
     if ! _md_select_servers; then
         echo "Press Enter to continue..."; read -r
         return
     fi
-    local _script='
-set -e
+    echo ""
+    echo -ne "  ${BOLD}Upgrade to latest official release and RESTART nodes on ${#_md_selected_idx[@]} server(s)? [y/N]: ${RESET}"
+    local _confirm
+    read -r _confirm
+    [[ ! "$_confirm" =~ ^[Yy]$ ]] && { info "Cancelled."; return; }
+
+    local _script=""
+    read -r -d '' _script <<'EOS' || true
+# A dropped SSH session must not kill this script between the stop and the
+# start below — that would leave every node on the box down. PIPE too: once
+# the session is gone, the next echo would otherwise kill the script.
+trap '' HUP PIPE
 GRIN_API="https://api.github.com/repos/mimblewimble/grin/releases/latest"
-LATEST_URL=$(curl -fsSL "$GRIN_API" | grep browser_download_url | grep linux-amd64 | cut -d'"'"'"'"'"'"'"'"'"'"'"'"'"'"'"'"'"'"'"'"' -f4)
-[[ -z "$LATEST_URL" ]] && { echo "ERROR: could not get latest release URL"; exit 1; }
-TMP=$(mktemp -d)
-echo "  downloading: $LATEST_URL"
-curl -fsSL "$LATEST_URL" | tar -xz -C "$TMP"
-upgraded=0
-for dir in /opt/grin/node/mainnet-prune /opt/grin/node/mainnet-full /opt/grin/node/testnet-prune; do
-    [[ -d "$dir" ]] || continue
-    cp "$TMP/grin" "$dir/grin" && chmod +x "$dir/grin"
-    id grin &>/dev/null && chown grin:grin "$dir/grin" || true
-    echo "  upgraded: $dir"
-    upgraded=$((upgraded+1))
+NODE_DIRS="/opt/grin/node/mainnet-prune /opt/grin/node/mainnet-full /opt/grin/node/testnet-prune"
+FOUND=0
+for d in $NODE_DIRS; do [[ -x "$d/grin" ]] && FOUND=$((FOUND+1)); done
+[[ $FOUND -eq 0 ]] && { echo "ERROR: no installed grin node under /opt/grin/node"; exit 1; }
+command -v curl >/dev/null 2>&1 || { echo "ERROR: curl not installed"; exit 1; }
+
+TMP=$(mktemp -d) || { echo "ERROR: mktemp failed"; exit 1; }
+trap 'rm -rf "$TMP"' EXIT
+
+JSON=$(curl -fsSL --max-time 30 "$GRIN_API") || { echo "ERROR: could not reach the GitHub API"; exit 1; }
+if command -v jq >/dev/null 2>&1; then
+    TAG=$(printf '%s' "$JSON" | jq -r '.tag_name // empty')
+    URLS=$(printf '%s' "$JSON" | jq -r '.assets[].browser_download_url')
+else
+    TAG=$(printf '%s' "$JSON" | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*: *"//; s/"$//')
+    URLS=$(printf '%s' "$JSON" | grep -o '"browser_download_url": *"[^"]*"' | sed 's/.*: *"//; s/"$//')
+fi
+TAR_URL=$(printf '%s\n' "$URLS" | grep -iE 'linux-x86_64\.tar\.gz$' | head -1)
+SUM_URL=$(printf '%s\n' "$URLS" | grep -i 'sha256' | grep -i 'linux-x86_64' | head -1)
+[[ -z "$TAR_URL" ]] && { echo "ERROR: no linux-x86_64 asset in release '${TAG:-?}'"; exit 1; }
+echo "  latest release: ${TAG:-unknown}"
+echo "  downloading   : $TAR_URL"
+curl -fsSL --max-time 600 -o "$TMP/grin.tar.gz" "$TAR_URL" || { echo "ERROR: download failed"; exit 1; }
+
+if [[ -n "$SUM_URL" ]]; then
+    # The release file is BSD-style ("SHA2-256(<file>)= <hex>"), so take the
+    # digest by its shape, not by column.
+    WANT=$(curl -fsSL --max-time 30 "$SUM_URL" | grep -oiE '[0-9a-f]{64}' | head -1 | tr 'A-F' 'a-f') || WANT=""
+    HAVE=$(sha256sum "$TMP/grin.tar.gz" | awk '{print $1}')
+    if [[ -z "$WANT" || "$WANT" != "$HAVE" ]]; then
+        echo "ERROR: sha256 mismatch or checksum unreadable (want '${WANT:-none}', have '$HAVE')"
+        exit 1
+    fi
+    echo "  sha256 verified"
+else
+    echo "  no checksum published"
+fi
+
+mkdir -p "$TMP/x" && tar -xzf "$TMP/grin.tar.gz" -C "$TMP/x" || { echo "ERROR: extract failed"; exit 1; }
+NEWBIN=$(find "$TMP/x" -type f -name grin | grep -v grin-wallet | head -1)
+[[ -z "$NEWBIN" ]] && { echo "ERROR: no 'grin' binary in the archive"; exit 1; }
+chmod 755 "$NEWBIN" || { echo "ERROR: chmod failed"; exit 1; }
+NEWV=$("$NEWBIN" --version 2>&1 | head -1)
+if ! printf '%s' "$NEWV" | grep -qE '[0-9]+\.[0-9]+'; then
+    echo "ERROR: new binary does not report a version ('$NEWV') — nodes untouched"
+    exit 1
+fi
+echo "  new binary    : $NEWV"
+
+declare -A OLDV
+for d in $NODE_DIRS; do
+    [[ -x "$d/grin" ]] && OLDV[$d]=$("$d/grin" --version 2>&1 | head -1) || OLDV[$d]="(none)"
 done
-rm -rf "$TMP"
-[[ $upgraded -eq 0 ]] && { echo "  no node dirs found"; exit 0; }
-set +e
-'
-    # Restart via the shared stop+start snippets: stop clears sessions on BOTH
-    # tmux servers and sweeps grin processes; start relaunches grin-owned on
-    # grin's tmux socket (gtmux) — never root-run.
-    _script+="${_MD_NODE_STOP_SNIPPET}
+
+EOS
+    _script+="${_MD_NODE_STOP_SNIPPET}"
+    local _tail=""
+    read -r -d '' _tail <<'EOS' || true
+
+FAIL=0
+for d in $NODE_DIRS; do
+    # Only dirs that already run a node — an empty dir must not gain a binary
+    # the start snippet would then launch.
+    [[ -x "$d/grin" ]] || continue
+    echo "  $d: ${OLDV[$d]:-(none)} -> $NEWV"
+    HAD_PREV=0
+    if [[ -f "$d/grin" ]]; then
+        if cp -a "$d/grin" "$d/grin.prev"; then
+            HAD_PREV=1
+        else
+            echo "  ERROR: could not back up $d/grin — skipped"; FAIL=1; continue
+        fi
+    fi
+    if install -m 755 "$NEWBIN" "$d/grin.new" && mv -f "$d/grin.new" "$d/grin"; then
+        id grin &>/dev/null && chown grin:grin "$d/grin" 2>/dev/null
+        {
+            echo "# Installed by Grin Node Toolkit — official release (081 remote upgrade)"
+            echo "installed_utc = $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo "artifact      = ${TAG:-unknown}"
+            echo "version_str   = $NEWV"
+            echo "replaced      = ${OLDV[$d]:-(none)}"
+            echo "rollback      = cp -a $d/grin.prev $d/grin   # then restart the node"
+        } > "$d/.grin_binary_info" || echo "  WARN: could not write $d/.grin_binary_info"
+        id grin &>/dev/null && chown grin:grin "$d/.grin_binary_info" 2>/dev/null
+        echo "  upgraded: $d"
+    else
+        echo "  ERROR: install into $d failed"
+        rm -f "$d/grin.new"
+        if [[ $HAD_PREV -eq 1 ]]; then
+            cp -a "$d/grin.prev" "$d/grin" && echo "  restored previous binary in $d" \
+                || echo "  ERROR: could not restore $d/grin"
+        fi
+        FAIL=1
+    fi
+done
+EOS
+    _script+="${_tail}
 ${_MD_NODE_START_SNIPPET}
-echo __OK__
+if [[ \$FAIL -eq 0 ]]; then echo __OK__; fi
 "
     _md_run_on_servers "Upgrade grin binary" "$_script"
 }
@@ -1435,9 +1552,11 @@ mass_deploy_control() {
         echo -e "  ${CYAN}c${RESET}) Restart nodes"
         echo -e "  ${CYAN}d${RESET}) Upgrade grin binary"
         echo -e "  ${RED}e${RESET}) Reboot servers"
+        echo -e "  ${CYAN}f${RESET}) Push binary from this server"
+        echo -e "  ${CYAN}g${RESET}) Roll back pushed binary"
         echo -e "  ${DIM}0${RESET}) Back"
         echo ""
-        echo -ne "${BOLD}Select [0/a-e]: ${RESET}"
+        echo -ne "${BOLD}Select [0/a-g]: ${RESET}"
         local _choice
         read -r _choice
         case "$_choice" in
@@ -1446,6 +1565,10 @@ mass_deploy_control() {
             c) _md_ctrl_restart ;;
             d) _md_ctrl_upgrade ;;
             e) _md_ctrl_reboot ;;
+            f) if declare -F _mdp_push >/dev/null; then _mdp_push || true
+               else warn "binary push lib not installed — run Push toolkit update"; sleep 2; fi ;;
+            g) if declare -F _mdp_rollback >/dev/null; then _mdp_rollback || true
+               else warn "binary push lib not installed — run Push toolkit update"; sleep 2; fi ;;
             0) break ;;
             *) warn "Invalid selection."; sleep 1 ;;
         esac

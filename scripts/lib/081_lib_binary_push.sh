@@ -473,11 +473,23 @@ _mdp_push() {
     echo "    sha256  : $_MDP_SHA"
     echo "    servers : ${#_md_selected_idx[@]} (one at a time, ${_MDP_PAUSE}s pause)"
     warn "Every node on a server is STOPPED before its binary is swapped, and left stopped."
-    echo -ne "  ${BOLD}Pre-flight only (dry run)? [y/N]: ${RESET}"
-    read -r ans; _MDP_DRY=0; [[ "$ans" =~ ^[Yy]$ ]] && _MDP_DRY=1
-    echo -ne "  ${BOLD}Proceed? [y/N]: ${RESET}"
-    read -r ans
-    [[ "$ans" =~ ^[Yy]$ ]] || { info "Cancelled."; return 0; }
+    echo ""
+    echo -e "  ${BOLD}Mode:${RESET}"
+    echo -e "    ${CYAN}1${RESET}) Full push  ${DIM}check + copy + stop nodes + swap binary${RESET}"
+    echo -e "    ${CYAN}2${RESET}) Dry run    ${DIM}check + copy to /opt/grin/bin only — nodes keep running${RESET}"
+    echo -ne "  ${BOLD}Select mode [1]: ${RESET}"
+    # read fails only at EOF (no operator): decline rather than take a default.
+    read -r ans || ans=0
+    case "${ans:-1}" in
+        1) _MDP_DRY=0 ;;
+        2) _MDP_DRY=1 ;;
+        *) info "Cancelled."; return 0 ;;
+    esac
+    local _what="FULL PUSH — nodes will be stopped and swapped"
+    (( _MDP_DRY )) && _what="DRY RUN — no node is touched"
+    echo -ne "  ${BOLD}Proceed (${_what})? [Y/n]: ${RESET}"
+    read -r ans || ans=n
+    [[ "$ans" =~ ^[Nn] ]] && { info "Cancelled."; return 0; }
     log "[BINARY PUSH] start artifact=$_MDP_NAME sha256=$_MDP_SHA dry=$_MDP_DRY servers=${#_md_selected_idx[@]}"
     _mdp_run_hosts _mdp_host_push
     _mdp_summary

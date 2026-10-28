@@ -61,9 +61,29 @@ function loadInject(published) {
   const from = serverJs.indexOf('const SLOGAN');
   const to   = serverJs.indexOf('// index (/) and block (/block/:ref)');
   assert.ok(from > -1 && to > from, 'could not locate injectGlobals');
-  return new Function('config', 'domain', 'baseUrl', 'VERSION', 'walletProbeEnabled', 'availPublished',
+  return new Function('config', 'domain', 'baseUrl', 'VERSION', 'walletProbeEnabled', 'availPublished', 'versionAssets',
     serverJs.slice(from, to) + '\nreturn injectGlobals;')
-    ({}, 'scan.example.org', HOST, '0.0.0', false, () => published);
+    ({}, 'scan.example.org', HOST, '0.0.0', false, () => published, h => h);
+}
+
+// versionAssets, lifted from its banner to the SEO banner and run against a
+// stub fs whose `mtimes` maps a webDir-relative path to an mtime in ms.
+function loadVersionAssets(mtimes) {
+  const from = serverJs.indexOf('// ── Asset versioning');
+  const to   = serverJs.indexOf('// ── HTML pages with injected SEO');
+  assert.ok(from > -1 && to > from, 'could not locate versionAssets');
+  const stats = [];
+  const fakeFs = {
+    statSync(p) {
+      const rel = path.relative('/web', p).split(path.sep).join('/');
+      stats.push(rel);
+      if (!(rel in mtimes)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      return { mtimeMs: mtimes[rel] };
+    },
+  };
+  const versionAssets = new Function('fs', 'path', 'webDir', serverJs.slice(from, to) + '\nreturn versionAssets;')
+    (fakeFs, path, '/web');
+  return { versionAssets, stats };
 }
 const robotsOf = html => (html.match(/<meta name="robots" content="([^"]+)">/) || [])[1];
 
@@ -339,6 +359,37 @@ ok('each stable path has a route that serves it', () => {
     assert.ok(serverJs.includes("app.get('" + p + "'"), 'no route serves ' + p);
   }
   assert.ok(/app\.get\('\/',/.test(serverJs), 'no route serves /');
+});
+
+// ── asset versioning ────────────────────────────────────────────────────────
+// Cloudflare holds a /js or /css file for 4 h in the browser, so a script or
+// stylesheet a page names without ?v= runs stale for that long after a deploy.
+
+ok('every page names each on-disk script and stylesheet with a ?v= version', () => {
+  const mtimes = {};
+  for (const d of ['js', 'css']) {
+    for (const f of fs.readdirSync(path.join(WEBDIR, d))) mtimes[d + '/' + f] = 1700000000000;
+  }
+  const { versionAssets } = loadVersionAssets(mtimes);
+  for (const f of fs.readdirSync(WEBDIR).filter(n => n.endsWith('.html'))) {
+    const out = versionAssets(fs.readFileSync(path.join(WEBDIR, f), 'utf8'));
+    const refs = out.match(/(?:src|href)="\/(?:js|css)\/[^"]+"/g) || [];
+    assert.ok(refs.length, f + ' names no script or stylesheet');
+    for (const r of refs) {
+      if (r.includes('/js/analytics.js')) continue;
+      assert.ok(/\?v=[0-9a-z]+"$/.test(r), f + ': ' + r + ' is not versioned');
+    }
+  }
+});
+
+ok('a path with no file on disk keeps its plain URL, and each mtime is read once', () => {
+  const { versionAssets, stats } = loadVersionAssets({ 'js/tiny-explorer.js': 1700000000000 });
+  const html = '<script src="/js/tiny-explorer.js"></script><script src="/js/analytics.js"></script>';
+  const out = versionAssets(html);
+  assert.strictEqual(out, '<script src="/js/tiny-explorer.js?v=' + (1700000000000).toString(36)
+    + '"></script><script src="/js/analytics.js"></script>');
+  versionAssets(html);
+  assert.deepStrictEqual(stats, ['js/tiny-explorer.js', 'js/analytics.js']);
 });
 
 console.log('\n' + '─'.repeat(72));

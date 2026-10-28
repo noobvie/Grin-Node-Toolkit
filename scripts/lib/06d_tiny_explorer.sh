@@ -112,6 +112,41 @@ _tinyx_ensure_tor() {
     return 1
 }
 
+# ── Availability page ──────────────────────────────────────────────────────────
+
+# One "Uptime" row: where /availability is served, or what turns it on. The record
+# is written by the node event recorder in Diagnostics, never by this lib, so the
+# row names that path instead of offering to do it from here. "published" needs
+# the running service to answer 200, so an unreadable dir or an old build that
+# lacks the route shows as a problem, not as a green tick.
+_tinyx_avail_status() {
+    local dir="/opt/grin/node-events/mainnet/public" d="" domain="" code=""
+    local path_hint="Admin & Maintenance → Diagnostics → Node event recorder"
+    if [[ -f "$TINYX_CONFIG" ]]; then
+        d=$(sed -n 's/^[[:space:]]*"availability_dir"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TINYX_CONFIG" 2>/dev/null | head -1)
+        if [[ "$d" =~ ^/[A-Za-z0-9_./-]+$ ]]; then dir="$d"; fi
+    fi
+    if [[ -f "$NGINX_TINYX_CONF" ]]; then
+        domain=$(grep -E "^\s+server_name " "$NGINX_TINYX_CONF" | awk '{print $2}' | tr -d ';' | head -1)
+    fi
+    if [[ -f "$dir/availability.json" ]] && ! systemctl is-active --quiet "$TINYX_SVC"; then
+        echo -e "  Uptime:   ${DIM}record ready in ${dir} — served once the service runs${RESET}"
+    elif [[ -f "$dir/availability.json" ]]; then
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 4 "http://127.0.0.1:${TINYX_PORT}/api/availability" 2>/dev/null || true)
+        if [[ "$code" == 200 ]]; then
+            echo -e "  Uptime:   ${GREEN}✓ published${RESET}  ${DIM}https://${domain:-<domain>}/availability${RESET}"
+        else
+            echo -e "  Uptime:   ${YELLOW}record in ${dir}, but /api/availability answers ${code:-nothing}${RESET}"
+            echo -e "            ${DIM}Old build: U) Update. Not readable by www-data: ${path_hint} → P → 6${RESET}"
+        fi
+    elif [[ -x /usr/local/bin/grin-node-events ]]; then
+        echo -e "  Uptime:   ${DIM}not published — turn on: ${path_hint} → P${RESET}"
+    else
+        echo -e "  Uptime:   ${DIM}not published — the node event recorder is not installed${RESET}"
+        echo -e "            ${DIM}${path_hint} → I, then P${RESET}"
+    fi
+}
+
 # ── Deploy ──────────────────────────────────────────────────────────────────────
 
 # The ONE place app files are copied to the box. Both tinyx_install and
@@ -255,6 +290,8 @@ UNIT
         success "Tiny Explorer installed."
         echo -e "  Next: run ${BOLD}Configure (2)${RESET} to write config.json."
     fi
+    echo ""
+    _tinyx_avail_status
     log "tinyx_install complete"
     pause
 }
@@ -497,6 +534,8 @@ JSON
     else
         echo -e "  Next: ${BOLD}Service Control (3) → Start${RESET}, then ${BOLD}Setup Nginx (4)${RESET}."
     fi
+    echo ""
+    _tinyx_avail_status
     log "tinyx_configure: ${domain} → ${TINYX_CONFIG}"
     pause
 }
@@ -756,6 +795,7 @@ tinyx_status() {
     else
         echo -e "  Nginx:    ${YELLOW}not configured${RESET}"
     fi
+    _tinyx_avail_status
 
     if [[ "$active" == active ]]; then
         local tip; tip=$(curl -s --max-time 4 "http://127.0.0.1:${TINYX_PORT}/api/tip" 2>/dev/null || true)

@@ -306,10 +306,15 @@ The operator side: 086 has a new key `7`, **Node event recorder**, under a new
 "Over time" group. Its read side is `lib/086_lib_recorder.sh` (`dgr_*`); the screens are
 `rec_*` in `086_grin_diagnostics.sh`. Where the build differs from §8.12, or adds to it:
 
-- **Sub-menu keys.** View: `1` Timeline, `2` Availability, `3` Show evidence, `4` Export,
-  `C` Capture evidence now. Set up: `5` Alert settings, `I` Install / refresh, `R` Remove,
-  `S` Status. The header shows each net's state from `status.json`, and says STALE when it is
-  older than 120 s.
+- **Sub-menu keys.** Set up is listed first, in the order a new box needs it: `I` Install /
+  refresh, `P` Public status page, `A` Alert settings, `S` Status, `R` Remove. View follows:
+  `1` Timeline, `2` Availability, `3` Show evidence, `4` Export, `C` Capture evidence now.
+  `5` (Alert settings' old key) stays a silent alias, since nothing else took it. The header
+  shows each net's state from `status.json`, says STALE when it is older than 120 s, and
+  adds "next: P) publish" while the recorder is installed and no net publishes.
+- **`I` ends by offering `P`.** When mainnet does not publish yet, the install screen calls
+  `_rec_pub_toggle mainnet`, which asks its own `[y/N]` and explains what goes public. That
+  makes I → P one pass. Only mainnet is offered, because it is what the Tiny Explorer serves.
 - **`C` Capture evidence now** is new. It runs the worker's `capture <net> manual` (§8.16),
   which writes a bundle with no ledger line and no state change. It needs the recorder
   installed, because it runs the installed worker.
@@ -637,7 +642,7 @@ Not tested: a real browser, real `jq`, `timeout` killing under systemd, `stat -c
 ## Runbook
 
 - **Install or refresh the recorder:** 086 key 7 → `I` (re-running it is how a box picks up a toolkit update; it offers to regenerate the sync watchdog when that has no `capture` line). Script 01 offers it in its wizard and installs it in Super Auto.
-- **Look at what happened:** key 7 → `1` Timeline, `2` Availability, `3` Show evidence, `4` Export (masked tarball for an upstream issue), `C` Capture evidence now, `5` Alert settings, `S` Status, `R` Remove.
+- **Look at what happened:** key 7 → `1` Timeline, `2` Availability, `3` Show evidence, `4` Export (masked tarball for an upstream issue), `C` Capture evidence now. Set up: `I` Install / refresh, `P` Public status page, `A` Alert settings, `S` Status, `R` Remove.
 - **Remove:** key 7 → `R`, or 08del STEP 3c (asks about the alert tokens in `conf/node-events/` and, separately, the evidence bundles).
 - **What reaches an installed box, and when:** the table in §8.20.
 - **Acceptance procedure (testnet first, then mainnet):** §8.22.

@@ -1016,7 +1016,7 @@ rec_capture_now() {
     pause
 }
 
-# ── 7.5 Alert settings (recorder.conf) ───────────────────────────────────────
+# ── 7.A Alert settings (recorder.conf) ───────────────────────────────────────
 _rec_key_desc() {
     case "$1" in
         DOWN_STRIKES)          echo "failed 30 s checks in a row before DOWN" ;;
@@ -1214,6 +1214,15 @@ rec_install() {
         none)
             info "No node-sync watchdog on this box: nothing restarts a failed node (Script 01 Super Auto installs one)." ;;
     esac
+    # Publishing is the step after install and is OFF by default; offer it here so
+    # I → P is one pass. Mainnet only: it is what the Tiny Explorer serves.
+    # _rec_pub_toggle asks its own [y/N] and explains what goes public.
+    gne_conf_load 2>/dev/null || true
+    if [[ " ${GNE_C_PUBLIC_NETS:-} " != *" mainnet "* && -d "$GNE_EVENTS_DIR/mainnet" ]]; then
+        echo ""
+        info "Next step: publish this node's uptime page (Tiny Explorer /availability, node API /rest/)."
+        _rec_pub_toggle mainnet || true
+    fi
     pause
 }
 
@@ -1378,6 +1387,18 @@ rec_menu() {
             printf '  %-9s %b%s%b\n' "recorder" "$YELLOW" "NOT installed — I) installs it" "$RESET"
         fi
         for net in $(dgr_nets); do _rec_net_status "$net" "$now"; done
+        gne_conf_load 2>/dev/null || true
+        if dgr_installed && [[ -z "${GNE_C_PUBLIC_NETS:-}" ]]; then
+            echo -e "  ${DIM}next: P) publish the uptime page (off by default)${RESET}"
+        fi
+        echo ""
+        # Set up comes first, in the order a new box needs it: I, then P.
+        echo -e "${BOLD}  Set up${RESET}"
+        echo -e "  ${CYAN}I${RESET})  Install / refresh"
+        echo -e "  ${CYAN}P${RESET})  Public status page        ${DIM}publish this node's uptime · preview · verify${RESET}"
+        echo -e "  ${CYAN}A${RESET})  Alert settings            ${DIM}channels · import · test · thresholds${RESET}"
+        echo -e "  ${CYAN}S${RESET})  Status"
+        echo -e "  ${YELLOW}R${RESET})  Remove                    ${DIM}keeps the ledger, evidence and config${RESET}"
         echo ""
         echo -e "${BOLD}  View${RESET}"
         echo -e "  ${GREEN}1${RESET})  Timeline                  ${DIM}last events per network${RESET}"
@@ -1386,15 +1407,9 @@ rec_menu() {
         echo -e "  ${GREEN}4${RESET})  Export for upstream       ${DIM}masked .tar.gz for a GitHub issue${RESET}"
         echo -e "  ${CYAN}C${RESET})  Capture evidence now      ${DIM}a bundle on demand · no event recorded${RESET}"
         echo ""
-        echo -e "${BOLD}  Set up${RESET}"
-        echo -e "  ${CYAN}5${RESET})  Alert settings            ${DIM}channels · import · test · thresholds${RESET}"
-        echo -e "  ${CYAN}P${RESET})  Public status page        ${DIM}publish this node's uptime · preview · verify${RESET}"
-        echo -e "  ${CYAN}I${RESET})  Install / refresh"
-        echo -e "  ${YELLOW}R${RESET})  Remove                    ${DIM}keeps the ledger, evidence and config${RESET}"
-        echo -e "  ${CYAN}S${RESET})  Status"
         echo -e "  ${DIM}0${RESET})  Back to Diagnostics"
         echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -ne "${BOLD}Select [1-5 / C P I R S / 0]: ${RESET}"
+        echo -ne "${BOLD}Select [I P A S R / 1-4 C / 0]: ${RESET}"
         read -r c || return 0
         # Every arm ||-guarded, as in main().
         case "${c,,}" in
@@ -1403,7 +1418,8 @@ rec_menu() {
             3) rec_show_evidence  || true ;;
             4) rec_export         || true ;;
             c) rec_capture_now    || true ;;
-            5) rec_alert_settings || true ;;
+            # 5 is Alert settings' old key; nothing else took it, so it stays a silent alias.
+            a|5) rec_alert_settings || true ;;
             p) rec_public         || true ;;
             i) rec_install        || true ;;
             r) rec_remove         || true ;;

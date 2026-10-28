@@ -1618,6 +1618,28 @@ app.get('/robots.txt', (_req, res) => {
   res.send(body);
 });
 
+// ── Asset versioning ─────────────────────────────────────────────────────────
+// Behind Cloudflare a /js or /css file gets a 4 h browser TTL (its default
+// Browser Cache TTL) whatever this server sends, so after a deploy a visitor kept
+// running the old tiny-explorer.js for up to 4 h. Cloudflare's cache key includes
+// the query string, so every page names its scripts and stylesheets as ?v=<mtime>:
+// a changed file is a new URL. tar keeps the checkout mtime and a deploy restarts
+// this process, so reading each mtime once per process is enough. A path with no
+// file on disk (/js/analytics.js is a route) keeps its plain URL.
+const _assetVer = new Map();
+function assetVersion(rel) {
+  if (!_assetVer.has(rel)) {
+    let v = '';
+    try { v = Math.floor(fs.statSync(path.join(webDir, rel)).mtimeMs).toString(36); } catch { /* not on disk */ }
+    _assetVer.set(rel, v);
+  }
+  return _assetVer.get(rel);
+}
+function versionAssets(html) {
+  return html.replace(/(<script src|<link rel="stylesheet" href)="(\/(?:js|css)\/[A-Za-z0-9_.-]+\.(?:js|css))"/g,
+    (m, attr, url) => { const v = assetVersion(url.slice(1)); return v ? `${attr}="${url}?v=${v}"` : m; });
+}
+
 // ── HTML pages with injected SEO + globals ────────────────────────────────────
 
 const SLOGAN = config.slogan || 'Every Grin block, one link away.';
@@ -1804,7 +1826,7 @@ window.TINYEXP_AVAIL=${JSON.stringify(published)};
     .replace(/<title>[^<]*<\/title>/i, '')
     .replace(/<meta\s+name="description"[^>]*>/i, '')
     .replace(/<meta\s+name="theme-color"[^>]*>/i, '');
-  return out.replace('<head>', '<head>\n' + seoBlock + '\n' + globals);
+  return versionAssets(out).replace('<head>', '<head>\n' + seoBlock + '\n' + globals);
 }
 
 // index (/) and block (/block/:ref) are served with injected SEO; /block/:ref is

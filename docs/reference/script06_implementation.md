@@ -1420,6 +1420,21 @@ catch-all and the `/api/` prefix — with the two probe routes carrying their ow
 blocks from the phase-2 work. A tool that needs a *new* nginx rule would be the exception,
 not the rule.
 
+**The browser half: versioned asset URLs.** A restart makes the server current, but not
+the visitor's browser. scan.grin.money sits behind Cloudflare, which serves `/js/*` and
+`/css/*` with `Cache-Control: public, max-age=14400` (its default Browser Cache TTL),
+whatever express sends. So after a deploy a visitor kept running the old
+`tiny-explorer.js` for up to 4 h. It was seen on 2026-10-27: `TINYEXP_AVAIL` was `true`
+on the live page while the footer link that script adds was missing. `injectGlobals`
+now passes every page through `versionAssets()`. That function rewrites each
+`<script src="/js/…">` and `<link rel="stylesheet" href="/css/…">` to `?v=<mtime, base 36>`.
+Cloudflare's cache key includes the query string, so a changed file is a new URL at the
+edge and in the browser. Each mtime is read once per process, which is enough because
+a deploy restarts the process. A path with no file on disk keeps its plain URL. That
+covers `/js/analytics.js`, which is a route. Tests: two cases in `test/test-seo.js`.
+They check that every on-disk script and stylesheet in every page is versioned, and
+that a missing file stays plain and each mtime is read once.
+
 **Same shape, still open elsewhere:** `grinscan_install` in `scripts/lib/06b_grinscan.sh`
 deploys with `cp -r` and ends at `daemon-reload` with no restart, exactly as this did;
 `grinscan_update` restarts. Not touched here — it is a separate product's lifecycle.
@@ -1622,6 +1637,18 @@ default agent is `keepAlive:true` / `maxSockets:Infinity`. Its client verdict ca
   shares the 30 s cache). Only then is `/availability` in `/sitemap.xml`, served `index, follow`, and
   linked from the footer ("Node availability", added in `public/js/tiny-explorer.js` when the
   server-injected `window.TINYEXP_AVAIL` is true). With publishing off the page is `noindex, follow`.
+- **Header links (same gate):** while `TINYEXP_AVAIL` is true, `tiny-explorer.js` adds two more links.
+  The first is a Tools-menu row, "Node Availability" (`addAvailabilityRow`, under its own group "This node").
+  The second is a header pill before the Tools button (`initAvailabilityPill`, CSS `.tx-avail-pill`).
+  The pill is built only after `/api/availability` answers with `v:1` and `windows`. It shows the
+  30 d % (falling back to 7 d, then 90 d) with a dot coloured by state, or "Down" / "Starting".
+  It follows `availability.js`'s rule: a record older than 3 h reads as unknown (grey dot). A failed
+  fetch shows no pill. Neither link is in the page markup, so a box that does not publish shows nothing.
+- **Operator side:** `_tinyx_avail_status` in the 06d lib prints an `Uptime:` row. It appears in
+  Status, after Install and after Configure. "Published" means the record is on disk AND the
+  running service answers 200 on `/api/availability`. Otherwise the row names the fix path
+  (Admin & Maintenance → Diagnostics → Node event recorder → `I`, then `P`). 06d never
+  publishes anything itself.
 - **Read permission:** 06d runs as `www-data`. The recorder's publish adds `o+x` on `/opt/grin` when
   06d's unit file exists, so a box where publishing was enabled before 06d was installed becomes
   readable at the next publish; until then the routes answer 404.

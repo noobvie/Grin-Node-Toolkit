@@ -145,6 +145,7 @@ function initChrome() {
 
   initTooltips();
   initTools();
+  initAvailabilityPill();
 }
 
 // Group labels for the Tools dropdown, in render order. The hub has six tools;
@@ -165,8 +166,72 @@ function initChrome() {
 // tsu/sec"), so Verify is what it gets here.
 const TOOLS_MENU_GROUPS = [
   { label: 'Verify',  hrefs: ['/slate', '/proof', '/wallet-check', '/emission'] },
-  { label: 'Operate', hrefs: ['/node-check', '/mining'] }
+  { label: 'Operate', hrefs: ['/node-check', '/mining'] },
+  { label: 'This node', hrefs: ['/availability'] }
 ];
+
+// The /availability row is not in the page markup: it exists only while this
+// node's availability record is published (TINYEXP_AVAIL), so it is added here,
+// before grouping, rather than shipped in twelve headers and hidden.
+function addAvailabilityRow(menu) {
+  if (window.TINYEXP_AVAIL !== true || menu.querySelector('.tx-tools-item[href="/availability"]')) return;
+  const a = document.createElement('a');
+  a.className = 'tx-tools-item';
+  a.href = '/availability';
+  a.setAttribute('role', 'menuitem');
+  const ico = document.createElement('span');
+  ico.className = 'tx-tools-ico';
+  ico.textContent = '📈';
+  const txt = document.createElement('span');
+  txt.className = 'tx-tools-txt';
+  const b = document.createElement('b');
+  b.textContent = 'Node Availability';
+  const small = document.createElement('small');
+  small.textContent = 'Uptime and outage history of this node';
+  txt.append(b, small);
+  a.append(ico, txt);
+  menu.appendChild(a);
+}
+
+// Header pill: this node's 30-day availability, linking to /availability. Built
+// only after /api/availability answers with the expected shape, so a box that
+// does not publish (or a failed fetch) shows nothing rather than a placeholder.
+// The state rules match availability.js: a record older than 3 h says nothing
+// about now and reads as unknown.
+async function initAvailabilityPill() {
+  const tools = document.getElementById('tx-tools');
+  if (window.TINYEXP_AVAIL !== true || !tools || document.getElementById('tx-avail-pill')) return;
+  let d;
+  try {
+    const res = await fetch('/api/availability', { cache: 'no-cache' });
+    if (!res.ok) return;
+    d = await res.json();
+  } catch { return; }
+  if (!d || d.v !== 1 || !d.windows || typeof d.windows !== 'object') return;
+  const fresh = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z$/.test(d.generated)
+    && Date.now() - Date.parse(d.generated) <= 3 * 3600 * 1000;
+  const state = fresh && ['up', 'starting', 'down'].includes(d.state) ? d.state : 'unknown';
+  const w = ['30', '7', '90'].find(k => d.windows[k] && typeof d.windows[k].pct === 'number' && isFinite(d.windows[k].pct));
+
+  const a = document.createElement('a');
+  a.id = 'tx-avail-pill';
+  a.className = 'tx-avail-pill ' + state;
+  a.href = '/availability';
+  const label = state === 'down' ? 'Down' : state === 'starting' ? 'Starting'
+    : w ? d.windows[w].pct.toFixed(2) + ' %' : 'Uptime';
+  a.textContent = label;
+  if (w && (state === 'up' || state === 'unknown')) {
+    const span = document.createElement('span');
+    span.className = 'tx-avail-win';
+    span.textContent = ' · ' + w + ' d';
+    a.appendChild(span);
+  }
+  const title = 'Node availability' + (w ? ', last ' + w + ' days' : '')
+    + (state === 'unknown' ? ' · current state unknown' : ' · ' + state) + ' — details';
+  a.title = title;
+  a.setAttribute('aria-label', title);
+  tools.parentNode.insertBefore(a, tools);
+}
 
 // Rewrite #tx-tools-menu as grouped sections. The headings are labels, not menu
 // items: role="presentation", no tabindex, no href — so neither the tab order
@@ -219,6 +284,7 @@ function initTools() {
   const btn  = document.getElementById('tx-tools-btn');
   const menu = document.getElementById('tx-tools-menu');
   if (!wrap || !btn || !menu) return;
+  addAvailabilityRow(menu);
   groupToolsMenu(menu);
   applyWalletProbeLabels();
   function open(v) {

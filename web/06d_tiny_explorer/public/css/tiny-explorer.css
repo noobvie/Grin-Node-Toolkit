@@ -486,6 +486,30 @@ pre.tx-raw {
 }
 .tx-tools-group:first-child { padding-top: 4px; }
 
+/* Header availability pill, injected by initAvailabilityPill() only while this
+   node's record is published. The dot carries the state; the text keeps the ink
+   tokens so it stays legible on both themes, as .tx-sync does. */
+.tx-avail-pill {
+  display: inline-flex; align-items: center; gap: 6px; flex: none;
+  padding: 9px 11px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface-2);
+  font-size: 12px; font-family: var(--mono); color: var(--text-soft);
+  text-decoration: none; white-space: nowrap;
+}
+.tx-avail-pill::before {
+  content: ''; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--text-soft); flex: none;
+}
+.tx-avail-pill:hover { border-color: var(--gold); text-decoration: none; }
+.tx-avail-pill.up       { color: var(--green-ink); }
+.tx-avail-pill.up::before       { background: var(--green); }
+.tx-avail-pill.starting { color: #d97706; }
+.tx-avail-pill.starting::before { background: #d97706; }
+.tx-avail-pill.down     { color: var(--red-ink); }
+.tx-avail-pill.down::before     { background: var(--red); }
+.tx-avail-win { color: var(--text-soft); }
+@media (max-width: 700px) { .tx-avail-win { display: none; } }
+
 /* ── Tools section (home) ───────────────────────────────────────────── */
 .tx-tools-section { margin: 0 0 22px; }
 .tx-tools-h {

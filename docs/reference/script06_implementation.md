@@ -1656,6 +1656,33 @@ default agent is `keepAlive:true` / `maxSockets:Infinity`. Its client verdict ca
   cache, config key, page routed, sitemap and twin redirect) and extra cases in `test/test-seo.js`
   (sitemap and robots follow the record per request). Both run under `npm test`.
 
+### Ecosystem status page — operator-hidden entries (`ecosystem.html`)
+
+- **Why a local file:** the page's entries come from `scripts/lib/06_ecosystem_sites.json` and
+  `06_ecosystem_dev.json`. Both ship with the toolkit, and a tarball self-update overwrites them, so
+  an edit made on the VPS does not survive. The operator's hide list lives beside `stats.db` instead:
+  `/opt/grin/grin-stats/ecosystem_hidden.json`, a JSON array of URLs. Override the path with
+  `GRIN_ECOSYSTEM_HIDDEN`; the default follows the directory of `GRIN_DB_PATH`. The override applies
+  to the checker only — the hub 08 menu always edits the default path, so leave it unset on a VPS.
+- **Checker:** `06_ecosystem_checker.py` (`_load_hidden_urls` / `_drop_hidden`) drops matching
+  entries from both the sites list and the dev list right after loading them. URLs are compared with
+  scheme and host lower-cased and the trailing slash stripped. If the file is missing, it hides
+  nothing. If it is unparsable, the checker logs a `[WARN]` and hides nothing, so a bad edit can
+  never blank the page. Toolkit services added through `GRIN_*_URL` in `config.env` are not
+  filtered; unset the variable to drop one.
+- **Operator side:** Admin & Maintenance (hub 08) → `E` Ecosystem Page Entries
+  (`scripts/lib/08_lib_ecosystem_hide.sh`, functions `ecohide_*`). It lists the deployed sidecars
+  beside `/usr/local/bin/grin-ecosystem-checker`, falling back to the toolkit copy, numbered by
+  category with `[hidden]` marks. Typing a number toggles that entry. Hidden URLs that no longer
+  match any entry are listed last, so they can still be un-hidden. Writes are atomic: a temp file
+  in the same directory, given the stats dir's owner and mode 0644, then `mv`. An unparsable list is
+  reported and left untouched, never overwritten.
+- **When it shows:** on the next checker run, which is the hourly cron at :00 when Live Updates
+  are on. `r` on the same screen runs the checker immediately, using the same command as Import
+  Data → `l`.
+- **Dropped is not deleted:** a hidden entry's `ecosystem_service_history` row stays in `stats.db`.
+  Un-hiding the entry resumes its uptime-days count from the original first-seen time.
+
 ## Runbook
 
 - **Tests:** `cd web/06d_tiny_explorer && npm test` (`node test/run-all.js`; express is the only npm dependency; `test/` is excluded from the VPS deploy by `tinyx_deploy_files()`). Each suite lifts the real functions out of the shipped files rather than testing a copy.

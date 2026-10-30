@@ -14,6 +14,7 @@ Usage:
 Config (env vars — loaded from config.env by cron):
     GRIN_WWW_DATA   default: /var/www/grin-stats/data
     GRIN_DB_PATH    default: /opt/grin/grin-stats/stats.db
+    GRIN_ECOSYSTEM_HIDDEN  default: <dir of GRIN_DB_PATH>/ecosystem_hidden.json
 """
 
 import argparse
@@ -134,6 +135,52 @@ def _load_json_sidecar(filename, required=False):
 
 ECOSYSTEM_SITES = _load_json_sidecar("06_ecosystem_sites.json", required=True)
 ECOSYSTEM_DEV   = _load_json_sidecar("06_ecosystem_dev.json",   required=False)
+
+# ── Operator-hidden entries ────────────────────────────────────────────────────
+# The two sidecars above ship with the toolkit and a self-update overwrites them,
+# so an operator's "hide this entry" lives in a LOCAL file beside stats.db: a JSON
+# array of URLs, written by hub 08 → Ecosystem Page Entries
+# (lib/08_lib_ecosystem_hide.sh, which normalises URLs the same way). A missing or
+# unreadable file hides nothing — a bad local edit must never blank the page.
+
+ECOSYSTEM_HIDDEN_PATH = os.environ.get(
+    "GRIN_ECOSYSTEM_HIDDEN",
+    os.path.join(os.path.dirname(DB_PATH), "ecosystem_hidden.json"),
+)
+
+def _norm_url(url):
+    """Comparison key: scheme + host lower-cased, trailing slash stripped."""
+    s = str(url).strip()
+    try:
+        p = urllib.parse.urlsplit(s)
+    except ValueError:
+        return s.rstrip("/").lower()
+    return urllib.parse.urlunsplit(
+        (p.scheme.lower(), p.netloc.lower(), p.path.rstrip("/"), p.query, p.fragment)
+    )
+
+def _load_hidden_urls():
+    try:
+        with open(ECOSYSTEM_HIDDEN_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, list):
+            raise ValueError(f"expected a JSON array, got {type(data).__name__}")
+        return {_norm_url(u) for u in data if isinstance(u, str) and u.strip()}
+    except FileNotFoundError:
+        return set()
+    except (OSError, json.JSONDecodeError, ValueError) as e:
+        print(f"[WARN] {ECOSYSTEM_HIDDEN_PATH} load failed: {e} — nothing hidden", file=sys.stderr)
+        return set()
+
+def _drop_hidden(entries, hidden):
+    if not hidden:
+        return entries
+    return [e for e in entries
+            if not (isinstance(e, dict) and _norm_url(e.get("url", "")) in hidden)]
+
+_HIDDEN_URLS    = _load_hidden_urls()
+ECOSYSTEM_SITES = _drop_hidden(ECOSYSTEM_SITES, _HIDDEN_URLS)
+ECOSYSTEM_DEV   = _drop_hidden(ECOSYSTEM_DEV,   _HIDDEN_URLS)
 
 def _build_services():
     """Return full services list, appending operator-deployed toolkit services from env."""

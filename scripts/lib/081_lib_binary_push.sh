@@ -312,14 +312,17 @@ _mdp_pick_artifact() {
     fi
     echo ""
     echo -e "  ${BOLD}Binaries in $MDP_BIN_DIR (newest first):${RESET}"
-    local i v s d
+    local i v s d w
     for i in "${!arts[@]}"; do
         v=$(timeout 10 "${arts[$i]}" --version 2>/dev/null | head -1)
         s=$(sha256sum "${arts[$i]}" 2>/dev/null | cut -c1-16)
-        # File mtime = when the build wrote it; the list is already sorted on it.
+        # File mtime, which the list is sorted on. For a build it is the build time;
+        # a -replaced- copy is a previous binary (usually the release) saved by
+        # gsb_archive_replaced at install time, so its mtime is the archive time.
         d=$(date -r "${arts[$i]}" '+%Y-%m-%d %H:%M:%S %Z' 2>/dev/null)
-        printf "    ${CYAN}%2d${RESET}) %s\n        built %s   %s   sha256 %s...\n" "$((i+1))" "$(basename "${arts[$i]}")" \
-            "${d:-(unknown date)}" "${v:-(no --version output)}" "$s"
+        w="built"; [[ "${arts[$i]}" == *-replaced-* ]] && w="archived (previous binary, not a build)"
+        printf "    ${CYAN}%2d${RESET}) %s\n        %s %s   %s   sha256 %s...\n" "$((i+1))" "$(basename "${arts[$i]}")" \
+            "$w" "${d:-(unknown date)}" "${v:-(no --version output)}" "$s"
     done
     echo -e "    ${DIM} 0${RESET}) Cancel"
     echo -ne "  ${BOLD}Select binary: ${RESET}"

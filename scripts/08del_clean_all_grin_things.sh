@@ -677,15 +677,62 @@ step_remove_install_dirs() {
         return
     fi
 
-    info "Found Grin installation paths:"
+    # The toolkit running this cleanup can match the /opt scan itself (a checkout at
+    # /opt/grin-node-toolkit, 081's default remote path), so that exact path is kept.
+    # A found path that only CONTAINS the toolkit (a checkout under /opt/grin) is still
+    # deleted, because keeping it would keep the Grin data in it; a warning naming it
+    # is printed before the confirm. Paths compare after readlink -f on both sides.
+    local self_path toolkit_root=""
+    self_path="$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null || true)"
+    if [[ -n "$self_path" ]]; then
+        toolkit_root="$(dirname "$(dirname "$self_path")")"
+    fi
+
+    local -a targets=() kept=() holders=()
+    local -A listed=()
+    local f rf
     for f in "${found[@]}"; do
+        # The candidate list and the scan can both yield a path (e.g. /opt/grin).
+        [[ -n "${listed[$f]:-}" ]] && continue
+        listed[$f]=1
+        rf="$(readlink -f -- "$f" 2>/dev/null || true)"
+        [[ -z "$rf" ]] && rf="$f"
+        if [[ -n "$toolkit_root" && "$rf" == "$toolkit_root" ]]; then
+            kept+=("$f")
+            continue
+        fi
+        if [[ -n "$toolkit_root" && "$toolkit_root" == "$rf"/* ]]; then
+            holders+=("$f")
+        fi
+        targets+=("$f")
+    done
+
+    for f in "${kept[@]+"${kept[@]}"}"; do
+        echo -e "  ${GREEN}Kept:${RESET} $f  ${DIM}(the toolkit running this cleanup)${RESET}"
+        log "[STEP 4] KEPT: $f (the toolkit running this cleanup)"
+    done
+
+    if [[ ${#targets[@]} -eq 0 ]]; then
+        info "No other Grin install paths found. Skipping."
+        log "[STEP 4] Nothing to delete besides the kept toolkit. Skipped."
+        return
+    fi
+
+    info "Found Grin installation paths:"
+    for f in "${targets[@]}"; do
         local sz
         sz=$(du -sh "$f" 2>/dev/null | awk '{print $1}' || echo "?")
         echo -e "  ${YELLOW}→${RESET} $f  ${DIM}($sz)${RESET}"
     done
 
+    for f in "${holders[@]+"${holders[@]}"}"; do
+        echo ""
+        warn "$f contains the toolkit running this cleanup ($toolkit_root)."
+        warn "Answering y deletes the toolkit too. To keep it: answer N, move it out of $f, and run the cleanup again."
+    done
+
     if confirm_step "Remove all Grin install directories and binaries?"; then
-        for f in "${found[@]}"; do
+        for f in "${targets[@]}"; do
             rm -rf "${f:?}"
             success "Removed: $f"
             log "[STEP 4] DELETED: $f"

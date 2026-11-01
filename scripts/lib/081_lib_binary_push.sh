@@ -312,11 +312,14 @@ _mdp_pick_artifact() {
     fi
     echo ""
     echo -e "  ${BOLD}Binaries in $MDP_BIN_DIR (newest first):${RESET}"
-    local i v s
+    local i v s d
     for i in "${!arts[@]}"; do
         v=$(timeout 10 "${arts[$i]}" --version 2>/dev/null | head -1)
         s=$(sha256sum "${arts[$i]}" 2>/dev/null | cut -c1-16)
-        printf "    ${CYAN}%2d${RESET}) %s\n        %s   sha256 %s...\n" "$((i+1))" "$(basename "${arts[$i]}")" "${v:-(no --version output)}" "$s"
+        # File mtime = when the build wrote it; the list is already sorted on it.
+        d=$(date -r "${arts[$i]}" '+%Y-%m-%d %H:%M:%S %Z' 2>/dev/null)
+        printf "    ${CYAN}%2d${RESET}) %s\n        built %s   %s   sha256 %s...\n" "$((i+1))" "$(basename "${arts[$i]}")" \
+            "${d:-(unknown date)}" "${v:-(no --version output)}" "$s"
     done
     echo -e "    ${DIM} 0${RESET}) Cancel"
     echo -ne "  ${BOLD}Select binary: ${RESET}"

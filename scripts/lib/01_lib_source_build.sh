@@ -1156,18 +1156,23 @@ _gsb_build() {
 
 # -----------------------------------------------------------------------------
 # _gsb_use_for_session — hand the artifact to Script 01's Step 6.
-# download_grin_binary already reuses $GRIN_BIN_TMP when it is set (that is how
-# the mainnet+testnet double build avoids a second download), so pointing it at
-# the artifact is all that is needed. It is exported as GRIN_PREBUILT_BIN too
-# because the menu resets the session state after every action (s01_reset_state),
-# which would otherwise drop a plain shell variable.
+# This runs inside s01_run_action's subshell, so a variable set here dies with
+# it. The path is written to $S01_ARMED_FILE instead; after the action
+# s01_run_action exports it as GRIN_PREBUILT_BIN in the menu shell, and
+# s01_reset_state seeds GRIN_BIN_TMP from it before every pass.
+# download_grin_binary reuses $GRIN_BIN_TMP when it names a file. rc 1 = not armed.
 # -----------------------------------------------------------------------------
 _gsb_use_for_session() {
     if [[ -z "${GSB_ARTIFACT:-}" || ! -x "${GSB_ARTIFACT:-}" ]]; then
         _gsb_pick_artifact || return $?
     fi
-    export GRIN_PREBUILT_BIN="$GSB_ARTIFACT"
-    GRIN_BIN_TMP="$GSB_ARTIFACT"
+    if [[ -z "${S01_ARMED_FILE:-}" || ! -w "${S01_ARMED_FILE:-}" ]]; then
+        error "No hand-off file from the Script 01 menu — nothing was armed."
+        info  "Leave this menu and choose G → 3 again from the Script 01 menu."
+        return 1
+    fi
+    printf '%s\n' "$GSB_ARTIFACT" > "$S01_ARMED_FILE" \
+        || { error "Could not write $S01_ARMED_FILE — nothing was armed."; return 1; }
     echo ""
     success "Armed: $(basename "$GSB_ARTIFACT")"
     info    "Nothing was installed yet — no node exists to install it into."

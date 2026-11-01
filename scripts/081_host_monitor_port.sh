@@ -1140,12 +1140,11 @@ mass_deploy_update() {
     # Branch selection
     echo -e "  ${BOLD}Select branch:${RESET}"
     echo -e "  ${CYAN}1${RESET}) main          ${DIM}(stable)${RESET}"
-    echo -e "  ${CYAN}2${RESET}) addons"
-    echo -e "  ${CYAN}3${RESET}) corefeatures"
-    echo -e "  ${CYAN}4${RESET}) Custom branch"
+    echo -e "  ${CYAN}2${RESET}) add-ons"
+    echo -e "  ${CYAN}3${RESET}) Custom branch"
     echo -e "  ${DIM}0${RESET}) Cancel"
     echo ""
-    echo -ne "${BOLD}Select [0-4] (default 1): ${RESET}"
+    echo -ne "${BOLD}Select [0-3] (default 1): ${RESET}"
     local _bchoice
     read -r _bchoice
     [[ -z "$_bchoice" ]] && _bchoice="1"
@@ -1153,9 +1152,8 @@ mass_deploy_update() {
     local _branch
     case "$_bchoice" in
         1) _branch="main" ;;
-        2) _branch="addons" ;;
-        3) _branch="corefeatures" ;;
-        4) echo -ne "  Branch name: "; read -r _branch; [[ -z "$_branch" ]] && { warn "Cancelled."; return; } ;;
+        2) _branch="add-ons" ;;
+        3) echo -ne "  Branch name: "; read -r _branch; [[ -z "$_branch" ]] && { warn "Cancelled."; return; } ;;
         0) return ;;
         *) warn "Invalid selection."; return ;;
     esac

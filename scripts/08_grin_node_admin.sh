@@ -1161,19 +1161,15 @@ self_update() {
     echo ""
     echo -e "  ${GREEN}1${RESET})  main          ${DIM}— stable releases${RESET}"
     echo -e "  ${CYAN}2${RESET})  add-ons       ${DIM}— addon features in development${RESET}"
-    echo -e "  ${CYAN}3${RESET})  corefeatures  ${DIM}— core features in development${RESET}"
-    echo -e "  ${CYAN}4${RESET})  publicpool    ${DIM}— public mining pool development${RESET}"
-    echo -e "  ${YELLOW}5${RESET})  Custom branch ${DIM}— enter branch name manually${RESET}"
+    echo -e "  ${YELLOW}3${RESET})  Custom branch ${DIM}— enter branch name manually${RESET}"
     echo ""
-    echo -ne "${BOLD}  Choose [1-5, default 1]: ${RESET}"
+    echo -ne "${BOLD}  Choose [1-3, default 1]: ${RESET}"
     read -r branch_choice
 
     local branch
     case "$branch_choice" in
         2) branch="add-ons" ;;
-        3) branch="corefeatures" ;;
-        4) branch="publicpool" ;;
-        5)
+        3)
             # Cancel returns to the menu — it must NOT fall through to `main`.
             # Never answer a bare Enter with "Defaulting to 'main'": the
             # instinctive way to back out of a mistyped choice would silently

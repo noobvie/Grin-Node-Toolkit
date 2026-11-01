@@ -1095,6 +1095,17 @@ main() {
     echo -e "${BOLD}${GREEN}  Review log: $LOG_FILE${RESET}"
     echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
+    # Host-wide OS security policy (lib/08_lib_host_updates.sh) is deliberately
+    # left in place: it protects the box whether or not Grin stays on it.
+    # Test the policy files and the state file, not the directory: a host that
+    # only ever had a patch run from 081 has the dir (run-now/) but no policy.
+    if [[ -e /etc/apt/apt.conf.d/52grin-unattended-upgrades || -e /var/lib/grin-toolkit/host-updates/state ]] \
+        || grep -qsF "Written by Grin Node Toolkit (host updates)" /etc/dnf/automatic.conf; then
+        echo -e "  ${DIM}Kept: the OS automatic security-update policy. To turn it off, run${RESET}"
+        echo -e "  ${DIM}Host Optimization (hub 08) → 9) Automatic Security Updates → Disable before cleanup.${RESET}"
+        echo ""
+        log "Kept: OS automatic security-update policy (host-wide, not Grin data)."
+    fi
 
     log "=== FULL GRIN CLEANUP COMPLETE ==="
 

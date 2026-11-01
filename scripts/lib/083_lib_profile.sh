@@ -248,12 +248,35 @@ hp_raw_firewall_rules() {
     echo "$n"
 }
 
-# rc 0 when unattended-upgrades is installed AND actually scheduled to run.
+# rc 0 when automatic security updates are installed AND actually scheduled.
 # Installed-but-unscheduled is the common trap, so both halves are required —
-# the package being present proves nothing on its own.
+# the package being present proves nothing on its own. Kept deliberately light
+# (no apt-config/dnf calls); the full effective-config check is the status
+# action in lib/08_lib_host_updates.sh (083 key 9).
+#   apt: unattended-upgrade present + an `Unattended-Upgrade "1"` line.
+#   dnf: the dnf-automatic timer (dnf 4) or dnf5-automatic timer enabled,
+#        upgrade_type = security in /etc/dnf/automatic.conf, and
+#        apply_updates = yes — without it the timer only downloads. dnf 4's
+#        dnf-automatic-install.timer applies regardless of apply_updates.
 hp_unattended_ok() {
-    { hp_have unattended-upgrade || hp_have unattended-upgrades; } || return 1
-    grep -rqs 'Unattended-Upgrade "1"' /etc/apt/apt.conf.d/ 2>/dev/null
+    if hp_have apt-get; then
+        { hp_have unattended-upgrade || hp_have unattended-upgrades; } || return 1
+        grep -rqs 'Unattended-Upgrade "1"' /etc/apt/apt.conf.d/ 2>/dev/null
+        return
+    fi
+    hp_have dnf || return 1
+    local t on=1 always=1
+    for t in dnf-automatic-install.timer dnf-automatic.timer dnf5-automatic.timer; do
+        if systemctl is-enabled "$t" >/dev/null 2>&1; then
+            on=0
+            if [[ "$t" == dnf-automatic-install.timer ]]; then always=0; fi
+            break
+        fi
+    done
+    (( on == 0 )) || return 1
+    grep -Eqs '^[[:space:]]*upgrade_type[[:space:]]*=[[:space:]]*security' /etc/dnf/automatic.conf || return 1
+    (( always == 0 )) && return 0
+    grep -Eqs '^[[:space:]]*apply_updates[[:space:]]*=[[:space:]]*(yes|true|1)[[:space:]]*$' /etc/dnf/automatic.conf
 }
 
 # Same `grep -c` trap as above — the zero case is the COMMON one here (a fully
@@ -263,7 +286,9 @@ hp_unattended_ok() {
 hp_pending_security_updates() {
     hp_have apt-get || { echo "$HP_UNKNOWN"; return 0; }
     local n
-    n=$(apt-get -s -o Debug::NoLocking=true upgrade 2>/dev/null \
+    # dist-upgrade, not upgrade: `upgrade` holds back a kernel ABI bump (it needs
+    # a NEW package), which is exactly the security fix that most needs a reboot.
+    n=$(apt-get -s -o Debug::NoLocking=true dist-upgrade 2>/dev/null \
         | grep -ci '^Inst.*security' || true)
     [[ "$n" =~ ^[0-9]+$ ]] || n=0
     echo "$n"

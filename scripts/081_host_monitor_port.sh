@@ -4,7 +4,8 @@
 # =============================================================================
 # Checks TCP reachability of configured Grin node endpoints (standalone or
 # cron), and provides mass deployment: push toolkit updates, start/stop/restart
-# remote grin nodes, run ad-hoc commands, and manage SSH keys across a fleet.
+# remote grin nodes, run ad-hoc commands, manage SSH keys and automatic OS
+# security updates across a fleet.
 #
 # Server fleet is configured in /opt/grin/conf/mass_deploy.conf (pipe-delimited).
 #
@@ -57,12 +58,20 @@ if [[ -f "$SCRIPT_DIR/lib/081_lib_binary_push.sh" ]]; then
     # shellcheck source=lib/081_lib_binary_push.sh
     source "$SCRIPT_DIR/lib/081_lib_binary_push.sh"
 else
-    warn "Binary push library missing ($SCRIPT_DIR/lib/081_lib_binary_push.sh) - keys f/g unavailable until a toolkit update."
+    warn "Binary push library missing ($SCRIPT_DIR/lib/081_lib_binary_push.sh) - keys f/g unavailable until Admin centre (08) → 8) Self-Update."
 fi
 # Bulk add servers with a one-time root password (Manage Servers key 6)
 if [[ -f "$SCRIPT_DIR/lib/081_lib_bulk_add.sh" ]]; then
     # shellcheck source=lib/081_lib_bulk_add.sh
     source "$SCRIPT_DIR/lib/081_lib_bulk_add.sh"
+fi
+# Host security updates (Mass Deployment key 5): the shared lib generates the
+# snippets here; the 081 lib sends them, so remote boxes need no toolkit files.
+if [[ -f "$SCRIPT_DIR/lib/08_lib_host_updates.sh" && -f "$SCRIPT_DIR/lib/081_lib_host_updates.sh" ]]; then
+    # shellcheck source=lib/08_lib_host_updates.sh
+    source "$SCRIPT_DIR/lib/08_lib_host_updates.sh"
+    # shellcheck source=lib/081_lib_host_updates.sh
+    source "$SCRIPT_DIR/lib/081_lib_host_updates.sh"
 fi
 
 # ─── Runtime state (global associative arrays) ────────────────────────────────
@@ -1110,7 +1119,7 @@ mass_deploy_manage() {
             4) _md_test_all ;;
             5) _md_bootstrap_keys ;;
             6) if declare -F _mdb_bulk_add >/dev/null; then _mdb_bulk_add || true
-               else warn "bulk add lib not installed — run Push toolkit update"; sleep 2; fi ;;
+               else warn "bulk add lib missing on this server — update it: Admin centre (08) → 8) Self-Update"; sleep 2; fi ;;
             0) break ;;
             *) warn "Invalid selection."; sleep 1 ;;
         esac
@@ -1632,9 +1641,9 @@ mass_deploy_control() {
             d) _md_ctrl_upgrade ;;
             e) _md_ctrl_reboot ;;
             f) if declare -F _mdp_push >/dev/null; then _mdp_push || true
-               else warn "binary push lib not installed — run Push toolkit update"; sleep 2; fi ;;
+               else warn "binary push lib missing on this server — update it: Admin centre (08) → 8) Self-Update"; sleep 2; fi ;;
             g) if declare -F _mdp_rollback >/dev/null; then _mdp_rollback || true
-               else warn "binary push lib not installed — run Push toolkit update"; sleep 2; fi ;;
+               else warn "binary push lib missing on this server — update it: Admin centre (08) → 8) Self-Update"; sleep 2; fi ;;
             0) break ;;
             *) warn "Invalid selection."; sleep 1 ;;
         esac
@@ -1655,9 +1664,10 @@ mass_deploy() {
         echo -e "  ${CYAN}2${RESET}) Push toolkit update"
         echo -e "  ${CYAN}3${RESET}) Run command"
         echo -e "  ${CYAN}4${RESET}) Remote node control"
+        echo -e "  ${CYAN}5${RESET}) Host security updates"
         echo -e "  ${DIM}0${RESET}) Back"
         echo ""
-        echo -ne "${BOLD}Select [0-4]: ${RESET}"
+        echo -ne "${BOLD}Select [0-5]: ${RESET}"
         local _choice
         read -r _choice
         case "$_choice" in
@@ -1665,6 +1675,8 @@ mass_deploy() {
             2) mass_deploy_update ;;
             3) mass_deploy_run ;;
             4) mass_deploy_control ;;
+            5) if declare -F _mdh_menu >/dev/null && declare -F hu_script >/dev/null; then _mdh_menu || true
+               else warn "host security updates libs missing on this server — update it: Admin centre (08) → 8) Self-Update"; sleep 2; fi ;;
             0) break ;;
             *) warn "Invalid selection."; sleep 1 ;;
         esac

@@ -6,15 +6,20 @@
 # and reports what a Grin node actually needs from this particular box —
 # sized from measured facts rather than from a generic tuning table.
 #
-# ⚠ READ-ONLY BY DESIGN. This tool changes nothing. Every finding carries the
-# exact command that would fix it, for the operator to run and review.
+# ⚠ THE REPORT IS READ-ONLY BY DESIGN. It changes nothing; every finding carries
+# the exact command that would fix it, for the operator to run and review.
 #
-# WHY no apply button (yet): this is a remote VPS. A wrong sysctl is
+# WHY no general apply button: this is a remote VPS. A wrong sysctl is
 # recoverable; `ufw enable` issued before an SSH allow-rule is a box you can
-# only reach from the provider's console. The advisor gets to run against real
-# nodes first — once the recommendations are shown to hold, guarded per-item
-# apply paths can be added behind explicit consent, each recording the value it
-# replaced. Suggest, verify, then automate.
+# only reach from the provider's console. Apply paths are added one at a time,
+# behind explicit consent, each able to undo exactly what it wrote.
+#
+# The one apply path so far is key 9, Automatic Security Updates
+# (lib/08_lib_host_updates.sh): security channel only, never reboots, library
+# updates never restart services (a patched daemon package may restart its
+# own), the grin node and pool are not packages and are never touched, and its
+# Disable removes only the files it wrote. It changes no firewall or SSH
+# setting. Design → script083_design.md §10.
 #
 # SSH is reported here but never edited here. 085_ssh_hardening.sh owns every
 # SSH change — it stages them, validates with `sshd -t`, reloads instead of
@@ -63,6 +68,8 @@ source "$SCRIPT_DIR/lib/083_lib_profile.sh"
 source "$SCRIPT_DIR/lib/083_lib_advice.sh"
 # ui_end() — closing marker for the long read-only report screens.
 source "$SCRIPT_DIR/lib/ui_shared_helpers.sh"
+# hu_menu() — key 9. Shared with 081 Mass Deployment, hence the 08_ prefix.
+source "$SCRIPT_DIR/lib/08_lib_host_updates.sh"
 
 # =============================================================================
 # Rendering
@@ -290,7 +297,8 @@ show_menu() {
     _banner
     echo ""
     echo -e "  ${DIM}Profiles this VPS and reports what a Grin node needs from it.${RESET}"
-    echo -e "  ${DIM}Advisory only — nothing on this host is changed.${RESET}"
+    echo -e "  ${DIM}Reports are advisory only — they change nothing. Key 9 is the one${RESET}"
+    echo -e "  ${DIM}action that writes, and it asks before every change.${RESET}"
     echo ""
     echo -e "${BOLD}  Report${RESET}"
     echo -e "  ${GREEN}1${RESET})   Full report               ${DIM}every check, grouped by area${RESET}"
@@ -305,13 +313,14 @@ show_menu() {
     echo -e "${BOLD}  Hardening${RESET}   ${DIM}configure first, then verify${RESET}"
     echo -e "  ${YELLOW}7${RESET})   SSH Key Hardening →       ${DIM}keys, key-only login, guided user+sudo setup${RESET}"
     echo -e "  ${YELLOW}8${RESET})   SSH posture               ${DIM}read-only summary — check your work${RESET}"
+    echo -e "  ${YELLOW}9${RESET})   Automatic Security Updates →  ${DIM}security-only patches, no reboots${RESET}"
     echo ""
     echo -e "  ${DIM}0${RESET})   Return to admin centre"
     echo ""
     echo -e "  ${DIM}Long screens are paged: ${RESET}${BOLD}q${RESET}${DIM} leaves the pager, and every report${RESET}"
     echo -e "  ${DIM}ends with an explicit ${RESET}${BOLD}[END]${RESET}${DIM} marker.${RESET}"
     echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [0-8]: ${RESET}"
+    echo -ne "${BOLD}Select [0-9]: ${RESET}"
 }
 
 main() {
@@ -331,6 +340,7 @@ main() {
             "6") show_single_area Security   || true ;;
             "7") open_ssh_hardening          || true ;;
             "8") show_single_area SSH        || true ;;
+            "9") hu_menu                     || true ;;
             "0") break ;;
             *)   warn "Invalid option." ; sleep 1 ;;
         esac

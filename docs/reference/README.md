@@ -124,7 +124,7 @@ resolver, the allowlist rules, and what is still open.
 | Doc | What it covers |
 |---|---|
 | [script082_design.md](script082_design.md) · [_implementation](script082_implementation.md) | Provider Access Watch — VPS host-tamper detection |
-| [script083_design.md](script083_design.md) · [_implementation](script083_implementation.md) | Host Optimization advisor (read-only) |
+| [script083_design.md](script083_design.md) · [_implementation](script083_implementation.md) | Host Optimization advisor (read-only report) + Automatic Security Updates, locally (083 key 9) and fleet-wide (081 Mass Deployment key 5) |
 | [script086_design.md](script086_design.md) | Diagnostics & Support Bundle — health check, support bundle, log triage; §8 node event recorder design (built, never run); §9 public status page design; §10 mining / stratum latency, key 8 (built 2026-10-28, never run; as-built in the implementation doc §10) |
 | [script086_implementation.md](script086_implementation.md) | Node event recorder as built — files, installed footprint, Part 2–5 deltas, the R1 review, classification order, acceptance (§8.15–§8.22; never run); §9 public status page as built, accepted limits (§9.8); §10 key 8 mining / stratum latency as built — the four `086_lib_stratum*.sh` libs, sub-menu, refusals, provenance, A/B runbook, VPS acceptance list (§10; never run) |
 

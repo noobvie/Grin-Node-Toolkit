@@ -18,8 +18,9 @@
 #                              this session's build, 4 roll back, 5 purge, 0 back)
 #
 #   TOOLKIT PATCHES
-#     scripts/patches/grin/*.patch are offered after the checkout ([Y/n]) and
-#     applied in name order, all-or-nothing (_gsb_apply_patches). They are
+#     scripts/patches/grin/*.patch are dry-run after the checkout, offered
+#     ([Y/n]) only when the whole set applies, and applied in name order,
+#     all-or-nothing (_gsb_apply_patches). They are
 #     workarounds carried until upstream ships a fix — README.md in that dir says
 #     which ref each targets and why. A patched build is named ...-tkp<N>-<sha>
 #     and its .info lists every patch with its sha256.
@@ -351,7 +352,8 @@ _gsb_list_patches() {
 # cannot be checked in a single `git apply --check a b` (git checks every patch
 # against the ORIGINAL tree, so the second one's context never matches).
 # All-or-nothing: if any patch fails, the tree is reset so the build is either
-# the full set or plain upstream — never a half-patched binary.
+# the full set or plain upstream — never a half-patched binary. A set that fails
+# the dry run is skipped without asking.
 # -----------------------------------------------------------------------------
 _gsb_apply_patches() {
     local dflt="${1:-y}"
@@ -362,6 +364,31 @@ _gsb_apply_patches() {
         [[ -n "$p" ]] && patches+=("$p")
     done < <(_gsb_list_patches)
     [[ ${#patches[@]} -eq 0 ]] && return 0
+
+    # Dry run first, so the operator is only asked when the set can apply. The
+    # patches are applied for real, in order (a later one may need an earlier one),
+    # then the tree is reset. The usual reason a set fails is a ref that already
+    # carries the upstream form of the fix, e.g. pr/3939.
+    local failed=""
+    for p in "${patches[@]}"; do
+        if git -C "$GSB_SRC_DIR" apply --check "$p" 2>/dev/null \
+            && git -C "$GSB_SRC_DIR" apply "$p" 2>/dev/null; then
+            continue
+        fi
+        failed="$(basename "$p")"
+        break
+    done
+    git -C "$GSB_SRC_DIR" reset --hard --quiet HEAD 2>/dev/null \
+        || { error "Could not reset $GSB_SRC_DIR after the patch dry run."; return 1; }
+    git -C "$GSB_SRC_DIR" clean -fdq 2>/dev/null \
+        || { error "Could not clean $GSB_SRC_DIR after the patch dry run."; return 1; }
+    if [[ -n "$failed" ]]; then
+        echo ""
+        info "Toolkit patches skipped: $failed does not apply to this ref."
+        info "This ref most likely already contains the upstream fix — see $GSB_PATCH_DIR/README.md."
+        info "Building plain upstream — no toolkit patches."
+        return 0
+    fi
 
     echo ""
     echo -e "  ${BOLD}Toolkit patches available${RESET} ${DIM}($GSB_PATCH_DIR)${RESET}"

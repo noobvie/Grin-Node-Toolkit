@@ -544,12 +544,12 @@ adv_check_security() {
     fi
 
     if hp_unattended_ok; then
-        adv_add OK Security "Automatic security updates" "unattended-upgrades installed and scheduled" "Security patches apply without you."
+        adv_add OK Security "Automatic security updates" "unattended-upgrades / dnf-automatic installed and scheduled" "Security patches apply without you."
     else
         adv_add WARN Security "Automatic security updates not active" \
-            "unattended-upgrades missing or not scheduled" \
+            "unattended-upgrades / dnf-automatic missing or not scheduled" \
             "A node runs unattended for months. Installed-but-unscheduled is the usual trap, so verify the schedule as well as the package." \
-            "apt install -y unattended-upgrades && dpkg-reconfigure -plow unattended-upgrades"
+            "Host Optimization menu → 9) Automatic Security Updates → Enable (security channel only, no reboot)"
     fi
 
     local pend
@@ -559,7 +559,7 @@ adv_check_security() {
             adv_add WARN Security "Pending security updates" \
                 "${pend} security update(s) waiting" \
                 "Apply them, then reboot if the kernel was among them." \
-                "apt update && apt upgrade -y"
+                "Host Optimization menu → 9) Automatic Security Updates → Run security patch now"
         else
             adv_add OK Security "Security updates" "none pending" "System packages are current."
         fi

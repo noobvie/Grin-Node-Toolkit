@@ -511,6 +511,11 @@ step_remove_event_recorder() {
         /opt/grin/lib/grin_node_events.sh
         /opt/grin/lib/grin_log_signatures.sh
         /opt/grin/lib/grin_alert_send.sh
+        # the public status page libs, plus the recorder lib they source
+        /opt/grin/lib/grin_node_public.sh
+        /opt/grin/lib/grin_node_public_compact.sh
+        /opt/grin/lib/grin_node_public_run.sh
+        /opt/grin/lib/086_lib_recorder.sh
     )
     local -a found=() bundles=()
     local f kb keep_dir="" net ok=1
@@ -536,7 +541,7 @@ step_remove_event_recorder() {
         echo -e "  lines saved at past failures. You may want them for an upstream grin report."
     fi
 
-    if ! confirm_step "Remove the node event recorder (timer, worker, config, ledger, status)?"; then
+    if ! confirm_step "Remove the node event recorder (timer, worker, config, ledger, status, public status history)?"; then
         info "Skipped — recorder kept."
         if [[ ${#bundles[@]} -gt 0 ]]; then
             warn "STEP 4 removes /opt/grin, which holds $ev_root — decline STEP 4 to keep the evidence."
@@ -560,6 +565,16 @@ step_remove_event_recorder() {
                     for f in "$ev_root/$net"/ledger.jsonl* "$ev_root/$net/status.json"; do
                         if [[ -f "$f" ]]; then cp -p -- "$f" "$keep_dir/$net/" 2>/dev/null || ok=0; fi
                     done
+                    # The public chain and its secret salt travel together; the
+                    # salt keeps 0600 root (keep_dir is already 700), the history 0644.
+                    f="$ev_root/$net/public/history.jsonl"
+                    if [[ -f "$f" && ! -L "$f" ]]; then
+                        if install -m 644 -- "$f" "$keep_dir/$net/history.jsonl" 2>/dev/null; then :; else ok=0; fi
+                    fi
+                    f="$ev_root/$net/.public_salt"
+                    if [[ -f "$f" && ! -L "$f" ]]; then
+                        if install -m 600 -- "$f" "$keep_dir/$net/.public_salt" 2>/dev/null; then :; else ok=0; fi
+                    fi
                 done
             else
                 ok=0
@@ -586,6 +601,19 @@ step_remove_event_recorder() {
     # recorder.conf holds the alert channel tokens — never left behind.
     if [[ -d "$conf_dir" ]]; then
         if rm -rf -- "$conf_dir"; then log "[STEP 3c] DELETED: $conf_dir"; else warn "Could not remove $conf_dir"; fi
+    fi
+    # The public status chain and its secret salt go too: disabling publishing
+    # keeps them on purpose, so only a full wipe removes them. Skipped when an
+    # evidence move failed (ok=0): the dir is then kept whole for a manual copy.
+    if [[ $ok -eq 1 ]]; then
+        for net in mainnet testnet; do
+            if [[ -e "$ev_root/$net/public" || -L "$ev_root/$net/public" ]]; then
+                if rm -rf -- "$ev_root/$net/public"; then log "[STEP 3c] DELETED: $ev_root/$net/public"; else warn "Could not remove $ev_root/$net/public"; fi
+            fi
+            if [[ -e "$ev_root/$net/.public_salt" || -L "$ev_root/$net/.public_salt" ]]; then
+                if rm -f -- "$ev_root/$net/.public_salt"; then log "[STEP 3c] DELETED: $ev_root/$net/.public_salt"; else warn "Could not remove $ev_root/$net/.public_salt"; fi
+            fi
+        done
     fi
     if [[ $ok -eq 1 && -d "$ev_root" ]]; then
         if rm -rf -- "$ev_root"; then log "[STEP 3c] DELETED: $ev_root"; else warn "Could not remove $ev_root"; fi
@@ -649,15 +677,62 @@ step_remove_install_dirs() {
         return
     fi
 
-    info "Found Grin installation paths:"
+    # The toolkit running this cleanup can match the /opt scan itself (a checkout at
+    # /opt/grin-node-toolkit, 081's default remote path), so that exact path is kept.
+    # A found path that only CONTAINS the toolkit (a checkout under /opt/grin) is still
+    # deleted, because keeping it would keep the Grin data in it; a warning naming it
+    # is printed before the confirm. Paths compare after readlink -f on both sides.
+    local self_path toolkit_root=""
+    self_path="$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null || true)"
+    if [[ -n "$self_path" ]]; then
+        toolkit_root="$(dirname "$(dirname "$self_path")")"
+    fi
+
+    local -a targets=() kept=() holders=()
+    local -A listed=()
+    local f rf
     for f in "${found[@]}"; do
+        # The candidate list and the scan can both yield a path (e.g. /opt/grin).
+        [[ -n "${listed[$f]:-}" ]] && continue
+        listed[$f]=1
+        rf="$(readlink -f -- "$f" 2>/dev/null || true)"
+        [[ -z "$rf" ]] && rf="$f"
+        if [[ -n "$toolkit_root" && "$rf" == "$toolkit_root" ]]; then
+            kept+=("$f")
+            continue
+        fi
+        if [[ -n "$toolkit_root" && "$toolkit_root" == "$rf"/* ]]; then
+            holders+=("$f")
+        fi
+        targets+=("$f")
+    done
+
+    for f in "${kept[@]+"${kept[@]}"}"; do
+        echo -e "  ${GREEN}Kept:${RESET} $f  ${DIM}(the toolkit running this cleanup)${RESET}"
+        log "[STEP 4] KEPT: $f (the toolkit running this cleanup)"
+    done
+
+    if [[ ${#targets[@]} -eq 0 ]]; then
+        info "No other Grin install paths found. Skipping."
+        log "[STEP 4] Nothing to delete besides the kept toolkit. Skipped."
+        return
+    fi
+
+    info "Found Grin installation paths:"
+    for f in "${targets[@]}"; do
         local sz
         sz=$(du -sh "$f" 2>/dev/null | awk '{print $1}' || echo "?")
         echo -e "  ${YELLOW}→${RESET} $f  ${DIM}($sz)${RESET}"
     done
 
+    for f in "${holders[@]+"${holders[@]}"}"; do
+        echo ""
+        warn "$f contains the toolkit running this cleanup ($toolkit_root)."
+        warn "Answering y deletes the toolkit too. To keep it: answer N, move it out of $f, and run the cleanup again."
+    done
+
     if confirm_step "Remove all Grin install directories and binaries?"; then
-        for f in "${found[@]}"; do
+        for f in "${targets[@]}"; do
             rm -rf "${f:?}"
             success "Removed: $f"
             log "[STEP 4] DELETED: $f"
@@ -1020,6 +1095,17 @@ main() {
     echo -e "${BOLD}${GREEN}  Review log: $LOG_FILE${RESET}"
     echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
+    # Host-wide OS security policy (lib/08_lib_host_updates.sh) is deliberately
+    # left in place: it protects the box whether or not Grin stays on it.
+    # Test the policy files and the state file, not the directory: a host that
+    # only ever had a patch run from 081 has the dir (run-now/) but no policy.
+    if [[ -e /etc/apt/apt.conf.d/52grin-unattended-upgrades || -e /var/lib/grin-toolkit/host-updates/state ]] \
+        || grep -qsF "Written by Grin Node Toolkit (host updates)" /etc/dnf/automatic.conf; then
+        echo -e "  ${DIM}Kept: the OS automatic security-update policy. To turn it off, run${RESET}"
+        echo -e "  ${DIM}Host Optimization (hub 08) → 9) Automatic Security Updates → Disable before cleanup.${RESET}"
+        echo ""
+        log "Kept: OS automatic security-update policy (host-wide, not Grin data)."
+    fi
 
     log "=== FULL GRIN CLEANUP COMPLETE ==="
 

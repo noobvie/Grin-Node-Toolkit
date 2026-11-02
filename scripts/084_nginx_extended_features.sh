@@ -632,7 +632,7 @@ show_bandwidth_consumers() {
     # This is robust against URL paths containing spaces (which shift $10-based parsing).
     awk -F'"' '{
         split($1, a, " "); ip = a[1]
-        split($3, b, " "); bytes = b[3]
+        split($3, b, " "); bytes = b[2]
         if (ip != "" && bytes ~ /^[0-9]+$/) tot[ip] += bytes
     }
     END { for (ip in tot) printf "%012d %s\n", tot[ip], ip }' \

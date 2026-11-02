@@ -17,8 +17,11 @@
 //   [4] every action listener resolves the element with closest('[data-action]') (a bare e.target
 //       makes a click on a button's emoji/span child do nothing), and a delegated listener for a
 //       non-bubbling event (error, load, focus, …) passes capture `true`
-//   [5] script tags: no local <script src> carries defer / async / type (the extraction kept classic
-//       blocking order); every page-specific script loads AFTER the page's other shared scripts
+//   [5] script tags: no local <script src> carries async / type. Admin pages keep classic blocking
+//       order (no defer). Public pages defer every local script except public-shell.js and
+//       public-theme.js, which stay classic so the header and the saved theme land before the first
+//       paint; deferred scripts run in source order, so the order rule below still holds for them.
+//       Every page-specific script loads AFTER the page's other shared scripts
 //       (Chart.js, api.js, settings-common.js …) and BEFORE the public shell trio (public-shell.js,
 //       public-theme.js, branding.js) — except payments-redirect.js, which must be the FIRST script
 //       in payments.html's <head>, ahead of every stylesheet
@@ -192,13 +195,21 @@ function checkPage(label, html, scripts) {
 
 // [5] on one page's tag list. pageSpecific(file) decides which tags are the page's own; isTrailer
 // marks the public shell scripts that run AFTER the page's own code.
-function checkOrder(label, html, tags, pageSpecific, isRedirect, isTrailer = () => false) {
+// isChrome: null on an admin page (every script classic); on a public page, the scripts that
+// stay classic while every other local script must carry defer.
+function checkOrder(label, html, tags, pageSpecific, isRedirect, isTrailer = () => false, isChrome = null) {
   const problems = [];
   for (const t of tags) {
     if (t.inline) continue; // inline blocks are T5's business (only JSON-LD is left)
     if (!t.file) continue;  // a remote src — none today; the CSP owns those
-    for (const a of ['defer', 'async', 'type', 'nomodule']) {
-      if (hasAttr(t.attrs, a)) problems.push(`${t.src}: carries ${a} — the extraction kept classic blocking order`);
+    for (const a of ['async', 'type', 'nomodule']) {
+      if (hasAttr(t.attrs, a)) problems.push(`${t.src}: carries ${a} — scripts run classic or deferred, in source order`);
+    }
+    const deferred = hasAttr(t.attrs, 'defer');
+    if (!isChrome || isChrome(t.file)) {
+      if (deferred) problems.push(`${t.src}: carries defer — it must run before the first paint`);
+    } else if (!deferred) {
+      problems.push(`${t.src}: missing defer — a public page defers every script but the shell and theme`);
     }
   }
   const local = tags.filter((t) => !t.inline && t.file);
@@ -242,6 +253,12 @@ const isRedirect = (f) => norm(f).endsWith('/admin-panel/js/payments-redirect.js
 // own code, exactly where they sat when that code was an inline block.
 const TRAILERS = ['public_html/js/public-shell.js', 'public_html/js/public-theme.js', 'public_html/js/branding.js'];
 const isTrailer = (f) => TRAILERS.some((t) => norm(f).endsWith('/' + t));
+// The two public scripts that stay classic: public-shell.js injects the header, public-theme.js
+// applies the saved theme. Deferred, both would land after the first paint (a layout shift and a
+// flash of the default theme).
+const CHROME = ['public_html/js/public-shell.js', 'public_html/js/public-theme.js'];
+const isChrome = (f) => CHROME.some((t) => norm(f).endsWith('/' + t));
+const isPublicPage = (p) => !path.relative(PUBLIC_ROOT, p).startsWith('..');
 const srcCache = new Map();
 const readJs = (f) => { if (!srcCache.has(f)) srcCache.set(f, fs.readFileSync(f, 'utf8')); return srcCache.get(f); };
 
@@ -286,8 +303,8 @@ for (const p of pages) {
   const html = fs.readFileSync(p, 'utf8');
   const tags = scriptTags(p, html);
   ownSeen += tags.filter((t) => t.file && isPageSpecific(t.file)).length;
-  const probs = checkOrder(rel(p), html, tags, isPageSpecific, isRedirect, isTrailer);
-  ok(`${rel(p)}: classic order, page script after its libraries and before the public shell`,
+  const probs = checkOrder(rel(p), html, tags, isPageSpecific, isRedirect, isTrailer, isPublicPage(p) ? isChrome : null);
+  ok(`${rel(p)}: ${isPublicPage(p) ? 'deferred' : 'classic'} order, page script after its libraries and before the public shell`,
     probs.length === 0, probs.join('\n      '));
 }
 ok(`non-vacuity: ≥ 30 page-specific script tags seen (${ownSeen})`, ownSeen >= 30);
@@ -375,6 +392,14 @@ console.log('\n[controls] the checker reports what it claims to');
     order(page('<script src="/js/auth.js"></script><script src="/js/pages/x.js"></script><script src="/js/public-shell.js"></script>')).length === 0);
   ok('control: public page script moved below the shell → reported',
     order(page('<script src="/js/public-shell.js"></script><script src="/js/pages/x.js"></script>')).some((x) => /AFTER shell/.test(x)));
+  const chrome = (f) => /public-shell|public-theme/.test(f);
+  const pub = (h) => checkOrder('ctl', h, tagsOf(h), own, redir, chrome, chrome);
+  ok('control: public page, deferred scripts + classic shell and theme is accepted',
+    pub(page('<script defer src="/js/auth.js"></script><script defer src="/js/pages/x.js"></script><script src="/js/public-shell.js"></script><script src="/js/public-theme.js"></script>')).length === 0);
+  ok('control: public page, a library without defer → reported',
+    pub(page('<script src="/js/auth.js"></script><script defer src="/js/pages/x.js"></script>')).some((x) => /missing defer/.test(x)));
+  ok('control: public page, the shell deferred → reported',
+    pub(page('<script defer src="/js/pages/x.js"></script><script defer src="/js/public-shell.js"></script>')).some((x) => /before the first paint/.test(x)));
   ok('control: classic order is accepted', order(page('<script src="/admin/api.js"></script><script src="/admin/js/x.js"></script>')).length === 0);
   ok('control: defer → reported', order(page('<script src="/admin/js/x.js" defer></script>')).some((x) => /defer/.test(x)));
   ok('control: type="module" → reported', order(page('<script type="module" src="/admin/js/x.js"></script>')).some((x) => /type/.test(x)));

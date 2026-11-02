@@ -185,7 +185,7 @@ menu_remote_schedule() {
     fi
     expr="$RC_SCHED_EXPR"
 
-    local this_script; this_script=$(realpath "${BASH_SOURCE[0]}")
+    local this_script="$SCRIPT_SELF"
     local tag="$CRON_COMMENT_REMOTE $sk"
     local cmd="bash $this_script --cron-remote $sk >> $LOG_DIR/cron_remote.log 2>&1"
     # Drop any EXISTING entry for this site_key by what it DOES, not by whether

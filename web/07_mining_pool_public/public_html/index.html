@@ -68,6 +68,8 @@
     <!-- The blog feed is served at /blog/rss.xml (index.js), and that is the only RSS
          path nginx proxies to the backend. /feed.xml was never routed — it 404'd. -->
     <link rel="alternate" type="application/rss+xml" title="Blog" href="/blog/rss.xml">
+    <!-- branding.js fetches this at once; the preload starts it alongside the HTML. -->
+    <link rel="preload" href="/api/public/branding" as="fetch" crossorigin>
     <link rel="stylesheet" href="/css/dashboard.css">
     <link rel="stylesheet" href="/css/themes.css">
     <link rel="stylesheet" href="/css/reactor.css">
@@ -443,12 +445,12 @@
 
     <!-- footer injected by /js/public-shell.js -->
 
-    <script src="/js/auth.js"></script>
-    <script src="/js/vendor/chart.umd.min.js"></script>
-    <script src="/js/charts-init.js"></script>
+    <script defer src="/js/auth.js"></script>
+    <script defer src="/js/vendor/chart.umd.min.js"></script>
+    <script defer src="/js/charts-init.js"></script>
     <script src="/js/public-shell.js"></script>
     <script src="/js/public-theme.js"></script>
-    <script src="/js/branding.js"></script>
-    <script src="/js/reactor-dashboard.js"></script>
+    <script defer src="/js/branding.js"></script>
+    <script defer src="/js/reactor-dashboard.js"></script>
 </body>
 </html>

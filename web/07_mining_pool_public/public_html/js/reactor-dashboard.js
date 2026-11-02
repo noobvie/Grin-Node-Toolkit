@@ -1126,12 +1126,16 @@
     return (direct && best.direct !== true && direct.ms - best.ms <= bias) ? direct.region : best.region;
   }
 
-  // Branding is read once and shared with loadRegions' port/host fallback. A failed read is
-  // forgotten so the next caller retries; an answer is kept for the page's life.
+  // Branding is read once and shared with loadRegions' port/host fallback and the contact rows.
+  // The first read reuses branding.js's own request (window.GriniumBranding.ready); a failed
+  // read is forgotten so the next caller retries; an answer is kept for the page's life.
   var brandingP = null;
+  var brandingShared = window.GriniumBranding && window.GriniumBranding.ready;
   function readBranding() {
     if (!brandingP) {
-      brandingP = Auth.read('/api/public/branding').catch(function () { return null; }).then(function (b) {
+      var src = brandingShared || Auth.read('/api/public/branding');
+      brandingShared = null;
+      brandingP = src.catch(function () { return null; }).then(function (b) {
         if (!b) brandingP = null;
         return b;
       });
@@ -1590,8 +1594,7 @@
   // toggles row visibility — same behaviour as the previous dashboard).
   async function loadInfoContact() {
     try {
-      var r = await fetch('/api/public/branding', { credentials: 'same-origin' });
-      var json = r.ok ? await r.json() : null;
+      var json = await readBranding();
       var data = (json && json.data) ? json.data : {};
       var enc = data.pool && data.pool.contact_email_enc;
       var email = '';

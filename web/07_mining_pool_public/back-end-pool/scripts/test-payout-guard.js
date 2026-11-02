@@ -3618,6 +3618,24 @@ async function inFlightCoverageSection() {
   await quiet(() => am.checkMoneyIntegrity());
   ok('IF8. …and as a DRAIN once the payout is past the settle window',
     drainFreezes().some((r) => /drain/.test(r)), JSON.stringify(freezes));
+
+  // A block reward matures WHILE the slow wallet scan is awaited: the credit and its balance_log
+  // row commit together, but a ledger total read before the await would miss it → drift −60.
+  wipe();
+  const credit = (addr, amt) => {
+    db.prepare('UPDATE miner_accounts SET balance = balance + ? WHERE grin_address = ?').run(amt, addr);
+    db.prepare(`INSERT INTO balance_log (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id, created_at)
+                VALUES (?, 'credit', ?, 0, 0, 0, 0, 'block', 'test', ?)`).run(addr, amt, nowS());
+  };
+  setAcct(X, 0, 0); credit(X, 100);
+  const midScan = { async getBalance() {
+    await new Promise((r) => setImmediate(r));
+    credit(X, 60);
+    return walletOf({ total: 160, spendable: 160 }).getBalance();
+  } };
+  c = (await computeReconciliation(db, midScan, true)).checks;
+  ok('IF9. a reward credited during the wallet scan is not an integrity drift',
+    c.integrity_ok === true && Math.abs(c.integrity_drift) < 1e-6, JSON.stringify(c));
   wipe();
 }
 

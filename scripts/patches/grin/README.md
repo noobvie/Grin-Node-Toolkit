@@ -1,9 +1,10 @@
 # `scripts/patches/grin/` — toolkit patches for the grin node
 
 Applied by **Script 01 → key G → 1 (compile from source)** after the checkout, in file-name
-order, one at a time (`git apply --check`, then `git apply`). The build offers them with a
-`[Y/n]` prompt. Declining, or a patch that does not apply to the chosen ref, builds plain
-upstream instead, and says so. A patched binary is named `grin-<ver>-<ref>-tkp<N>-<sha>`, and
+order, one at a time (`git apply --check`, then `git apply`). The build first dry-runs the
+whole set against the checkout. If any patch does not apply to the chosen ref, it says which
+one and builds plain upstream without asking. Otherwise it offers them with a `[Y/n]` prompt
+(`[y/N]` for a pull request); declining also builds plain upstream. A patched binary is named `grin-<ver>-<ref>-tkp<N>-<sha>`, and
 its `.info` sidecar lists every patch with its sha256, so it can never pass for a release.
 
 These are **workarounds we carry until upstream ships an equivalent**, not a fork. Each one is a
@@ -14,6 +15,12 @@ upstream release you build contains the fix.
 |---|---|---|
 | `0001-init-output-pos-index-search-forward.patch` | Chain compaction's output_pos repair reads every block header since genesis (4M+ random reads). Replaced with a forward galloping + binary search that places each output at the same height. | v5.5.1, master (= v5.5.1), staging `b66e188` |
 | `0002-log-compaction-timings.patch` | Logs compaction start, finish and per-phase timings at `Info`, and promotes the output_pos repair counts from `debug` to `info`. Observability only. Needs 0001 first. | same |
+
+**Upstream fix in review:** mimblewimble/grin PR #3939 (`fix archive compaction performance`,
+fixes issue #3938) rewrites the same `init_output_pos_index` code, skips repeated archive
+compactions, and logs `compact: starting` / `compact: finished in …ms` itself. To test it, enter
+ref `pr/3939` at key G → 1. The toolkit patches target the unpatched function, so they fail
+the dry run on top of the PR and the build skips them by itself. Once the fix ships in a release, drop 0001 and 0002.
 
 ## Why 0001 exists — the archive-node compaction stall
 

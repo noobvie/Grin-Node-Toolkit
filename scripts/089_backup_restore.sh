@@ -50,6 +50,10 @@
 #   · /opt/grin/node-events/<net>/ledger.jsonl*  — node event recorder history
 #                                (086). Ledger only: no status.json, no evidence.
 #                                Restored only where no live ledger exists.
+#   · /opt/grin/node-events/<net>/public/history.jsonl + <net>/.public_salt  — public
+#                                status hash chain and the secret salt keying it.
+#                                Backed up and restored as a pair, only where this
+#                                box has neither.
 #   · /etc/nginx/sites-available/*  (Grin-related configs only)
 #   · /etc/letsencrypt/live/ + renewal/  — SSL certs
 #   · root + www-data crontabs  — collector schedules
@@ -596,6 +600,23 @@ run_backup() {
             sources+=("$_nf")
             manifest_lines+=("node-events-ledger: $_nf")
             [[ "$auto" == false ]] && info "  ✓ $_nf (node event recorder ledger)"
+        done
+    done
+
+    # Public status history. public/history.jsonl is the hash chain visitors
+    # check against their own copies, and <net>/.public_salt keys its `src`
+    # values; the pair is only useful together (a new salt changes every future
+    # src and breaks dedupe against the old chain), so both go in. The salt is a
+    # secret: tar keeps its 0600 mode, and the archive is encrypted afterwards.
+    # The served *.json files, .compact_scan and the lock files are rebuilt by
+    # the recorder and are not archived.
+    local _pf
+    for _ne in /opt/grin/node-events/mainnet /opt/grin/node-events/testnet; do
+        for _pf in "$_ne/public/history.jsonl" "$_ne/.public_salt"; do
+            [[ -f "$_pf" && ! -L "$_pf" ]] || continue
+            sources+=("$_pf")
+            manifest_lines+=("node-events-public: $_pf")
+            [[ "$auto" == false ]] && info "  ✓ $_pf (public status history)"
         done
     done
 
@@ -1273,6 +1294,51 @@ run_restore() {
         done
         success "Restored: $_ne_net node event ledger ($_ne_dst)"
         log "[RESTORE] node-events $_ne_net ledger"
+    done
+
+    # Public status history + its salt: one unit. Restored ONLY where this box
+    # has neither (a live history is newer than any archive, and a live salt
+    # already keys the chain it belongs to). Restoring just one of the pair would
+    # leave a chain whose src values the salt no longer reproduces, or a salt
+    # that keys nothing, so a live file of either kind keeps both archived ones
+    # out, and an archive holding only one of them restores nothing.
+    local _pn_net _pn_src _pn_dst
+    for _pn_net in mainnet testnet; do
+        _pn_src="$extract_dir/opt/grin/node-events/$_pn_net"
+        _pn_dst="/opt/grin/node-events/$_pn_net"
+        if [[ ! -f "$_pn_src/public/history.jsonl" && ! -f "$_pn_src/.public_salt" ]]; then
+            continue
+        fi
+        if [[ ! -f "$_pn_src/public/history.jsonl" || ! -f "$_pn_src/.public_salt" \
+              || -L "$_pn_src/public/history.jsonl" || -L "$_pn_src/.public_salt" ]]; then
+            warn "The archive holds only part of the $_pn_net public status history (history + salt are needed together) — not restored."
+            log "[RESTORE] node-events $_pn_net public: incomplete pair in archive, skipped"
+            continue
+        fi
+        if [[ -e "$_pn_dst/public/history.jsonl" || -e "$_pn_dst/.public_salt" ]]; then
+            info "Kept the live $_pn_net public status history and salt (newer than the archive) — the archived pair was not restored."
+            log "[RESTORE] node-events $_pn_net public: live history/salt kept"
+            continue
+        fi
+        if ! mkdir -p "$_pn_dst/public" || ! chmod 755 /opt/grin/node-events "$_pn_dst" "$_pn_dst/public"; then
+            warn "Could not create $_pn_dst/public — $_pn_net public status history not restored."
+            continue
+        fi
+        if ! cp -- "$_pn_src/public/history.jsonl" "$_pn_dst/public/history.jsonl" \
+           || ! chmod 644 "$_pn_dst/public/history.jsonl"; then
+            warn "Could not restore the $_pn_net public status history."
+            rm -f -- "$_pn_dst/public/history.jsonl" 2>/dev/null || true
+            continue
+        fi
+        chown root:root "$_pn_dst/public/history.jsonl" 2>/dev/null || true
+        # 0600 before the secret lands: install -m creates it with the final mode.
+        if ! install -m 600 -o root -g root -- "$_pn_src/.public_salt" "$_pn_dst/.public_salt"; then
+            warn "Could not restore the $_pn_net public status salt — history rolled back too."
+            rm -f -- "$_pn_dst/.public_salt" "$_pn_dst/public/history.jsonl" 2>/dev/null || true
+            continue
+        fi
+        success "Restored: $_pn_net public status history + salt ($_pn_dst)"
+        log "[RESTORE] node-events $_pn_net public history + salt"
     done
 
     # Grin Drop dirs (individual files extracted from absolute paths)

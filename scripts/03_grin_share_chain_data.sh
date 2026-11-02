@@ -57,6 +57,10 @@
 # ============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Absolute path of this entry script, for the cron lines the libs write (E, I,
+# C → 6). Inside a sourced lib BASH_SOURCE[0] is the lib, and a cron line that
+# runs a lib only defines functions and exits 0, so the job never runs.
+SCRIPT_SELF="$(realpath "${BASH_SOURCE[0]}")"
 # Shared node primitives (canonical _grin_session_name, etc.). Source-guarded,
 # no side effects; defines info/warn/error fallbacks only if absent.
 source "$SCRIPT_DIR/lib/grin_node_control.sh"
@@ -1116,6 +1120,7 @@ menu_share_nginx() {
 
 
 run_interactive() {
+    repair_lib_cron_lines || true
     while true; do
         show_main_menu
         read -r choice
@@ -1143,6 +1148,12 @@ run_interactive() {
 ################################################################################
 
 main() {
+    # cron runs jobs with PATH=/usr/bin:/bin. On RHEL-family boxes `ss` lives in
+    # /usr/sbin, so get_pid_on_port finds no node, the running node looks down,
+    # and the nginx share would kill and relaunch it.
+    case "${1:-}" in
+        --cron-*) export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin${PATH:+:$PATH}" ;;
+    esac
     case "${1:-}" in
         --cron-nginx)       run_cron_nginx            ;;
         --cron-nginx-main)  run_cron_nginx mainnet    ;;

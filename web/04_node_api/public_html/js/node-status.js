@@ -265,6 +265,8 @@ async function applyRestLinks() {
     ['difficulty.json', 'total network difficulty'],
     ['emission.json',   'static emission schedule'],
     ['node.json',       'connected peers  (node-collector)'],
+    ['availability.json', 'availability 7/30/90 d + outages  (when published)'],
+    ['history.json',    'hash-chained outage history  (when published)'],
   ];
   const el = document.getElementById('rest-endpoints');
   if (el) {

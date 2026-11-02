@@ -255,14 +255,18 @@ run_super_auto() {
         if [[ "${_cf,,}" == "n" || "${_cf,,}" == "no" || "$_cf" == "0" ]]; then info "Super Auto cancelled."; return "${S01_RC_BACK:-1}"; fi
     fi
 
-    # ── 3. Kill + wipe everything (reuse existing K-path) ────────────────────────
+    # ── 3. Preflight, same order as key 5: legacy ~/.grin check, then deps ──────
+    # Both run before anything is stopped or deleted: "0" at the legacy prompt
+    # exits and a package failure dies, and either must leave the nodes as they are.
+    check_legacy_grin_dir
+    check_os_and_deps
+
+    # ── 4. Kill + wipe everything (reuse existing K-path) ────────────────────────
     stop_grin_gracefully
     _remove_instance_dirs all
     if [[ -f "$INSTANCES_CONF" ]]; then : > "$INSTANCES_CONF"; log "Conf cleared (super-auto rebuild)."; fi
 
-    # ── 4. Deps, then build both (pruned, streamed) with per-node hardening ──────
-    check_os_and_deps
-    check_legacy_grin_dir
+    # ── 5. Build both (pruned, streamed) with per-node hardening ─────────────────
     SUPER_AUTO=true
     # The 20 GB gate above IS the disk check; stream mode also skips the per-node
     # disk check, and create_node_dir must not re-die on space after a wipe.

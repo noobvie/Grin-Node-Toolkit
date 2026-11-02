@@ -37,7 +37,7 @@
         const LEDGER_PAGE_SIZE = 5;    // P-06/P-07 ledgers: the 5 most recent, older via the pager
         let currentAddr = '';
         let isDemo = false;
-        let acctRange = 'day';
+        let acctRange = 'month';
         let acctWithdrawalFee = 0;    // flat withdrawal fee (GRIN) from the summary; 0 = pool absorbs it
         const ledger = { in: { page: 0, total: 0 }, out: { page: 0, total: 0 } };
         const wd = { page: 0, total: 0 };   // withdrawal-history pager (P-08)

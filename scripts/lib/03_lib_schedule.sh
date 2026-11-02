@@ -57,6 +57,60 @@ show_current_schedule() {
     echo ""
 }
 
+# A cron line that runs lib/03_lib_schedule.sh or lib/03_lib_remote_menu.sh with a
+# --cron-* flag does nothing: bash only defines the lib's functions and exits 0.
+# Called once when the interactive menu opens (never on a --cron-* run), it offers
+# to point such lines at the entry script. Only the script path changes; the
+# schedule, flags, log redirect, tag lines and every other line stay as they are.
+repair_lib_cron_lines() {
+    command -v crontab &>/dev/null || return 0
+    local existing
+    existing=$(crontab -l 2>/dev/null) || return 0
+    local lib_re='^(.*bash[[:space:]]+)[^[:space:]]*/lib/03_lib_(schedule|remote_menu)\.sh([[:space:]]+--cron-.*)$'
+    local line out="" shown="" changed=0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" =~ ^[[:space:]]*# ]]; then
+            :
+        elif [[ "$line" =~ $lib_re ]]; then
+            shown+="    $line"$'\n'
+            line="${BASH_REMATCH[1]}${SCRIPT_SELF}${BASH_REMATCH[3]}"
+            changed=$((changed + 1))
+        fi
+        out+="$line"$'\n'
+    done <<< "$existing"
+    if [ "$changed" -eq 0 ]; then
+        return 0
+    fi
+
+    echo ""
+    sched_warn "$changed cron line(s) run a Script 03 library file instead of the script, so they never run:"
+    printf '%s' "$shown"
+    echo -e "  ${DIM}Repairing points them at ${SCRIPT_SELF} and turns these schedules back on.${RESET}"
+    echo -e "  ${DIM}A scheduled share stops the node while it runs.${RESET}"
+    echo -ne "Repair them now? [Y/n]: "
+    local ans
+    if ! read -r ans; then
+        echo ""
+        sched_info "Left unchanged."
+        return 0
+    fi
+    case "${ans,,}" in
+        n|no|q|0)
+            sched_info "Left unchanged. You will be asked again next time this menu opens."
+            ;;
+        *)
+            if ! printf '%s' "$out" | crontab -; then
+                sched_error "Could not rewrite the crontab. Nothing was changed."
+                echo "Press Enter to continue..."; read -r || true
+                return 1
+            fi
+            sched_success "$changed cron line(s) repaired."
+            sched_log "Repaired $changed cron line(s) that ran a lib file; now: $SCRIPT_SELF"
+            ;;
+    esac
+    echo "Press Enter to continue..."; read -r || true
+}
+
 list_presets() {
     local default_expr="$1" default_label="$2" ntype="${3:-pruned}"
     local now_h now_m
@@ -184,7 +238,7 @@ add_nginx_schedule() {
         return
     fi
     load_nginx_config
-    local this_script; this_script="$(realpath "${BASH_SOURCE[0]}")"
+    local this_script="$SCRIPT_SELF"
 
     # Which networks does the saved config share?
     local -a nets=()
@@ -330,7 +384,7 @@ add_clean_schedule() {
         *) clean_expr="0 */4  * * *" ;;
     esac
 
-    local this_script; this_script="$(realpath "${BASH_SOURCE[0]}")"
+    local this_script="$SCRIPT_SELF"
     local clean_log="$LOG_DIR/cron_clean_txhashset.log"
     local cron_line="$clean_expr bash $this_script --cron-clean >> $clean_log 2>&1 $CRON_COMMENT_CLEAN"
     local existing; existing=$(crontab -l 2>/dev/null || true)

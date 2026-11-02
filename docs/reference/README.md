@@ -84,7 +84,7 @@ resolver, the allowlist rules, and what is still open.
 | [script02_reference_flowchart.md](script02_reference_flowchart.md) | Nginx file-server manager flow |
 | [script03_design.md](script03_design.md) · [_implementation](script03_implementation.md) | Chain-data sharing: mirrors, landing page, remote pull — design, and as-built + build notes |
 | [script03_reference_flowchart.md](script03_reference_flowchart.md) | Chain-data sharing flow |
-| [script04_reference_flowchart.md](script04_reference_flowchart.md) | Node Foreign API + stats collector flow |
+| [script04_reference_flowchart.md](script04_reference_flowchart.md) | Node Foreign API + stats collector flow, incl. the public Availability section (collector copy) |
 | [script04_security_audit.md](script04_security_audit.md) | Public node API exposure |
 
 ## Wallets & payments (Script 05 band)
@@ -103,7 +103,7 @@ resolver, the allowlist rules, and what is still open.
 
 | Doc | What it covers |
 |---|---|
-| [script06_design.md](script06_design.md) · [_implementation](script06_implementation.md) | Global health + price collector, peer map, self-hosted basemap, **06d Tiny Explorer + tools hub** |
+| [script06_design.md](script06_design.md) · [_implementation](script06_implementation.md) | Global health + price collector, peer map, self-hosted basemap, **06d Tiny Explorer + tools hub**, 06d `/availability` page |
 | [script06_security_audit.md](script06_security_audit.md) | Collector and public stats exposure |
 | [script06b_design.md](script06b_design.md) · [_implementation](script06b_implementation.md) | **GrinScan** explorer — pruned vs archive behaviour |
 
@@ -115,7 +115,7 @@ resolver, the allowlist rules, and what is still open.
 | [script07_design_games.md](script07_design_games.md) | The `/play/` games platform (design §19) |
 | [script07_implementation.md](script07_implementation.md) | Pool as built, by subject · runbooks (incl. hub move §8.7) · Build notes — obstacles & lessons · Open items |
 | [script07_implementation_games.md](script07_implementation_games.md) | `/play/` as built, with its own Build notes |
-| [script07_reference_solo_flowchart.md](script07_reference_solo_flowchart.md) | Solo private mining flow (`07_grin_mining_solo.sh`) |
+| [script07_reference_solo_flowchart.md](script07_reference_solo_flowchart.md) | Solo private mining flow (`07_grin_mining_solo.sh`); Solo Health node binary change marker (built 2026-10-28, not VPS-tested) |
 | [script07_security_audit.md](script07_security_audit.md) | Pool security record, §A–§J17. **Start at the Status roll-up** — open and partial findings only; the roll-up is the whole of it in one table |
 | [script07_security_audit_archive.md](script07_security_audit_archive.md) | Closed findings of the Script 07 audit (142, verbatim, by audit section). Open items and the roll-up stay in `script07_security_audit.md` |
 
@@ -124,9 +124,9 @@ resolver, the allowlist rules, and what is still open.
 | Doc | What it covers |
 |---|---|
 | [script082_design.md](script082_design.md) · [_implementation](script082_implementation.md) | Provider Access Watch — VPS host-tamper detection |
-| [script083_design.md](script083_design.md) · [_implementation](script083_implementation.md) | Host Optimization advisor (read-only) |
-| [script086_design.md](script086_design.md) | Diagnostics & Support Bundle — health check, support bundle, log triage; §8 node event recorder design (built, never run) |
-| [script086_implementation.md](script086_implementation.md) | Node event recorder as built — files, installed footprint, Part 2–5 deltas, the R1 review, classification order, acceptance (§8.15–§8.22; never run) |
+| [script083_design.md](script083_design.md) · [_implementation](script083_implementation.md) | Host Optimization advisor (read-only report) + Automatic Security Updates, locally (083 key 9) and fleet-wide (081 Mass Deployment key 5) |
+| [script086_design.md](script086_design.md) | Diagnostics & Support Bundle — health check, support bundle, log triage; §8 node event recorder design (built, never run); §9 public status page design; §10 mining / stratum latency, key 8 (built 2026-10-28, never run; as-built in the implementation doc §10) |
+| [script086_implementation.md](script086_implementation.md) | Node event recorder as built — files, installed footprint, Part 2–5 deltas, the R1 review, classification order, acceptance (§8.15–§8.22; never run); §9 public status page as built, accepted limits (§9.8); §10 key 8 mining / stratum latency as built — the four `086_lib_stratum*.sh` libs, sub-menu, refusals, provenance, A/B runbook, VPS acceptance list (§10; never run) |
 
 ## Connectivity (Script 09)
 

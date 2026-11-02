@@ -56,6 +56,8 @@
   }
   </script>
 
+  <!-- branding.js fetches this at once; the preload starts it alongside the HTML. -->
+  <link rel="preload" href="/api/public/branding" as="fetch" crossorigin>
   <link rel="stylesheet" href="/css/dashboard.css">
   <link rel="stylesheet" href="/css/themes.css">
   <link rel="stylesheet" href="/css/reactor.css">
@@ -178,7 +180,10 @@
         <div class="placard figures cols-6" aria-label="Lifetime payment figures">
             <span class="tone-gold"><i>Total paid all-time</i><b id="ph-paid-all">—</b></span>
             <span class="tone-info"><i>Payouts all-time</i><b id="ph-count-all">—</b><small class="fig-sub" id="ph-avg">avg —</small></span>
-            <span class="tone-text"><i>Effective pool fee</i><b id="ph-fee-pct">—</b></span>
+            <!-- The LIVE rate (pool-info), the one new blocks are charged. Not the ledger-derived
+                 lifetime rate (totals.fee_percent): that moves toward a new rate block by block,
+                 so a 0% promotion would still read "1.00 %" for weeks. -->
+            <span class="tone-text"><i>Current pool fee</i><b id="ph-fee-pct">—</b></span>
             <span class="tone-ok"><i>Given away</i><b id="ph-giveaways">—</b></span>
             <span class="tone-warn"><i>Donations received</i><b id="ph-donations">—</b></span>
             <!-- The operator's own take, as actually withdrawn from the pool fee (after the network
@@ -203,8 +208,8 @@
             <!-- ═══ P-01 · CREDITED vs SENT, per period ═══
                  Both bars are MINER-side: credited = block rewards after the pool fee + giveaways −
                  donations (what lands in withdrawable balances); sent = confirmed payouts net of the
-                 withdrawal fee. Not miners-stats P-03, whose "earnings" is the gross block reward
-                 with the fee still in it — that gap would read as money held. -->
+                 withdrawal fee. Never the gross block reward: with the fee still in it, the gap
+                 against payouts would read as money held. -->
             <div class="panel"><span class="screws"></span>
                 <h2 class="panel-title"><span class="tag">P-01</span> Ledger recorder — credited vs sent
                     <span class="right">GRIN credited to miners vs paid out, per period</span></h2>
@@ -362,13 +367,13 @@
 
     <!-- footer injected by /js/public-shell.js -->
 
-    <script src="/js/auth.js"></script>
-    <script src="/js/num-format.js"></script>
-    <script src="/js/vendor/chart.umd.min.js"></script>
-    <script src="/js/charts-init.js"></script>
-    <script src="/js/pages/payment-history.js"></script>
+    <script defer src="/js/auth.js"></script>
+    <script defer src="/js/num-format.js"></script>
+    <script defer src="/js/vendor/chart.umd.min.js"></script>
+    <script defer src="/js/charts-init.js"></script>
+    <script defer src="/js/pages/payment-history.js"></script>
     <script src="/js/public-shell.js"></script>
     <script src="/js/public-theme.js"></script>
-    <script src="/js/branding.js"></script>
+    <script defer src="/js/branding.js"></script>
 </body>
 </html>

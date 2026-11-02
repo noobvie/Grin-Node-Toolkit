@@ -21,8 +21,9 @@ S01_ARG=""
 # -----------------------------------------------------------------------------
 # s01_reset_state — the per-run wizard globals back to their starting values. Called once at startup and before
 # every menu pass, so nothing one action left behind (a Super Auto flag, a stream choice, a downloaded binary, the
-# disk-check skip) leaks into the next. GRIN_BIN_TMP is re-seeded from GRIN_PREBUILT_BIN, which the source build
-# (key G) exports: a binary compiled there survives the reset and is used by the next install.
+# disk-check skip) leaks into the next. GRIN_BIN_TMP is re-seeded from GRIN_PREBUILT_BIN, which s01_run_action
+# exports in this shell after key G → 3 arms a source-built binary: every later install, rebuild or Super Auto of this
+# run uses it, until Script 01 exits.
 # -----------------------------------------------------------------------------
 s01_reset_state() {
     NETWORK_TYPE=""
@@ -333,7 +334,14 @@ s01_run_action() {
     # `set -u` exits regardless of errexit. In the subshell any of those ends only this action and the menu loop
     # carries on. Nothing is lost by it — s01_reset_state and s01_scan_nodes rebuild every global the next pass
     # reads. The subshell's status lands in S01_ACTION_RC (S01_RC_BACK = skip the pause).
-    local rc=0
+    # The one thing an action hands back is key G → 3's armed binary: an export inside the subshell dies with it, so
+    # _gsb_use_for_session writes the path to S01_ARMED_FILE and it is exported here, in the menu shell.
+    local rc=0 armed=""
+    unset S01_ARMED_FILE
+    if [[ "$S01_KEY" == "source" ]]; then
+        S01_ARMED_FILE="$(mktemp "${TMPDIR:-/tmp}/s01_armed.XXXXXX" 2>/dev/null)" || S01_ARMED_FILE=""
+        if [[ -n "$S01_ARMED_FILE" ]]; then export S01_ARMED_FILE; else unset S01_ARMED_FILE; fi
+    fi
     (
         S01_IN_ACTION=1
         case "$S01_KEY" in
@@ -347,6 +355,17 @@ s01_run_action() {
         esac
     ) || rc=$?
     S01_ACTION_RC=$rc
+    if [[ -n "${S01_ARMED_FILE:-}" ]]; then
+        IFS= read -r armed < "$S01_ARMED_FILE" 2>/dev/null || true
+        rm -f "$S01_ARMED_FILE" || warn "Could not remove $S01_ARMED_FILE."
+        unset S01_ARMED_FILE
+        if [[ -n "$armed" && -f "$armed" && -x "$armed" ]]; then
+            export GRIN_PREBUILT_BIN="$armed"
+            log "[MENU] source-built binary armed for this run: $armed"
+        elif [[ -n "$armed" ]]; then
+            warn "The armed binary $armed is not an executable file — nothing was armed."
+        fi
+    fi
     return 0
 }
 

@@ -8004,7 +8004,7 @@ content, never in an attribute — checked at every one of their 14 call sites.
 
 > **Closed — full record moved verbatim to [`script07_security_audit_archive.md`](script07_security_audit_archive.md) (J15-2).**
 
-### J15-3 — [Medium] Every fresh pool publishes the toolkit author's domain, X account and GitHub org as the operator's own identity — 56 static SEO tags plus two JSON-LD blocks, and since §J10-4 blanked `site_url` nothing rewrote any of them — **IDENTITY CLAIMS + RUNTIME HALF FIXED 2026-09-03; the 56 static URLs are OPEN**
+### J15-3 — [Medium] Every fresh pool publishes the toolkit author's domain, X account and GitHub org as the operator's own identity — 56 static SEO tags plus two JSON-LD blocks, and since §J10-4 blanked `site_url` nothing rewrote any of them — **IDENTITY CLAIMS + RUNTIME HALF FIXED 2026-09-03; the 56 static URLs rewritten by the vhost (built 2026-10-26, not VPS-tested)**
 
 **Threat actor: none — this is integrity and attribution, not attack.** It is the §J10-4
 family (`seo.site_url` shipped as `https://grinium.com`, Medium, fixed by blanking the
@@ -8076,6 +8076,18 @@ Recommendation: **(1) for `canonical`/`hreflang`, (2) for `og:image`/`twitter:im
 `twitter:domain`/`og:url`** — the first two resolve relatively by spec, the rest do not.
 Ten files, mechanical, but it changes what an operator's SEO looks like and it is a product
 call, not a security patch — plan rule 3. Recorded here rather than applied.
+
+**Resolved by option 4 (built 2026-10-26, not VPS-tested): the vhost rewrites the placeholder as
+it serves the page.** Found on the live pool: `https://grinium.com/` still served
+`<link rel="canonical" href="https://pool.grin.money/">` in its raw HTML, while its server-built
+`sitemap.xml` already said `grinium.com`. `pool_setup_nginx` now adds
+`sub_filter 'pool.grin.money' '<subdomain>'` (`sub_filter_once off`, `sub_filter_last_modified on`
+so unchanged pages still answer 304) to `location /`, which serves every static public page. This keeps absolute URLs for
+the unfurlers that want them, needs no edit to the ten HTML files, and follows a domain change on
+the next run of 4) Setup nginx. A deploy-time `sed` was ruled out because 3) Deploy web files runs
+before step 4 asks for the subdomain. When `nginx -V` shows no `--with-http_sub_module`, the step
+warns and the vhost is written without the rewrite. The fix takes effect only after 4) Setup nginx
+runs again on the box.
 
 ---
 

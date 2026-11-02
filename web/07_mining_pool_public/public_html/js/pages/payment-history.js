@@ -130,9 +130,6 @@
                     avgEl.textContent = 'avg ' + (totals.payout_count ? PoolFmt.grinTile(totals.avg_payout) : '—');
                     avgEl.title = totals.payout_count ? 'Average payout: ' + PoolFmt.grinExact(totals.avg_payout) : '';
                 }
-                setStat('ph-fee-pct',   (totals.to_miners_all || totals.fee_all)
-                                          ? (Number(totals.fee_percent || 0).toFixed(2) + ' %')
-                                          : '0 %');
                 setGrinStat('ph-giveaways', totals.giveaways_all);
                 setGrinStat('ph-donations', totals.donations_all);
                 setGrinStat('ph-operator', totals.operator_withdrawn_all);
@@ -190,6 +187,19 @@
                 toggleEmpty('ph-empty-split', true);
                 toggleEmpty('ph-empty-giveaways', true);
             }
+        }
+
+        // The live pool fee — the rate the next block found is charged — for the fee tile's
+        // headline. A failed read leaves the previous figure (or "—"), never a guessed 0 %.
+        async function loadFeeRate() {
+            try {
+                const info = await Auth.read('/api/config/pool-info');
+                if (!info) return;
+                const pct = Number(info.pool_fee_percent);
+                if (!isFinite(pct)) return;
+                // Trailing zeros dropped, like the dashboard terms tile: "0 %", "1 %", "0.5 %".
+                setStat('ph-fee-pct', Number(pct.toFixed(2)) + ' %');
+            } catch (e) { /* tile keeps its last figure */ }
         }
 
         // P-05 method + status, ONE column (2026-09-26, mobile width). This feed lists CONFIRMED
@@ -359,10 +369,11 @@
                     loadTransparency();
                 });
             }
+            loadFeeRate();
             loadTransparency();
             loadRecentPayouts();
             loadUnclaimed();
         });
 
-        // Refresh every 60 seconds.
-        Auth.poll(function () { loadTransparency(); loadRecentPayouts(); loadUnclaimed(); }, 60000);
+        // Refresh every 60 seconds. The fee is re-read too: an admin save applies it live.
+        Auth.poll(function () { loadFeeRate(); loadTransparency(); loadRecentPayouts(); loadUnclaimed(); }, 60000);

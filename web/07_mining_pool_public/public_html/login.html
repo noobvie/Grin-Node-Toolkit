@@ -271,6 +271,8 @@
       }
     }
   </style>
+  <!-- branding.js fetches this at once; the preload starts it alongside the HTML. -->
+  <link rel="preload" href="/api/public/branding" as="fetch" crossorigin>
   <link rel="stylesheet" href="/css/themes.css">
 </head>
 <body>
@@ -373,9 +375,9 @@
   </div>
   </div>
 
-  <script src="/js/auth.js"></script>
-  <script src="/js/pages/login.js"></script>
+  <script defer src="/js/auth.js"></script>
+  <script defer src="/js/pages/login.js"></script>
   <script src="/js/public-theme.js"></script>
-  <script src="/js/branding.js"></script>
+  <script defer src="/js/branding.js"></script>
 </body>
 </html>

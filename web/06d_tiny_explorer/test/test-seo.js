@@ -33,25 +33,59 @@ const ok = (name, fn) => {
 
 const serverJs = read('tiny-explorer-server.js');
 
-// The seven pages that are meant to be found. Held here as a literal so that
-// adding a route without listing it — or listing one without a route — fails
-// here rather than passing quietly.
-const STABLE = ['/', '/mining', '/slate', '/proof', '/wallet-check', '/emission', '/node-check'];
+// The pages that are meant to be found (/availability only while the node's
+// availability record is published). Held here as a literal so that adding a
+// route without listing it — or listing one without a route — fails here
+// rather than passing quietly.
+const STABLE = ['/', '/mining', '/slate', '/proof', '/wallet-check', '/emission', '/node-check', '/availability'];
 const TOOLS  = STABLE.filter(p => p !== '/');
 
 // ── lifting the two generated-file handlers ─────────────────────────────────
 // Sliced from the SITEMAP_PAGES declaration to the page-routes banner that
 // follows it, then run with a stub app that records handlers by path.
-function loadRoutes(baseUrl) {
+// `published` stands in for availPublished() (is /api/availability a 200?).
+function loadRoutes(baseUrl, published = true) {
   const from = serverJs.indexOf('const SITEMAP_PAGES');
   const to   = serverJs.indexOf('// ── HTML pages with injected SEO');
   assert.ok(from > -1 && to > from, 'could not locate the robots/sitemap block');
   const routes = {};
   const app = { get: (p, h) => { routes[p] = h; } };
-  new Function('app', 'fs', 'path', 'baseUrl', 'webDir', serverJs.slice(from, to))
-    (app, fs, path, baseUrl, WEBDIR);
+  new Function('app', 'fs', 'path', 'baseUrl', 'webDir', 'availPublished', serverJs.slice(from, to))
+    (app, fs, path, baseUrl, WEBDIR, () => (typeof published === 'function' ? published() : published));
   return routes;
 }
+
+// injectGlobals, lifted from the SEO banner to the first page route and run
+// with the same stub for availPublished.
+function loadInject(published) {
+  const from = serverJs.indexOf('const SLOGAN');
+  const to   = serverJs.indexOf('// index (/) and block (/block/:ref)');
+  assert.ok(from > -1 && to > from, 'could not locate injectGlobals');
+  return new Function('config', 'domain', 'baseUrl', 'VERSION', 'walletProbeEnabled', 'availPublished', 'versionAssets',
+    serverJs.slice(from, to) + '\nreturn injectGlobals;')
+    ({}, 'scan.example.org', HOST, '0.0.0', false, () => published, h => h);
+}
+
+// versionAssets, lifted from its banner to the SEO banner and run against a
+// stub fs whose `mtimes` maps a webDir-relative path to an mtime in ms.
+function loadVersionAssets(mtimes) {
+  const from = serverJs.indexOf('// ── Asset versioning');
+  const to   = serverJs.indexOf('// ── HTML pages with injected SEO');
+  assert.ok(from > -1 && to > from, 'could not locate versionAssets');
+  const stats = [];
+  const fakeFs = {
+    statSync(p) {
+      const rel = path.relative('/web', p).split(path.sep).join('/');
+      stats.push(rel);
+      if (!(rel in mtimes)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      return { mtimeMs: mtimes[rel] };
+    },
+  };
+  const versionAssets = new Function('fs', 'path', 'webDir', serverJs.slice(from, to) + '\nreturn versionAssets;')
+    (fakeFs, path, '/web');
+  return { versionAssets, stats };
+}
+const robotsOf = html => (html.match(/<meta name="robots" content="([^"]+)">/) || [])[1];
 
 // Minimal res double — records what the handler actually sent.
 function fakeRes() {
@@ -68,7 +102,7 @@ function fakeRes() {
 const HOST = 'https://scan.example.org';
 
 // ═══ 1. sitemap.xml ═════════════════════════════════════════════════════════
-console.log('\n[1] sitemap — seven pages, absolute URLs, and nothing invented');
+console.log('\n[1] sitemap — the stable pages, absolute URLs, and nothing invented');
 
 ok('it lists exactly the stable pages, each absolute on the configured host', () => {
   const res = fakeRes();
@@ -77,6 +111,22 @@ ok('it lists exactly the stable pages, each absolute on the configured host', ()
   const locs = [...res.body.matchAll(/<loc>([^<]+)<\/loc>/g)].map(m => m[1]);
   assert.deepStrictEqual(locs, STABLE.map(p => HOST + p),
     'sitemap URLs drifted from the stable page list');
+});
+
+ok('with the availability record unpublished, /availability is left out', () => {
+  const res = fakeRes();
+  loadRoutes(HOST, false)['/sitemap.xml']({}, res);
+  const locs = [...res.body.matchAll(/<loc>([^<]+)<\/loc>/g)].map(m => m[1]);
+  assert.deepStrictEqual(locs, STABLE.filter(p => p !== '/availability').map(p => HOST + p),
+    'an unpublished availability page is advertised to crawlers');
+});
+
+ok('the sitemap follows the record per request, with no restart', () => {
+  let on = false;
+  const routes = loadRoutes(HOST, () => on);
+  const count = () => { const r = fakeRes(); routes['/sitemap.xml']({}, r); return (r.body.match(/<url>/g) || []).length; };
+  const before = count(); on = true; const after = count();
+  assert.strictEqual(after, before + 1, 'publishing did not add /availability to the next sitemap');
 });
 
 ok('no entity page is advertised — a sitemap is not an inventory of the chain', () => {
@@ -161,7 +211,7 @@ ok('both routes sit above express.static, or the plain files answer first', () =
 });
 
 // ═══ 3. index / noindex ═════════════════════════════════════════════════════
-console.log('\n[3] robots directive — the seven are indexable, the shells are not');
+console.log('\n[3] robots directive — the stable pages are indexable, the shells are not');
 
 ok('block, kernel, output and the 404 are noindex, and still follow', () => {
   const m = serverJs.match(/const robots = \(([\s\S]*?)\) \? '([^']+)' : '([^']+)';/);
@@ -172,6 +222,31 @@ ok('block, kernel, output and the 404 are noindex, and still follow', () => {
   assert.strictEqual(m[2], 'noindex, follow',
     'entity pages must stay FOLLOW — the pool deep-links into /block/:ref from outside');
   assert.strictEqual(m[3], 'index, follow', 'the indexable default changed');
+});
+
+ok('/availability is index only while its record is published, noindex otherwise', () => {
+  const shell = '<html><head><title>x</title></head><body></body></html>';
+  assert.strictEqual(robotsOf(loadInject(true)(shell, 'availability')), 'index, follow');
+  assert.strictEqual(robotsOf(loadInject(false)(shell, 'availability')), 'noindex, follow',
+    'an unpublished availability page is indexable');
+  for (const key of ['index', 'mining', 'nodecheck']) {
+    assert.strictEqual(robotsOf(loadInject(false)(shell, key)), 'index, follow',
+      key + ' became noindex because the availability record is off');
+  }
+  assert.strictEqual(robotsOf(loadInject(true)(shell, 'block')), 'noindex, follow');
+});
+
+ok('the footer link follows the same switch, built as DOM nodes', () => {
+  const shell = '<html><head></head><body></body></html>';
+  assert.ok(loadInject(true)(shell, 'index').includes('window.TINYEXP_AVAIL=true;'));
+  assert.ok(loadInject(false)(shell, 'index').includes('window.TINYEXP_AVAIL=false;'));
+  const js = read('public/js/tiny-explorer.js');
+  const from = js.indexOf('window.TINYEXP_AVAIL === true');
+  assert.ok(from > -1, 'the footer no longer checks TINYEXP_AVAIL');
+  const block = js.slice(from, js.indexOf('\n    }', from));
+  assert.ok(block.includes("a.href = '/availability'") && block.includes('textContent'),
+    'the footer link is not a plain /availability anchor');
+  assert.ok(!/innerHTML/.test(block), 'the footer link is written as HTML');
 });
 
 ok('no tool page is caught by it', () => {
@@ -284,6 +359,37 @@ ok('each stable path has a route that serves it', () => {
     assert.ok(serverJs.includes("app.get('" + p + "'"), 'no route serves ' + p);
   }
   assert.ok(/app\.get\('\/',/.test(serverJs), 'no route serves /');
+});
+
+// ── asset versioning ────────────────────────────────────────────────────────
+// Cloudflare holds a /js or /css file for 4 h in the browser, so a script or
+// stylesheet a page names without ?v= runs stale for that long after a deploy.
+
+ok('every page names each on-disk script and stylesheet with a ?v= version', () => {
+  const mtimes = {};
+  for (const d of ['js', 'css']) {
+    for (const f of fs.readdirSync(path.join(WEBDIR, d))) mtimes[d + '/' + f] = 1700000000000;
+  }
+  const { versionAssets } = loadVersionAssets(mtimes);
+  for (const f of fs.readdirSync(WEBDIR).filter(n => n.endsWith('.html'))) {
+    const out = versionAssets(fs.readFileSync(path.join(WEBDIR, f), 'utf8'));
+    const refs = out.match(/(?:src|href)="\/(?:js|css)\/[^"]+"/g) || [];
+    assert.ok(refs.length, f + ' names no script or stylesheet');
+    for (const r of refs) {
+      if (r.includes('/js/analytics.js')) continue;
+      assert.ok(/\?v=[0-9a-z]+"$/.test(r), f + ': ' + r + ' is not versioned');
+    }
+  }
+});
+
+ok('a path with no file on disk keeps its plain URL, and each mtime is read once', () => {
+  const { versionAssets, stats } = loadVersionAssets({ 'js/tiny-explorer.js': 1700000000000 });
+  const html = '<script src="/js/tiny-explorer.js"></script><script src="/js/analytics.js"></script>';
+  const out = versionAssets(html);
+  assert.strictEqual(out, '<script src="/js/tiny-explorer.js?v=' + (1700000000000).toString(36)
+    + '"></script><script src="/js/analytics.js"></script>');
+  versionAssets(html);
+  assert.deepStrictEqual(stats, ['js/tiny-explorer.js', 'js/analytics.js']);
 });
 
 console.log('\n' + '─'.repeat(72));

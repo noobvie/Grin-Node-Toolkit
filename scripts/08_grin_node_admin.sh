@@ -12,12 +12,15 @@
 #   8.7  Disk Cleanup              — tar archives + OS temp/logs + nginx web dirs + swap manager
 #   8.8  Self-Update               — download latest from GitHub
 #   8.9  Backup & Restore          — 089_backup_restore.sh
+#   E    Ecosystem Page Entries    — lib/08_lib_ecosystem_hide.sh (hide rows on ecosystem.html)
 #   DEL  Full Grin Cleanup         — 08del_clean_all_grin_things.sh
 #
 # Key = sub-script number. Every numbered sub-script sits on its own digit
 # (081→1, 082→2, 083→3, 084→4, 086→6, 089→9); un-numbered inline features fill
-# the rest (5, 7, 8). Ten rows do not fit 9 digits, which is why the port
+# the rest (5, 7, 8). Ten rows did not fit 9 digits, which is why the port
 # dashboard and the chain-sync check are ONE "Node Status & Sync" screen.
+# With every digit taken, a further un-numbered inline feature gets a LETTER
+# (E = Ecosystem Page Entries) rather than 10+, so no digit's meaning moves.
 #
 # SSH Key Hardening (085) is not a top-level row: it is reached from inside 083,
 # whose remit (harden + tune this host) contains it, so a 10th row never breaks
@@ -46,6 +49,9 @@ source "$SCRIPT_DIR/lib/grin_node_secrets.sh"
 # of Ctrl+C. See the lib header: a prompt that treats a bare Enter as "proceed
 # with the default" makes backing out CONFIRM the action.
 source "$SCRIPT_DIR/lib/ui_shared_helpers.sh"
+# Ecosystem Page Entries (key E): hide / un-hide rows of the Global Grin Health
+# ecosystem status page through a local list the checker reads.
+source "$SCRIPT_DIR/lib/08_lib_ecosystem_hide.sh"
 
 # ─── GitHub self-update ───────────────────────────────────────────────────────
 # Official public repository. A fork slug saved in /opt/grin/conf/github_repo.conf
@@ -1155,19 +1161,15 @@ self_update() {
     echo ""
     echo -e "  ${GREEN}1${RESET})  main          ${DIM}— stable releases${RESET}"
     echo -e "  ${CYAN}2${RESET})  add-ons       ${DIM}— addon features in development${RESET}"
-    echo -e "  ${CYAN}3${RESET})  corefeatures  ${DIM}— core features in development${RESET}"
-    echo -e "  ${CYAN}4${RESET})  publicpool    ${DIM}— public mining pool development${RESET}"
-    echo -e "  ${YELLOW}5${RESET})  Custom branch ${DIM}— enter branch name manually${RESET}"
+    echo -e "  ${YELLOW}3${RESET})  Custom branch ${DIM}— enter branch name manually${RESET}"
     echo ""
-    echo -ne "${BOLD}  Choose [1-5, default 1]: ${RESET}"
+    echo -ne "${BOLD}  Choose [1-3, default 1]: ${RESET}"
     read -r branch_choice
 
     local branch
     case "$branch_choice" in
         2) branch="add-ons" ;;
-        3) branch="corefeatures" ;;
-        4) branch="publicpool" ;;
-        5)
+        3)
             # Cancel returns to the menu — it must NOT fall through to `main`.
             # Never answer a bare Enter with "Defaulting to 'main'": the
             # instinctive way to back out of a mistyped choice would silently
@@ -1295,6 +1297,7 @@ show_menu() {
     echo -e "  ${CYAN}4${RESET})   Nginx Extended Features   ${DIM}audit · proxy · security · bandwidth${RESET}"
     echo -e "  ${CYAN}5${RESET})   Node Status & Sync        ${DIM}ports, tmux, versions + chain tip${RESET}"
     echo -e "  ${CYAN}6${RESET})   Diagnostics & Support     ${DIM}health check · support bundle · log triage${RESET}"
+    echo -e "  ${CYAN}E${RESET})   Ecosystem Page Entries    ${DIM}hide / un-hide rows on the ecosystem status page${RESET}"
     echo ""
     echo -e "${BOLD}  Maintenance${RESET}"
     echo -e "  ${YELLOW}7${RESET})   Disk Cleanup              ${DIM}tar archives + OS temp/logs + nginx dirs${RESET}"
@@ -1307,7 +1310,7 @@ show_menu() {
     echo -e "  ${DIM}0${RESET})   Return to main menu"
     echo ""
     echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [0-9, DEL]: ${RESET}"
+    echo -ne "${BOLD}Select [0-9, E, DEL]: ${RESET}"
 }
 
 main() {
@@ -1338,6 +1341,7 @@ main() {
             # Retired key: Backup & Restore once sat on 10 and nothing else took
             # 10, so it stays a silent alias for muscle memory.
             "10")  backup                   || true ;;
+            "e")   ecohide_menu             || true ;;
             "del") menu_full_cleanup        || true ;;
             "0")   break                    ;;
             *)     warn "Invalid option." ; sleep 1 ;;

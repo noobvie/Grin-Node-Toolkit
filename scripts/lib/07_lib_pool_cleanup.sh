@@ -91,9 +91,9 @@ pool_cleanup() {
     echo -e "    ${DIM}Wallet dir + seed · pool backups ($backup_dir)${RESET}"
     echo -e "    ${DIM}(use Script 08del for a full wipe including those)${RESET}"
     echo ""
-    echo -ne "${BOLD}Proceed with public-pool cleanup? [Y/n]: ${RESET}"
+    echo -ne "${BOLD}Proceed with public-pool cleanup? [y/N]: ${RESET}"
     local go; read -r go || true
-    [[ "${go,,}" != "n" ]] || { info "Cancelled — nothing changed."; return; }
+    [[ "${go,,}" == "y" || "${go,,}" == "yes" ]] || { info "Cancelled — nothing changed."; return; }
     echo ""
 
     local a svc
@@ -125,9 +125,9 @@ pool_cleanup() {
     if [[ -d "$POOL_APP_DIR" || -d "$legacy_app" ]]; then
         echo -e "   ${YELLOW}⚠ $POOL_APP_DIR includes pool.db (miner balances) + .wallet_pass.${RESET}"
         echo -e "   ${DIM}Backups in $backup_dir are kept — run B) Backup first if unsure.${RESET}"
-        echo -ne "${BOLD}2)${RESET} Remove pool app + database ($POOL_APP_DIR)? [Y/n]: "
+        echo -ne "${BOLD}2)${RESET} Remove pool app + database ($POOL_APP_DIR)? [y/N]: "
         read -r a || true
-        if [[ "${a,,}" != "n" ]]; then
+        if [[ "${a,,}" == "y" || "${a,,}" == "yes" ]]; then
             rm -rf "${POOL_APP_DIR:?}" \
                 || { error "Could not remove $POOL_APP_DIR."; return 1; }
             rm -f "$POOL_RESTART_MARK" "$POOL_DEPS_STAMP" 2>/dev/null || true   # deploy state beside it
@@ -138,6 +138,8 @@ pool_cleanup() {
             fi
             success "Pool app + database removed."
             log "Cleanup: removed $POOL_APP_DIR (+ legacy $legacy_app if present)"
+        else
+            info "Pool app + database kept ($POOL_APP_DIR)."
         fi
         echo ""
     fi

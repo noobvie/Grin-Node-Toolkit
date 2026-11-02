@@ -1,6 +1,6 @@
 # Script 06 — Global Grin Health: implementation
 
-> **Covers code as of:** 2026-09-26 · **Last verified:** 2026-09-26, PARTIAL — *Peer counts* only,
+> **Covers code as of:** 2026-09-26 (the Node availability page addendum: 2026-10-27) · **Last verified:** 2026-09-26, PARTIAL — *Peer counts* only,
 > written against `scripts/lib/06_collector.py` the day of the fix, repair + fetch filter run in a
 > scratch SQLite test, the bug's numbers read from a live `get_peers` on the NY node; 2026-09-25, PARTIAL — *When the node
 > stops answering* only, written against `tiny-explorer-server.js` + `public/js/tiny-explorer.js`
@@ -26,7 +26,7 @@
 > `scripts/lib/06d_tiny_explorer.sh` — the sitemap, robots and JSON-LD output in it were
 > read from the handlers ACTUALLY RUN, not from the source.
 > The rest of this doc is still never systematically verified.
-> **Product code last changed:** 2026-09-26 — `scripts/lib/06_collector.py` (**peer counts windowed by `last_connected`**: the collector read a nonexistent `last_seen` and stamped every stored Healthy peer "now", inflating every week/month/year node count; one-off stamp repair); 2026-09-25 — `web/06d_tiny_explorer/` (**node circuit breaker + serve-stale** for archive-node compaction stalls; busy node → 503 not 404; `getLatest` no longer caches `[]`); 2026-09-18 — `web/06d_tiny_explorer/public/` (Slate Inspector: per-role next-move guides with wallet commands, encryption rule corrected — every grin-wallet reply is sealed; Proof Verifier: proof is automatic with `send -d`, standard flow only, "not on chain" no longer reads as "never confirmed"); 2026-09-10 — `web/06d_tiny_explorer/` (**crawl surface**: generated `/sitemap.xml` + `/robots.txt` routes, `noindex, follow` on block/kernel/output and the 404, `WebApplication` JSON-LD for the six tools, homepage `<h1>`, duplicate `<h1>` removed from the three entity shells, analytics on the 404, `/mining` description updated for payback); 2026-09-10 — `web/06d_tiny_explorer/` (mining calculator: **capital payback card + hardware-cost input**, setup form rebuilt as two columns, break-even sub-label explains its scale invariance); 2026-09-10 — `scripts/lib/06d_tiny_explorer.sh` + `web/06d_tiny_explorer/` (**Wallet Checker Tor liveness probe now ON by default for a new install**: two-sided config read-back, `(installs tor)` prompt warning, config-neutral baseline page copy; **prompt catch-all now keeps the default instead of naming `false`, and `read` at EOF declines** — both latent until the flip); 2026-09-10 — `web/06d_tiny_explorer/` (node-check second leg: P2P 3414/13414 TCP probe, composed two-leg verdict, network picker; **assumed API endpoint flipped from 3413 to https/443 for host names**, retry inverted); 2026-09-09 — `web/06d_tiny_explorer/` (mining calculator: number-of-units multiplier, `/api/price` fallback, blocker copy, first test suite for the money maths); 2026-09-09 — `web/06_stats_map/stats/index.html` (antimeridian seam repair, land+mesh basemap, city-label cull, trimmed maxBounds, Vietnam flag fill + East Sea islands + Saigon relabel); 2026-09-09 — `scripts/lib/06d_tiny_explorer.sh` (tor install + probe status row) and `web/06d_tiny_explorer/` (probe-aware page copy); 2026-09-09 — `web/06d_tiny_explorer/` (node-check assumed-port retry); 2026-09-08 — `web/06d_tiny_explorer/public/` (mining calculator presets); 2026-09-07 — `scripts/lib/06d_tiny_explorer.sh` (deploy/restart lifecycle); 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
+> **Product code last changed:** 2026-10-27 — `web/06d_tiny_explorer/` and `scripts/lib/06d_tiny_explorer.sh` (**node availability page** `/availability`, `/api/availability[/history]`, config key `availability_dir`, sitemap gate and footer link; uncommitted); 2026-09-26 — `scripts/lib/06_collector.py` (**peer counts windowed by `last_connected`**: the collector read a nonexistent `last_seen` and stamped every stored Healthy peer "now", inflating every week/month/year node count; one-off stamp repair); 2026-09-25 — `web/06d_tiny_explorer/` (**node circuit breaker + serve-stale** for archive-node compaction stalls; busy node → 503 not 404; `getLatest` no longer caches `[]`); 2026-09-18 — `web/06d_tiny_explorer/public/` (Slate Inspector: per-role next-move guides with wallet commands, encryption rule corrected — every grin-wallet reply is sealed; Proof Verifier: proof is automatic with `send -d`, standard flow only, "not on chain" no longer reads as "never confirmed"); 2026-09-10 — `web/06d_tiny_explorer/` (**crawl surface**: generated `/sitemap.xml` + `/robots.txt` routes, `noindex, follow` on block/kernel/output and the 404, `WebApplication` JSON-LD for the six tools, homepage `<h1>`, duplicate `<h1>` removed from the three entity shells, analytics on the 404, `/mining` description updated for payback); 2026-09-10 — `web/06d_tiny_explorer/` (mining calculator: **capital payback card + hardware-cost input**, setup form rebuilt as two columns, break-even sub-label explains its scale invariance); 2026-09-10 — `scripts/lib/06d_tiny_explorer.sh` + `web/06d_tiny_explorer/` (**Wallet Checker Tor liveness probe now ON by default for a new install**: two-sided config read-back, `(installs tor)` prompt warning, config-neutral baseline page copy; **prompt catch-all now keeps the default instead of naming `false`, and `read` at EOF declines** — both latent until the flip); 2026-09-10 — `web/06d_tiny_explorer/` (node-check second leg: P2P 3414/13414 TCP probe, composed two-leg verdict, network picker; **assumed API endpoint flipped from 3413 to https/443 for host names**, retry inverted); 2026-09-09 — `web/06d_tiny_explorer/` (mining calculator: number-of-units multiplier, `/api/price` fallback, blocker copy, first test suite for the money maths); 2026-09-09 — `web/06_stats_map/stats/index.html` (antimeridian seam repair, land+mesh basemap, city-label cull, trimmed maxBounds, Vietnam flag fill + East Sea islands + Saigon relabel); 2026-09-09 — `scripts/lib/06d_tiny_explorer.sh` (tor install + probe status row) and `web/06d_tiny_explorer/` (probe-aware page copy); 2026-09-09 — `web/06d_tiny_explorer/` (node-check assumed-port retry); 2026-09-08 — `web/06d_tiny_explorer/public/` (mining calculator presets); 2026-09-07 — `scripts/lib/06d_tiny_explorer.sh` (deploy/restart lifecycle); 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
 > 06d has a test suite (`web/06d_tiny_explorer/test/`, 232 assertions across 6 suites — count read from `node test/run-all.js` on 2026-09-10), but it tests the code, not this doc.
 > **Scope:** what the running code does — the Tiny Explorer (06d) and its tools, the peer map and collector fixes, the self-hosted basemap as built — plus the Build notes. The plans and rationale are `script06_design.md`. Headings are by subject, not by date; the dated detail inside each section is evidence (what was measured, when).
 
@@ -1420,6 +1420,21 @@ catch-all and the `/api/` prefix — with the two probe routes carrying their ow
 blocks from the phase-2 work. A tool that needs a *new* nginx rule would be the exception,
 not the rule.
 
+**The browser half: versioned asset URLs.** A restart makes the server current, but not
+the visitor's browser. scan.grin.money sits behind Cloudflare, which serves `/js/*` and
+`/css/*` with `Cache-Control: public, max-age=14400` (its default Browser Cache TTL),
+whatever express sends. So after a deploy a visitor kept running the old
+`tiny-explorer.js` for up to 4 h. It was seen on 2026-10-27: `TINYEXP_AVAIL` was `true`
+on the live page while the footer link that script adds was missing. `injectGlobals`
+now passes every page through `versionAssets()`. That function rewrites each
+`<script src="/js/…">` and `<link rel="stylesheet" href="/css/…">` to `?v=<mtime, base 36>`.
+Cloudflare's cache key includes the query string, so a changed file is a new URL at the
+edge and in the browser. Each mtime is read once per process, which is enough because
+a deploy restarts the process. A path with no file on disk keeps its plain URL. That
+covers `/js/analytics.js`, which is a route. Tests: two cases in `test/test-seo.js`.
+They check that every on-disk script and stylesheet in every page is versioned, and
+that a missing file stays plain and each mtime is read once.
+
 **Same shape, still open elsewhere:** `grinscan_install` in `scripts/lib/06b_grinscan.sh`
 deploys with `cp -r` and ends at `daemon-reload` with no restart, exactly as this did;
 `grinscan_update` restarts. Not touched here — it is a separate product's lifecycle.
@@ -1598,6 +1613,75 @@ replaced two unguarded `cp -r` calls.
 zone: the limiter counts requests per IP, the cap counts outbound sockets in total, and Node's
 default agent is `keepAlive:true` / `maxSockets:Infinity`. Its client verdict carries `rows:false`
 — a 503 that never dialled must not draw `Checked:` plus two `unavailable` rows.
+
+### Option D addendum — Node availability page (`/availability`)
+
+**Status:** built, not VPS-tested. The design and the file contracts are
+`script086_design.md` §9; the producer is the node event recorder (`script086_implementation.md` §9).
+06d is a reader only: it never writes the files and has no part in the chain.
+
+- **Config:** `availability_dir` in `config.json` (default `/opt/grin/node-events/mainnet/public`),
+  written by `scripts/lib/06d_tiny_explorer.sh` and read back only if it is a plain absolute path;
+  `availability_cache_ms` (default 30000). A `config.json` written before this key existed gets it on
+  the next Configure; the code default is the mainnet recorder path, so nothing breaks before then.
+- **Routes** (`tiny-explorer-server.js`, under nginx `location /api/`, so the existing rate zone
+  applies): `GET /api/availability` and `GET /api/availability/history` serve the recorder's
+  `availability.json` / `history.json` byte for byte with `Cache-Control: public, max-age=30`.
+  `readAvailability(name)` opens only those two names, requires a regular file (symlinks refused),
+  1 byte to 8 MiB, a JSON object with `v:1` and only published top-level keys. Anything else is
+  `404 {"error":"not published"}`, never a 500. `GET /availability` is the page
+  (`web/06d_tiny_explorer/public/availability.html` and its availability script, through `sendEntityPage`); the static
+  `/availability.html` redirects to it (`HTML_TWINS`). The page sets text with `textContent` only,
+  has no inline script, and its "check it yourself" line is `curl -s <origin>/api/tip`.
+- **Crawl gate:** `availPublished()` is true exactly when `/api/availability` would answer 200 (it
+  shares the 30 s cache). Only then is `/availability` in `/sitemap.xml`, served `index, follow`, and
+  linked from the footer ("Node availability", added in `public/js/tiny-explorer.js` when the
+  server-injected `window.TINYEXP_AVAIL` is true). With publishing off the page is `noindex, follow`.
+- **Header links (same gate):** while `TINYEXP_AVAIL` is true, `tiny-explorer.js` adds two more links.
+  The first is a Tools-menu row, "Node Availability" (`addAvailabilityRow`, under its own group "This node").
+  The second is a header pill before the Tools button (`initAvailabilityPill`, CSS `.tx-avail-pill`).
+  The pill is built only after `/api/availability` answers with `v:1` and `windows`. It shows the
+  30 d % (falling back to 7 d, then 90 d) with a dot coloured by state, or "Down" / "Starting".
+  It follows `availability.js`'s rule: a record older than 3 h reads as unknown (grey dot). A failed
+  fetch shows no pill. Neither link is in the page markup, so a box that does not publish shows nothing.
+- **Operator side:** `_tinyx_avail_status` in the 06d lib prints an `Uptime:` row. It appears in
+  Status, after Install and after Configure. "Published" means the record is on disk AND the
+  running service answers 200 on `/api/availability`. Otherwise the row names the fix path
+  (Admin & Maintenance → Diagnostics → Node event recorder → `I`, then `P`). 06d never
+  publishes anything itself.
+- **Read permission:** 06d runs as `www-data`. The recorder's publish adds `o+x` on `/opt/grin` when
+  06d's unit file exists, so a box where publishing was enabled before 06d was installed becomes
+  readable at the next publish; until then the routes answer 404.
+- **Tests:** `web/06d_tiny_explorer/test/test-availability.js` (routes, privacy and shape refusals, only two names opened,
+  cache, config key, page routed, sitemap and twin redirect) and extra cases in `test/test-seo.js`
+  (sitemap and robots follow the record per request). Both run under `npm test`.
+
+### Ecosystem status page — operator-hidden entries (`ecosystem.html`)
+
+- **Why a local file:** the page's entries come from `scripts/lib/06_ecosystem_sites.json` and
+  `06_ecosystem_dev.json`. Both ship with the toolkit, and a tarball self-update overwrites them, so
+  an edit made on the VPS does not survive. The operator's hide list lives beside `stats.db` instead:
+  `/opt/grin/grin-stats/ecosystem_hidden.json`, a JSON array of URLs. Override the path with
+  `GRIN_ECOSYSTEM_HIDDEN`; the default follows the directory of `GRIN_DB_PATH`. The override applies
+  to the checker only — the hub 08 menu always edits the default path, so leave it unset on a VPS.
+- **Checker:** `06_ecosystem_checker.py` (`_load_hidden_urls` / `_drop_hidden`) drops matching
+  entries from both the sites list and the dev list right after loading them. URLs are compared with
+  scheme and host lower-cased and the trailing slash stripped. If the file is missing, it hides
+  nothing. If it is unparsable, the checker logs a `[WARN]` and hides nothing, so a bad edit can
+  never blank the page. Toolkit services added through `GRIN_*_URL` in `config.env` are not
+  filtered; unset the variable to drop one.
+- **Operator side:** Admin & Maintenance (hub 08) → `E` Ecosystem Page Entries
+  (`scripts/lib/08_lib_ecosystem_hide.sh`, functions `ecohide_*`). It lists the deployed sidecars
+  beside `/usr/local/bin/grin-ecosystem-checker`, falling back to the toolkit copy, numbered by
+  category with `[hidden]` marks. Typing a number toggles that entry. Hidden URLs that no longer
+  match any entry are listed last, so they can still be un-hidden. Writes are atomic: a temp file
+  in the same directory, given the stats dir's owner and mode 0644, then `mv`. An unparsable list is
+  reported and left untouched, never overwritten.
+- **When it shows:** on the next checker run, which is the hourly cron at :00 when Live Updates
+  are on. `r` on the same screen runs the checker immediately, using the same command as Import
+  Data → `l`.
+- **Dropped is not deleted:** a hidden entry's `ecosystem_service_history` row stays in `stats.db`.
+  Un-hiding the entry resumes its uptime-days count from the original first-seen time.
 
 ## Runbook
 

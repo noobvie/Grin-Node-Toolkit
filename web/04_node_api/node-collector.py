@@ -12,8 +12,11 @@ collectors) to:
 Called every 60 s by a cron job running as root:
     * * * * * root python3 <this file> <port> <rest_dir> <grin_data_dir>
 
-Output file (written atomically via tmp + rename):
-    {rest_dir}/node.json  — peers, updated_at
+Output files (written atomically via tmp + rename):
+    {rest_dir}/node.json          — peers, updated_at
+    {rest_dir}/availability.json  — copied from the node event recorder when
+    {rest_dir}/history.json         it publishes for this network (removed when
+                                    the recorder stops publishing)
 
 Exit codes:
     0  success (node.json written, even if peers field is missing)
@@ -82,15 +85,19 @@ def _www_data_ids():
         return -1, -1
 
 
-def write_atomic(path, obj):
-    """Write a JSON object to path atomically (tmp file → os.replace).
-    Output file is owned by www-data:www-data 0644 so nginx can serve it."""
+def write_atomic(path, obj=None, raw=None):
+    """Write a JSON object (or the bytes raw, copied verbatim) to path atomically
+    (tmp file → os.replace). Output file is owned by www-data:www-data 0644 so nginx can serve it."""
     directory = os.path.dirname(path)
     fd, tmp_path = tempfile.mkstemp(dir=directory, suffix=".tmp")
     try:
-        with os.fdopen(fd, "w") as fh:
-            json.dump(obj, fh, indent=2)
-            fh.write("\n")
+        if raw is not None:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(raw)
+        else:
+            with os.fdopen(fd, "w") as fh:
+                json.dump(obj, fh, indent=2)
+                fh.write("\n")
         uid, gid = _www_data_ids()
         os.chown(tmp_path, uid, gid)  # transfer ownership to www-data before rename
         os.chmod(tmp_path, 0o644)
@@ -101,6 +108,56 @@ def write_atomic(path, obj):
         except OSError:
             pass
         raise
+
+
+# ── Recorder's public status files ────────────────────────────────────────────
+# The recorder owns /opt/grin/node-events/<net>/public/ and never writes into a
+# web root; this root job copies exactly these two files, by name, into rest_dir.
+# The directory also holds a lock, scan state, the raw chain and 0600 temp files,
+# none of which may be served.
+
+EVENTS_ROOT  = "/opt/grin/node-events"
+PUBLIC_FILES = ("availability.json", "history.json")
+PUBLIC_MAX   = 8 * 1024 * 1024
+
+
+def _net_of(port, grin_data_dir):
+    """mainnet / testnet from the foreign port, else from the data dir name."""
+    if port == 3413:
+        return "mainnet"
+    if port == 13413:
+        return "testnet"
+    name = os.path.basename(os.path.normpath(grin_data_dir))
+    for net in ("mainnet", "testnet"):
+        if name.startswith(net):
+            return net
+    return None
+
+
+def sync_public_files(port, rest_dir, grin_data_dir):
+    """Copy the recorder's served files into rest_dir; drop a copy whose source
+    is gone, a symlink, oversize or not JSON, so a stale record is never served."""
+    net = _net_of(port, grin_data_dir)
+    if net is None:
+        return
+    for name in PUBLIC_FILES:
+        src = os.path.join(EVENTS_ROOT, net, "public", name)
+        dst = os.path.join(rest_dir, name)
+        raw = None
+        if os.path.lexists(src) and not os.path.islink(src) and os.path.getsize(src) <= PUBLIC_MAX:
+            with open(src, "rb") as fh:
+                raw = fh.read()
+            try:
+                json.loads(raw)              # a torn or foreign file is never served
+            except ValueError:
+                raw = None
+        if raw is None:
+            try:
+                os.unlink(dst)
+            except FileNotFoundError:
+                pass
+            continue
+        write_atomic(dst, raw=raw)
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -133,6 +190,12 @@ def main():
     # ── Write node.json ───────────────────────────────────────────────────────
     os.makedirs(rest_dir, exist_ok=True)
     write_atomic(os.path.join(rest_dir, "node.json"), node_data)
+
+    # ── Recorder's public status files — never allowed to fail node.json ──────
+    try:
+        sync_public_files(port, rest_dir, grin_data_dir)
+    except Exception as exc:
+        print(f"[WARN] public status files not copied: {exc}", file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,8 @@
 # =============================================================================
 # Checks TCP reachability of configured Grin node endpoints (standalone or
 # cron), and provides mass deployment: push toolkit updates, start/stop/restart
-# remote grin nodes, run ad-hoc commands, and manage SSH keys across a fleet.
+# remote grin nodes, run ad-hoc commands, manage SSH keys and automatic OS
+# security updates across a fleet.
 #
 # Server fleet is configured in /opt/grin/conf/mass_deploy.conf (pipe-delimited).
 #
@@ -30,6 +31,9 @@ REGISTRY="$SCRIPT_DIR/../extensions/grinmasternodes.json"
 MASTER_LOG_FILE="$LOG_DIR/grin_master_nodes_status_$(date +%Y%m%d_%H%M%S).log"
 MASS_DEPLOY_CONF="$CONF_DIR/mass_deploy.conf"
 GITHUB_REPO_DEFAULT="noobvie/Grin-Node-Toolkit"
+# accept-new trusts a host on first contact but refuses a CHANGED host key, so a
+# swapped or spoofed server never receives commands or binaries silently.
+MD_SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=yes -o LogLevel=ERROR"
 
 # ─── Colors (disabled when not a terminal) ────────────────────────────────────
 if [[ -t 1 ]]; then
@@ -48,6 +52,27 @@ info()    { echo -e "${CYAN}[INFO]${RESET}  $*"; }
 success() { echo -e "${GREEN}[OK]${RESET}    $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; }
 error()   { echo -e "${RED}[ERROR]${RESET} $*"; }
+
+# Binary push / rollback (Remote Node Control keys f, g)
+if [[ -f "$SCRIPT_DIR/lib/081_lib_binary_push.sh" ]]; then
+    # shellcheck source=lib/081_lib_binary_push.sh
+    source "$SCRIPT_DIR/lib/081_lib_binary_push.sh"
+else
+    warn "Binary push library missing ($SCRIPT_DIR/lib/081_lib_binary_push.sh) - keys f/g unavailable until Admin centre (08) → 8) Self-Update."
+fi
+# Bulk add servers with a one-time root password (Manage Servers key 6)
+if [[ -f "$SCRIPT_DIR/lib/081_lib_bulk_add.sh" ]]; then
+    # shellcheck source=lib/081_lib_bulk_add.sh
+    source "$SCRIPT_DIR/lib/081_lib_bulk_add.sh"
+fi
+# Host security updates (Mass Deployment key 5): the shared lib generates the
+# snippets here; the 081 lib sends them, so remote boxes need no toolkit files.
+if [[ -f "$SCRIPT_DIR/lib/08_lib_host_updates.sh" && -f "$SCRIPT_DIR/lib/081_lib_host_updates.sh" ]]; then
+    # shellcheck source=lib/08_lib_host_updates.sh
+    source "$SCRIPT_DIR/lib/08_lib_host_updates.sh"
+    # shellcheck source=lib/081_lib_host_updates.sh
+    source "$SCRIPT_DIR/lib/081_lib_host_updates.sh"
+fi
 
 # ─── Runtime state (global associative arrays) ────────────────────────────────
 declare -A RESULTS      # key="host:port"  → "UP" or "DOWN"
@@ -705,7 +730,7 @@ _md_load_conf() {
 _md_ssh() {
     local _label="$1" _host="$2" _port="$3" _user="$4" _key="$5"
     shift 5
-    local _ssh_opts="-o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes -o LogLevel=ERROR"
+    local _ssh_opts="$MD_SSH_OPTS"
     [[ -n "$_key" && -f "$_key" ]] && _ssh_opts="$_ssh_opts -i $_key"
     ssh $_ssh_opts -p "$_port" "$_user@$_host" "$@" 2>&1
 }
@@ -740,7 +765,7 @@ _md_select_servers() {
         for _n in "${_nums[@]}"; do
             _n="${_n// /}"
             if [[ "$_n" =~ ^[0-9]+$ ]] && (( _n >= 1 && _n <= ${#_md_labels[@]} )); then
-                _md_selected_idx+="$((_n-1))"
+                _md_selected_idx+=("$((_n-1))")
             else
                 warn "  Ignoring invalid selection: $_n"
             fi
@@ -772,7 +797,7 @@ _md_run_on_servers() {
         _user="${_md_users[$_idx]}"
         _key="${_md_keys[$_idx]}"
         printf "  ${BOLD}[%-16s]${RESET}  %s@%s  ... " "$_label" "$_user" "$_host"
-        local _ssh_opts="-o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes -o LogLevel=ERROR"
+        local _ssh_opts="$MD_SSH_OPTS"
         [[ -n "$_key" && -f "$_key" ]] && _ssh_opts="$_ssh_opts -i $_key"
         local _out
         _out=$(echo "$_remote_script" | ssh $_ssh_opts -p "$_port" "$_user@$_host" "bash -s" 2>&1) || true
@@ -875,15 +900,18 @@ _md_add_server() {
 }
 
 # -----------------------------------------------------------------------------
-# _md_remove_server — remove a server entry from mass_deploy.conf
+# _md_remove_server — remove servers for good: revoke this controller's deploy
+# key on the target FIRST (the step that actually ends access, and the only one
+# that needs the key to still work), then drop the conf line by exact label,
+# then forget the host key. Several servers at once: "2,5,7".
 # -----------------------------------------------------------------------------
 _md_remove_server() {
     if ! _md_load_conf; then
-        echo "Press Enter to continue..."; read -r
-        return
+        echo "Press Enter to continue..."; read -r || true
+        return 0
     fi
     echo ""
-    echo -e "  ${BOLD}Remove Server${RESET}"
+    echo -e "  ${BOLD}Remove Servers${RESET}  ${DIM}(revokes the deploy key on each target)${RESET}"
     echo ""
     local _i
     for (( _i=0; _i<${#_md_labels[@]}; _i++ )); do
@@ -891,20 +919,77 @@ _md_remove_server() {
             "$((_i+1))" "${_md_labels[$_i]}" "${_md_users[$_i]}" "${_md_hosts[$_i]}"
     done
     echo ""
-    echo -ne "  ${BOLD}Remove server number (or Enter to cancel): ${RESET}"
-    local _sel
-    read -r _sel
-    [[ -z "$_sel" ]] && return
-    if [[ "$_sel" =~ ^[0-9]+$ ]] && (( _sel >= 1 && _sel <= ${#_md_labels[@]} )); then
-        local _idx=$((_sel-1))
-        local _label="${_md_labels[$_idx]}"
-        sed -i "/^${_label}|/d" "$MASS_DEPLOY_CONF"
-        success "Removed server '$_label'."
+    echo -ne "  ${BOLD}Server number(s) to remove, comma-separated, or 'all' (Enter to cancel): ${RESET}"
+    local _sel _n
+    read -r _sel || _sel=""
+    _sel="${_sel// /}"
+    if [[ -z "$_sel" ]]; then return 0; fi
+    local -a _pick=() _nums=()
+    # 'all' must be typed: Enter cancels here, unlike the other server pickers.
+    if [[ "${_sel,,}" == "all" ]]; then
+        for (( _i=0; _i<${#_md_labels[@]}; _i++ )); do _pick+=("$_i"); done
     else
-        warn "Invalid selection."
+        IFS=',' read -ra _nums <<< "$_sel"
     fi
+    for _n in ${_nums[@]+"${_nums[@]}"}; do
+        _n="${_n// /}"
+        if [[ "$_n" =~ ^[0-9]+$ ]] && (( _n >= 1 && _n <= ${#_md_labels[@]} )); then
+            _pick+=("$((_n-1))")
+        else
+            warn "Ignoring invalid selection: $_n"
+        fi
+    done
+    if [[ ${#_pick[@]} -eq 0 ]]; then warn "Nothing selected."; return 0; fi
+
     echo ""
-    echo "Press Enter to continue..."; read -r
+    for _i in "${_pick[@]}"; do echo -e "    ${RED}-${RESET} ${_md_labels[$_i]}  ${_md_users[$_i]}@${_md_hosts[$_i]}"; done
+    echo -ne "  ${RED}${BOLD}Revoke access and remove these ${#_pick[@]} server(s)? [y/N]: ${RESET}"
+    local _confirm
+    read -r _confirm || _confirm=""
+    if [[ ! "$_confirm" =~ ^[Yy]$ ]]; then info "Cancelled."; return 0; fi
+
+    # Match the key by its base64 blob, so only THIS controller's key goes —
+    # never another admin's key that happens to share the comment.
+    local _blob=""
+    [[ -f /root/.ssh/grin_deploy.pub ]] && _blob=$(awk '{print $2}' /root/.ssh/grin_deploy.pub 2>/dev/null || true)
+    if [[ ! "$_blob" =~ ^[A-Za-z0-9+/=]+$ ]]; then
+        warn "No readable /root/.ssh/grin_deploy.pub - keys cannot be revoked, only list entries removed."
+        _blob=""
+    fi
+
+    local _label _host _port _user _key _out _ans _tmp="$MASS_DEPLOY_CONF.tmp.$$"
+    for _i in "${_pick[@]}"; do
+        _label="${_md_labels[$_i]}"; _host="${_md_hosts[$_i]}"; _port="${_md_ports[$_i]}"
+        _user="${_md_users[$_i]}";   _key="${_md_keys[$_i]}"
+        echo ""
+        echo -e "  ${BOLD}[$_label]${RESET}  $_user@$_host:$_port"
+        if [[ -n "$_blob" ]]; then
+            # cat > keeps the file's owner and mode; grep -v exits 1 on an empty result, so `;`.
+            _out=$(_md_ssh "$_label" "$_host" "$_port" "$_user" "$_key" \
+                "f=~/.ssh/authorized_keys; if [ -f \$f ]; then grep -vF '$_blob' \$f > \$f.gnt; cat \$f.gnt > \$f && rm -f \$f.gnt && echo __REVOKED__; else echo __REVOKED__; fi" 2>&1) || true
+            if grep -q "__REVOKED__" <<< "$_out"; then
+                success "Deploy key revoked on the target."
+            else
+                warn "Could not revoke the key (unreachable or no key login): ${_out:0:120}"
+                echo -ne "  Remove '$_label' from the list anyway? The key stays on the target. [y/N]: "
+                read -r _ans || _ans=""
+                if [[ ! "$_ans" =~ ^[Yy]$ ]]; then info "Kept '$_label'."; continue; fi
+            fi
+        fi
+        if awk -F'|' -v l="$_label" '$1 != l' "$MASS_DEPLOY_CONF" > "$_tmp" && mv -f "$_tmp" "$MASS_DEPLOY_CONF"; then
+            success "Removed '$_label' from $MASS_DEPLOY_CONF."
+        else
+            rm -f "$_tmp"; error "Could not rewrite $MASS_DEPLOY_CONF - '$_label' still listed."; continue
+        fi
+        ssh-keygen -R "$_host" >/dev/null 2>&1 || true
+        [[ "$_port" != 22 ]] && { ssh-keygen -R "[$_host]:$_port" >/dev/null 2>&1 || true; }
+        info "Host key forgotten."
+        local _rv="skipped"; [[ -n "$_blob" ]] && _rv="attempted"
+        log "[REMOVE SERVER] $_label $_user@$_host:$_port removed (key revoke: $_rv)"
+    done
+    echo ""
+    echo "Press Enter to continue..."; read -r || true
+    return 0
 }
 
 # -----------------------------------------------------------------------------
@@ -1018,20 +1103,23 @@ mass_deploy_manage() {
         echo ""
         echo -e "  ${CYAN}1${RESET}) List servers"
         echo -e "  ${CYAN}2${RESET}) Add server"
-        echo -e "  ${CYAN}3${RESET}) Remove server"
+        echo -e "  ${CYAN}3${RESET}) Remove servers     ${DIM}revoke deploy key + forget host${RESET}"
         echo -e "  ${CYAN}4${RESET}) Test connections"
         echo -e "  ${CYAN}5${RESET}) Bootstrap SSH keys"
+        echo -e "  ${CYAN}6${RESET}) Bulk add servers   ${DIM}one-time root password → deploy key${RESET}"
         echo -e "  ${DIM}0${RESET}) Back"
         echo ""
-        echo -ne "${BOLD}Select [0-5]: ${RESET}"
+        echo -ne "${BOLD}Select [0-6]: ${RESET}"
         local _choice
         read -r _choice
         case "$_choice" in
             1) _md_list_servers ;;
             2) _md_add_server ;;
-            3) _md_remove_server ;;
+            3) _md_remove_server || true ;;
             4) _md_test_all ;;
             5) _md_bootstrap_keys ;;
+            6) if declare -F _mdb_bulk_add >/dev/null; then _mdb_bulk_add || true
+               else warn "bulk add lib missing on this server — update it: Admin centre (08) → 8) Self-Update"; sleep 2; fi ;;
             0) break ;;
             *) warn "Invalid selection."; sleep 1 ;;
         esac
@@ -1061,12 +1149,11 @@ mass_deploy_update() {
     # Branch selection
     echo -e "  ${BOLD}Select branch:${RESET}"
     echo -e "  ${CYAN}1${RESET}) main          ${DIM}(stable)${RESET}"
-    echo -e "  ${CYAN}2${RESET}) addons"
-    echo -e "  ${CYAN}3${RESET}) corefeatures"
-    echo -e "  ${CYAN}4${RESET}) Custom branch"
+    echo -e "  ${CYAN}2${RESET}) add-ons"
+    echo -e "  ${CYAN}3${RESET}) Custom branch"
     echo -e "  ${DIM}0${RESET}) Cancel"
     echo ""
-    echo -ne "${BOLD}Select [0-4] (default 1): ${RESET}"
+    echo -ne "${BOLD}Select [0-3] (default 1): ${RESET}"
     local _bchoice
     read -r _bchoice
     [[ -z "$_bchoice" ]] && _bchoice="1"
@@ -1074,9 +1161,8 @@ mass_deploy_update() {
     local _branch
     case "$_bchoice" in
         1) _branch="main" ;;
-        2) _branch="addons" ;;
-        3) _branch="corefeatures" ;;
-        4) echo -ne "  Branch name: "; read -r _branch; [[ -z "$_branch" ]] && { warn "Cancelled."; return; } ;;
+        2) _branch="add-ons" ;;
+        3) echo -ne "  Branch name: "; read -r _branch; [[ -z "$_branch" ]] && { warn "Cancelled."; return; } ;;
         0) return ;;
         *) warn "Invalid selection."; return ;;
     esac
@@ -1109,7 +1195,7 @@ cp -rf /tmp/gnt-update/\$extracted/. '${_tpath}'/ && \
 chmod +x '${_tpath}'/grin-node-toolkit.sh '${_tpath}'/scripts/*.sh 2>/dev/null || true && \
 rm -rf /tmp/gnt-update && \
 echo __OK__"
-        local _ssh_opts="-o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes -o LogLevel=ERROR"
+        local _ssh_opts="$MD_SSH_OPTS"
         [[ -n "$_key" && -f "$_key" ]] && _ssh_opts="$_ssh_opts -i $_key"
         local _out
         _out=$(echo "$_remote_script" | ssh $_ssh_opts -p "$_port" "$_user@$_host" "bash -s" 2>&1) || true
@@ -1343,39 +1429,145 @@ echo __OK__
 }
 
 # -----------------------------------------------------------------------------
-# _md_ctrl_upgrade — download latest grin release and restart on selected servers
+# _md_ctrl_upgrade — upgrade selected servers to the latest OFFICIAL grin release
+#
+# The remote script is self-contained (remote boxes have no toolkit libs) and
+# runs in this order so a bad download can never take a node down:
+#   1. fetch the release JSON, pick the linux-x86_64 tarball (the asset the
+#      local installer in lib/01_lib_node_ops.sh picks), download into a
+#      mktemp dir, extract, locate the `grin` binary;
+#   2. refuse unless the new binary runs and prints a version; verify the
+#      sha256 asset when the release publishes one — the node is untouched
+#      up to here;
+#   3. stop the nodes, then per node dir: keep the old binary as grin.prev,
+#      install the new one via grin.new + mv (a running binary cannot be
+#      overwritten in place — "Text file busy"), write .grin_binary_info in
+#      the format lib/01_lib_source_build.sh writes;
+#   4. start the nodes again. A dir that fails after the stop gets its
+#      grin.prev put back, and the start step still runs, so the upgrade
+#      never leaves a node down. `__OK__` is printed only if every dir worked.
+# No `set -e`: every fallible step carries its own guard.
+# Restart goes through the shared stop+start snippets: stop clears sessions on
+# BOTH tmux servers and sweeps grin processes; start relaunches grin-owned on
+# grin's tmux socket (gtmux) — never root-run.
 # -----------------------------------------------------------------------------
 _md_ctrl_upgrade() {
     if ! _md_select_servers; then
         echo "Press Enter to continue..."; read -r
         return
     fi
-    local _script='
-set -e
+    echo ""
+    echo -ne "  ${BOLD}Upgrade to latest official release and RESTART nodes on ${#_md_selected_idx[@]} server(s)? [y/N]: ${RESET}"
+    local _confirm
+    read -r _confirm
+    [[ ! "$_confirm" =~ ^[Yy]$ ]] && { info "Cancelled."; return; }
+
+    local _script=""
+    read -r -d '' _script <<'EOS' || true
+# A dropped SSH session must not kill this script between the stop and the
+# start below — that would leave every node on the box down. PIPE too: once
+# the session is gone, the next echo would otherwise kill the script.
+trap '' HUP PIPE
 GRIN_API="https://api.github.com/repos/mimblewimble/grin/releases/latest"
-LATEST_URL=$(curl -fsSL "$GRIN_API" | grep browser_download_url | grep linux-amd64 | cut -d'"'"'"'"'"'"'"'"'"'"'"'"'"'"'"'"'"'"'"'"' -f4)
-[[ -z "$LATEST_URL" ]] && { echo "ERROR: could not get latest release URL"; exit 1; }
-TMP=$(mktemp -d)
-echo "  downloading: $LATEST_URL"
-curl -fsSL "$LATEST_URL" | tar -xz -C "$TMP"
-upgraded=0
-for dir in /opt/grin/node/mainnet-prune /opt/grin/node/mainnet-full /opt/grin/node/testnet-prune; do
-    [[ -d "$dir" ]] || continue
-    cp "$TMP/grin" "$dir/grin" && chmod +x "$dir/grin"
-    id grin &>/dev/null && chown grin:grin "$dir/grin" || true
-    echo "  upgraded: $dir"
-    upgraded=$((upgraded+1))
+NODE_DIRS="/opt/grin/node/mainnet-prune /opt/grin/node/mainnet-full /opt/grin/node/testnet-prune"
+FOUND=0
+for d in $NODE_DIRS; do [[ -x "$d/grin" ]] && FOUND=$((FOUND+1)); done
+[[ $FOUND -eq 0 ]] && { echo "ERROR: no installed grin node under /opt/grin/node"; exit 1; }
+command -v curl >/dev/null 2>&1 || { echo "ERROR: curl not installed"; exit 1; }
+
+TMP=$(mktemp -d) || { echo "ERROR: mktemp failed"; exit 1; }
+trap 'rm -rf "$TMP"' EXIT
+
+JSON=$(curl -fsSL --max-time 30 "$GRIN_API") || { echo "ERROR: could not reach the GitHub API"; exit 1; }
+if command -v jq >/dev/null 2>&1; then
+    TAG=$(printf '%s' "$JSON" | jq -r '.tag_name // empty')
+    URLS=$(printf '%s' "$JSON" | jq -r '.assets[].browser_download_url')
+else
+    TAG=$(printf '%s' "$JSON" | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*: *"//; s/"$//')
+    URLS=$(printf '%s' "$JSON" | grep -o '"browser_download_url": *"[^"]*"' | sed 's/.*: *"//; s/"$//')
+fi
+TAR_URL=$(printf '%s\n' "$URLS" | grep -iE 'linux-x86_64\.tar\.gz$' | head -1)
+SUM_URL=$(printf '%s\n' "$URLS" | grep -i 'sha256' | grep -i 'linux-x86_64' | head -1)
+[[ -z "$TAR_URL" ]] && { echo "ERROR: no linux-x86_64 asset in release '${TAG:-?}'"; exit 1; }
+echo "  latest release: ${TAG:-unknown}"
+echo "  downloading   : $TAR_URL"
+curl -fsSL --max-time 600 -o "$TMP/grin.tar.gz" "$TAR_URL" || { echo "ERROR: download failed"; exit 1; }
+
+if [[ -n "$SUM_URL" ]]; then
+    # The release file is BSD-style ("SHA2-256(<file>)= <hex>"), so take the
+    # digest by its shape, not by column.
+    WANT=$(curl -fsSL --max-time 30 "$SUM_URL" | grep -oiE '[0-9a-f]{64}' | head -1 | tr 'A-F' 'a-f') || WANT=""
+    HAVE=$(sha256sum "$TMP/grin.tar.gz" | awk '{print $1}')
+    if [[ -z "$WANT" || "$WANT" != "$HAVE" ]]; then
+        echo "ERROR: sha256 mismatch or checksum unreadable (want '${WANT:-none}', have '$HAVE')"
+        exit 1
+    fi
+    echo "  sha256 verified"
+else
+    echo "  no checksum published"
+fi
+
+mkdir -p "$TMP/x" && tar -xzf "$TMP/grin.tar.gz" -C "$TMP/x" || { echo "ERROR: extract failed"; exit 1; }
+NEWBIN=$(find "$TMP/x" -type f -name grin | grep -v grin-wallet | head -1)
+[[ -z "$NEWBIN" ]] && { echo "ERROR: no 'grin' binary in the archive"; exit 1; }
+chmod 755 "$NEWBIN" || { echo "ERROR: chmod failed"; exit 1; }
+NEWV=$("$NEWBIN" --version 2>&1 | head -1)
+if ! printf '%s' "$NEWV" | grep -qE '[0-9]+\.[0-9]+'; then
+    echo "ERROR: new binary does not report a version ('$NEWV') — nodes untouched"
+    exit 1
+fi
+echo "  new binary    : $NEWV"
+
+declare -A OLDV
+for d in $NODE_DIRS; do
+    [[ -x "$d/grin" ]] && OLDV[$d]=$("$d/grin" --version 2>&1 | head -1) || OLDV[$d]="(none)"
 done
-rm -rf "$TMP"
-[[ $upgraded -eq 0 ]] && { echo "  no node dirs found"; exit 0; }
-set +e
-'
-    # Restart via the shared stop+start snippets: stop clears sessions on BOTH
-    # tmux servers and sweeps grin processes; start relaunches grin-owned on
-    # grin's tmux socket (gtmux) — never root-run.
-    _script+="${_MD_NODE_STOP_SNIPPET}
+
+EOS
+    _script+="${_MD_NODE_STOP_SNIPPET}"
+    local _tail=""
+    read -r -d '' _tail <<'EOS' || true
+
+FAIL=0
+for d in $NODE_DIRS; do
+    # Only dirs that already run a node — an empty dir must not gain a binary
+    # the start snippet would then launch.
+    [[ -x "$d/grin" ]] || continue
+    echo "  $d: ${OLDV[$d]:-(none)} -> $NEWV"
+    HAD_PREV=0
+    if [[ -f "$d/grin" ]]; then
+        if cp -a "$d/grin" "$d/grin.prev"; then
+            HAD_PREV=1
+        else
+            echo "  ERROR: could not back up $d/grin — skipped"; FAIL=1; continue
+        fi
+    fi
+    if install -m 755 "$NEWBIN" "$d/grin.new" && mv -f "$d/grin.new" "$d/grin"; then
+        id grin &>/dev/null && chown grin:grin "$d/grin" 2>/dev/null
+        {
+            echo "# Installed by Grin Node Toolkit — official release (081 remote upgrade)"
+            echo "installed_utc = $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo "artifact      = ${TAG:-unknown}"
+            echo "version_str   = $NEWV"
+            echo "replaced      = ${OLDV[$d]:-(none)}"
+            echo "rollback      = cp -a $d/grin.prev $d/grin   # then restart the node"
+        } > "$d/.grin_binary_info" || echo "  WARN: could not write $d/.grin_binary_info"
+        id grin &>/dev/null && chown grin:grin "$d/.grin_binary_info" 2>/dev/null
+        echo "  upgraded: $d"
+    else
+        echo "  ERROR: install into $d failed"
+        rm -f "$d/grin.new"
+        if [[ $HAD_PREV -eq 1 ]]; then
+            cp -a "$d/grin.prev" "$d/grin" && echo "  restored previous binary in $d" \
+                || echo "  ERROR: could not restore $d/grin"
+        fi
+        FAIL=1
+    fi
+done
+EOS
+    _script+="${_tail}
 ${_MD_NODE_START_SNIPPET}
-echo __OK__
+if [[ \$FAIL -eq 0 ]]; then echo __OK__; fi
 "
     _md_run_on_servers "Upgrade grin binary" "$_script"
 }
@@ -1435,9 +1627,11 @@ mass_deploy_control() {
         echo -e "  ${CYAN}c${RESET}) Restart nodes"
         echo -e "  ${CYAN}d${RESET}) Upgrade grin binary"
         echo -e "  ${RED}e${RESET}) Reboot servers"
+        echo -e "  ${CYAN}f${RESET}) Push binary from this server"
+        echo -e "  ${CYAN}g${RESET}) Roll back pushed binary"
         echo -e "  ${DIM}0${RESET}) Back"
         echo ""
-        echo -ne "${BOLD}Select [0/a-e]: ${RESET}"
+        echo -ne "${BOLD}Select [0/a-g]: ${RESET}"
         local _choice
         read -r _choice
         case "$_choice" in
@@ -1446,6 +1640,10 @@ mass_deploy_control() {
             c) _md_ctrl_restart ;;
             d) _md_ctrl_upgrade ;;
             e) _md_ctrl_reboot ;;
+            f) if declare -F _mdp_push >/dev/null; then _mdp_push || true
+               else warn "binary push lib missing on this server — update it: Admin centre (08) → 8) Self-Update"; sleep 2; fi ;;
+            g) if declare -F _mdp_rollback >/dev/null; then _mdp_rollback || true
+               else warn "binary push lib missing on this server — update it: Admin centre (08) → 8) Self-Update"; sleep 2; fi ;;
             0) break ;;
             *) warn "Invalid selection."; sleep 1 ;;
         esac
@@ -1466,9 +1664,10 @@ mass_deploy() {
         echo -e "  ${CYAN}2${RESET}) Push toolkit update"
         echo -e "  ${CYAN}3${RESET}) Run command"
         echo -e "  ${CYAN}4${RESET}) Remote node control"
+        echo -e "  ${CYAN}5${RESET}) Host security updates"
         echo -e "  ${DIM}0${RESET}) Back"
         echo ""
-        echo -ne "${BOLD}Select [0-4]: ${RESET}"
+        echo -ne "${BOLD}Select [0-5]: ${RESET}"
         local _choice
         read -r _choice
         case "$_choice" in
@@ -1476,6 +1675,8 @@ mass_deploy() {
             2) mass_deploy_update ;;
             3) mass_deploy_run ;;
             4) mass_deploy_control ;;
+            5) if declare -F _mdh_menu >/dev/null && declare -F hu_script >/dev/null; then _mdh_menu || true
+               else warn "host security updates libs missing on this server — update it: Admin centre (08) → 8) Self-Update"; sleep 2; fi ;;
             0) break ;;
             *) warn "Invalid selection."; sleep 1 ;;
         esac

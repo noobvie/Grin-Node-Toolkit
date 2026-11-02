@@ -70,6 +70,7 @@ import argparse
 import base64
 import glob
 import gzip
+import hashlib
 import json
 import os
 import re
@@ -318,6 +319,7 @@ CREATE TABLE IF NOT EXISTS ledger_worker (day TEXT NOT NULL, worker TEXT NOT NUL
 CREATE TABLE IF NOT EXISTS ledger_blocks (height INTEGER PRIMARY KEY, status TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS earnings      (height INTEGER NOT NULL, nick TEXT NOT NULL, grin REAL NOT NULL, PRIMARY KEY (height, nick));
 CREATE TABLE IF NOT EXISTS payments      (id INTEGER PRIMARY KEY AUTOINCREMENT, nick TEXT NOT NULL, grin REAL NOT NULL, ts TEXT NOT NULL, note TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS node_binary_changes (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, sha256 TEXT NOT NULL, version TEXT, first INTEGER NOT NULL DEFAULT 0);
 """
 
 
@@ -424,6 +426,137 @@ def save_state_db(conn, state):
              for w, q in ws.items()])
         _meta_set(conn, "net_prev", json.dumps(state["net_prev"]))
         _meta_set(conn, "log_pos", json.dumps(state["log_pos"]))
+
+
+# ── Node binary change marker ────────────────────────────────────────────────
+# Solo Health shows when the node binary changed so a stale-share rise can be read
+# against it. node_binary_changes is append-only and deliberately outside
+# save_state_db (which rewrites its own tables every run). The first row ever has
+# first=1 (tracking started, not a change) and is never pruned: tracked_since comes
+# from it. Rows are keyed on the sha256 of <node_dir>/grin; the version comes from the
+# running node's get_status user_agent, so a swap followed by a later restart is one
+# change (same sha, version updated) rather than two.
+NODE_BINARY_KEEP = 20
+NODE_VERSION_RE = re.compile(r"[0-9A-Za-z.+-]{1,40}")
+
+
+def node_version(status):
+    """user_agent minus the 'MW/Grin ' prefix, or None when absent or not a plain
+    version token (it comes from the node and is published, so it is validated)."""
+    ua = status.get("user_agent") if isinstance(status, dict) else None
+    if not isinstance(ua, str):
+        return None
+    ver = ua[len("MW/Grin "):] if ua.startswith("MW/Grin ") else ua
+    ver = ver.strip()
+    return ver if NODE_VERSION_RE.fullmatch(ver) else None
+
+
+def node_binary_sha(net, cached):
+    """(sha256 hex, stat dict) of <node_dir>/grin, or None when unreadable. The file
+    is re-hashed only when (ino, size, mtime_ns) differs from `cached` (tens of MB)."""
+    path = os.path.join(node_dir(net), "grin")
+    try:
+        st = os.stat(path)
+        sig = {"ino": st.st_ino, "size": st.st_size, "mtime_ns": st.st_mtime_ns}
+        if isinstance(cached, dict) and cached.get("sha256") and \
+                all(cached.get(k) == v for k, v in sig.items()):
+            return cached["sha256"], sig
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest(), sig
+    except OSError:
+        return None
+
+
+def track_node_binary(conn, net, status, now, dry_run=False):
+    """Record the node binary fingerprint and detect a change; returns a one-line
+    description. With dry_run it only reads (conn may be a read-only connection or
+    None) and writes nothing. An unreadable binary writes nothing and keeps the last
+    state, so a missing binary never counts as a change."""
+    version = node_version(status)
+    cached = None
+    newest = None
+    if conn is not None:
+        # A failed read of the newest row must never look like "no rows": that would
+        # write a second first=1 row. Only a dry run on a DB older than the table
+        # (opened read-only, so db_connect never added it) reads as empty.
+        try:
+            newest = conn.execute(
+                "SELECT id, sha256, version FROM node_binary_changes "
+                "ORDER BY id DESC LIMIT 1").fetchone()
+        except sqlite3.OperationalError:
+            if not dry_run:
+                raise
+        try:
+            cached = json.loads(_meta_get(conn, "node_binary_stat", "null"))
+        except (sqlite3.OperationalError, ValueError):
+            cached = None                  # bad cache: the file is simply hashed again
+    fp = node_binary_sha(net, cached)
+    if fp is None:
+        return "node binary unreadable; nothing recorded"
+    sha, sig = fp
+    short = sha[:12]
+    if newest is None:
+        action, desc = "first", "tracking starts at %s (%s)" % (version or "unknown", short)
+    elif newest[1] != sha:
+        action, desc = "change", "change from %s to %s (%s)" % (
+            newest[1][:12], short, version or "unknown")
+    elif version and version != newest[2]:
+        action, desc = "version", "unchanged sha %s; version %s -> %s" % (
+            short, newest[2], version)
+    else:
+        action, desc = None, "unchanged (%s, %s)" % (version or "unknown", short)
+    if dry_run:
+        return desc
+    with conn:
+        if action in ("first", "change"):
+            conn.execute(
+                "INSERT INTO node_binary_changes(ts, sha256, version, first) "
+                "VALUES (?, ?, ?, ?)", (now, sha, version, 1 if action == "first" else 0))
+            conn.execute(
+                "DELETE FROM node_binary_changes WHERE first = 0 AND id NOT IN "
+                "(SELECT id FROM node_binary_changes WHERE first = 0 "
+                "ORDER BY id DESC LIMIT ?)", (NODE_BINARY_KEEP,))
+        elif action == "version":
+            conn.execute("UPDATE node_binary_changes SET version = ? WHERE id = ?",
+                         (version, newest[0]))
+        _meta_set(conn, "node_binary_stat", json.dumps(dict(sig, sha256=sha)))
+    return desc
+
+
+def build_node_binary(conn, now):
+    """quality.node_binary for split_main.json, or None when nothing is tracked yet.
+    Only the version and the first 12 hex of the sha are public. in_windows uses the
+    same window starts as build_quality, so the page never redoes the window maths."""
+    try:
+        rows = conn.execute(
+            "SELECT ts, sha256, version, first FROM node_binary_changes ORDER BY id"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return None
+    if not rows:
+        return None
+    cur = rows[-1]
+    tracked = next((r for r in rows if r[3] == 1), rows[0])
+    idx = max((i for i, r in enumerate(rows) if r[3] == 0), default=None)
+    out = {"version": cur[2], "sha": cur[1][:12], "since": None,
+           "tracked_since": iso_utc(tracked[0]), "previous": None, "in_windows": []}
+    if idx is not None:
+        chg = rows[idx]
+        prev = rows[idx - 1] if idx > 0 else None
+        out["since"] = iso_utc(chg[0])
+        if prev is not None:
+            out["previous"] = {"version": prev[2], "sha": prev[1][:12]}
+        # Daily is today (UTC). Weekly and monthly compare UTC days, the way
+        # build_quality counts shares, so a change on the window's first day is in.
+        chg_day = utc_day(chg[0])
+        out["in_windows"] = [w for w, hit in (
+            ("daily", chg_day == utc_day(now)),
+            ("weekly", chg_day >= utc_day(now - 7 * 86400)),
+            ("monthly", chg_day >= utc_day(now - 30 * 86400))) if hit]
+    return out
 
 
 def load_ledger_db(conn):
@@ -1663,6 +1796,20 @@ def main():
         print(f"[dry-run] {nb} block-solved line(s), {nsh} accepted-share line(s), "
               f"{len(seen)} worker(s): {', '.join(sorted(seen)) or '—'}")
         print(f"[dry-run] {nstale} stale share line(s), {nrej} rejected share line(s)")
+        # Read-only: the state DB is opened mode=ro (never created) and nothing is recorded.
+        ro = None
+        if os.path.exists(db_path):
+            try:
+                ro = sqlite3.connect("file:%s?mode=ro" % db_path.replace("\\", "/"), uri=True)
+            except sqlite3.Error:
+                ro = None
+        try:
+            print("[dry-run] node binary: " + track_node_binary(
+                ro, args.net, query_node_status(args.net), time.time(), dry_run=True))
+        except Exception as e:
+            print(f"[dry-run] node binary: failed ({e})")
+        if ro is not None:
+            ro.close()
         # Per-worker stale/reject attribution only works if the node's reject lines name
         # the login ("submitted by W"). nattr says how many do — if it's 0 while nstale+
         # nrej>0, those land in the by-worker "unknown" row (orphan attribution is
@@ -1705,6 +1852,13 @@ def main():
 
     status = query_node_status(args.net)
 
+    # After scan_increment, before save_state_db: writes only node_binary_changes and its
+    # own meta key, never log_pos, so the log_pos count-once handling is untouched.
+    try:
+        track_node_binary(conn, args.net, status, now)
+    except Exception as e:
+        print(f"node binary tracking failed: {e}", file=sys.stderr)
+
     # Classify found blocks against the chain (mainnet) BEFORE building the blocks view,
     # so "All blocks we found" can render orphaned vs maturing. The ledger is computed
     # once here and reused for the payout split below — update_ledger only reads workers'
@@ -1742,13 +1896,21 @@ def main():
             split_path = os.path.join(args.out_dir, "split_main.json")
             if payout_split_enabled(args.payment_config):
                 balances, totals = compute_balances(ledger)
+                quality_out = build_quality(quality, quality_worker, ledger, found,
+                                            found_by, now)
+                try:
+                    node_binary = build_node_binary(conn, now)
+                except Exception as e:
+                    node_binary = None
+                    print(f"node binary marker failed: {e}", file=sys.stderr)
+                if node_binary:
+                    quality_out["node_binary"] = node_binary
                 save_json_atomic(split_path, {
                     "updated": iso(now), "net": "mainnet",
                     "block_reward": BLOCK_REWARD_GRIN, "maturity": MAINNET_MATURITY,
                     "periods": compute_split(ledger, found, found_by, now),
                     "daily": compute_daily(ledger, found, now),
-                    "quality": build_quality(quality, quality_worker, ledger, found,
-                                             found_by, now),
+                    "quality": quality_out,
                     "balances": balances, "totals": totals,
                 }, 0o644)
             elif os.path.exists(split_path):

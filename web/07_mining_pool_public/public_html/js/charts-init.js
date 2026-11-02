@@ -166,10 +166,14 @@
     return Math.max(2, Math.min(labels.length || 1, Math.floor(w / perLabel) || 2));
   }
 
+  // xTickLimit measures the whole canvas, but a chart with a right-hand scale (P-00, miners-stats
+  // P-03) plots on a narrower area, and on a phone its labels butted together ("Oct 15Oct 21").
+  // autoSkipPadding makes Chart.js keep a real gap between the labels it MEASURES, whatever axes
+  // share the canvas (its default is 3 px).
   function xAxis(canvas, labels, extra) {
     return Object.assign({
       grid: { display: false },
-      ticks: { autoSkip: true, maxRotation: 0, maxTicksLimit: xTickLimit(canvas, labels) }
+      ticks: { autoSkip: true, autoSkipPadding: 12, maxRotation: 0, maxTicksLimit: xTickLimit(canvas, labels) }
     }, extra || {});
   }
 
@@ -846,7 +850,7 @@
     return _charts[canvasId];
   }
 
-  // Grouped (side-by-side) bar chart for multi-series buckets, e.g. earnings vs payout per period.
+  // Grouped (side-by-side) bar chart for multi-series buckets, e.g. credited vs sent per period.
   // `labels` = x categories; `datasets` = [{ label, data[], color }]; opts.valueFmt formats y-axis +
   // tooltips (defaults to integer). Returns the Chart instance or null if unavailable.
   function renderGroupedBarChart(canvasId, labels, datasets, opts) {

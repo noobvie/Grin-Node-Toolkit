@@ -224,23 +224,39 @@ generate_config() {
 }
 
 # =============================================================================
-# [8] PATCH grin-server.toml WITH USER CHOICES
+# [8] PATCH grin-server.toml WITH THE TOOLKIT SETTINGS
 # -----------------------------------------------------------------------------
-# Modifies the generated config with user choices and enforces absolute paths:
-#   archive_mode            → true (full) or false (pruned)
-#   db_root                 → <node_dir>/chain_data
-#   log_file_path           → <node_dir>/grin-server.log
-#   api_secret_path         → <node_dir>/.api_secret
-#   foreign_api_secret_path → <node_dir>/.foreign_api_secret
-#   peer_max_inbound_count  → 999
-#   peer_max_outbound_count → 199
-#   peer_min_preferred_outbound_count → 199
-#   log_max_files           → 10
-#   file_log_level          → "Debug" (grin default "Info")
+# Every value this step writes is in ONE table inside patch_config — change a
+# setting there and every build path picks it up. Paths that run
+# setup_one_node → generate_config (a fresh grin-generated toml) → patch_config,
+# and so reset the toml: fresh install, full reinstall, Super Auto, and any of
+# those run with a source-built binary armed (key G → 3).
+# Paths that keep the node's existing grin-server.toml untouched: rebuild chain
+# data only (rebuild_chain_data_only), binary-only update (update_binary_only)
+# and installing a source build straight into a node (key G).
 # chain_type and ports are already correct from 'grin [--testnet] server config'
-# and do not need patching here.
-# If any key is missing from the generated config, it is appended with a warning.
+# and are not patched. A key missing from the generated config is appended with
+# a warning.
 # =============================================================================
+
+# _s01_set_toml_key <config> <key> <value> — set "key = value": replace the live
+# line; else uncomment only the FIRST commented one (uncommenting a second copy
+# would leave a duplicate key, which grin refuses to parse); else append.
+_s01_set_toml_key() {
+    local config="$1" key="$2" value="$3"
+    if grep -qE "^[[:space:]]*${key}[[:space:]]*=" "$config"; then
+        sed -i -E "s|^[[:space:]]*${key}[[:space:]]*=.*|${key} = ${value}|" "$config" \
+            || die "Failed to patch $key in $config."
+    elif grep -qE "^#[[:space:]]*${key}[[:space:]]*=" "$config"; then
+        sed -i -E "0,/^#[[:space:]]*${key}[[:space:]]*=/s|^#[[:space:]]*${key}[[:space:]]*=.*|${key} = ${value}|" "$config" \
+            || die "Failed to patch $key in $config."
+    else
+        echo "${key} = ${value}" >> "$config" \
+            || die "Failed to append $key to $config."
+        warn "$key not found in config — appended."
+    fi
+}
+
 patch_config() {
     local network="$1"
     local mode="$2"
@@ -249,127 +265,43 @@ patch_config() {
     step_header "Step 8: Patch Config"
 
     local archive_val
-    [[ "$mode" == "full" ]] && archive_val="true" || archive_val="false"
+    if [[ "$mode" == "full" ]]; then archive_val="true"; else archive_val="false"; fi
 
-    # archive_mode
-    if grep -q 'archive_mode' "$config"; then
-        sed -i "s/^archive_mode = .*/archive_mode = $archive_val/" "$config" \
-            || die "Failed to patch $config."
-    else
-        echo "archive_mode = $archive_val" >> "$config"
-        warn "archive_mode not found in config — appended."
-    fi
+    # The toolkit settings — key | value (TOML literal) | why.
+    local -a settings=(
+        "archive_mode|$archive_val|full = archive node, pruned otherwise"
+        "db_root|\"$GRIN_DIR/chain_data\"|chain data inside the node dir"
+        "log_file_path|\"$GRIN_DIR/grin-server.log\"|log inside the node dir, not HOME"
+        "api_secret_path|\"$GRIN_DIR/.api_secret\"|absolute, independent of the working dir"
+        "foreign_api_secret_path|\"$GRIN_DIR/.foreign_api_secret\"|absolute, independent of the working dir"
+        "peer_max_inbound_count|999|more inbound peers for a community node"
+        "peer_max_outbound_count|199|more outbound peers, faster propagation"
+        "peer_min_preferred_outbound_count|199|keep the outbound slots filled"
+        "log_max_files|10|Debug fills each file fast; 3 held only ~10 days even at Info (086 design F-6)"
+        "file_log_level|\"Debug\"|grin default Info; failure detail such as PMMR 'verify failed' is DEBUG-only"
+        "stdout_log_level|\"Debug\"|grin default Warning; the tmux pane shows the same detail as the log"
+    )
+    # Not patched on purpose:
+    #   enable_stratum_server — owned by Script 07 (solo/pool setup enable it, solo
+    #     cleanup disables it); forcing it here would re-enable mining after a 07
+    #     cleanup. The grin default (false) stays for a freshly built node.
+    #   host (p2p) — grin v5.5+ already defaults to "::" (dual-stack).
 
-    # db_root — point to our custom directory so grin stores chain data here
-    local db_root="$GRIN_DIR/chain_data"
-    if grep -q 'db_root' "$config"; then
-        sed -i "s|^db_root = .*|db_root = \"$db_root\"|" "$config" \
-            || die "Failed to patch $config."
-    else
-        echo "db_root = \"$db_root\"" >> "$config"
-        warn "db_root not found in config — appended."
-    fi
-
-    # log_file_path — keep log in the node directory, not in HOME
-    if grep -qE '^#?[[:space:]]*log_file_path' "$config"; then
-        sed -i -E "s|^#?[[:space:]]*log_file_path[[:space:]]*=.*|log_file_path = \"$GRIN_DIR/grin-server.log\"|" "$config" \
-            || die "Failed to patch $config."
-    else
-        echo "log_file_path = \"$GRIN_DIR/grin-server.log\"" >> "$config"
-        warn "log_file_path not found in config — appended."
-    fi
-
-    # api_secret_path — absolute path so it works regardless of working directory
-    if grep -qE '^#?[[:space:]]*api_secret_path' "$config"; then
-        sed -i -E "s|^#?[[:space:]]*api_secret_path[[:space:]]*=.*|api_secret_path = \"$GRIN_DIR/.api_secret\"|" "$config" \
-            || die "Failed to patch $config."
-    else
-        echo "api_secret_path = \"$GRIN_DIR/.api_secret\"" >> "$config"
-        warn "api_secret_path not found in config — appended."
-    fi
-
-    # foreign_api_secret_path — absolute path so it works regardless of working directory
-    if grep -qE '^#?[[:space:]]*foreign_api_secret_path' "$config"; then
-        sed -i -E "s|^#?[[:space:]]*foreign_api_secret_path[[:space:]]*=.*|foreign_api_secret_path = \"$GRIN_DIR/.foreign_api_secret\"|" "$config" \
-            || die "Failed to patch $config."
-    else
-        echo "foreign_api_secret_path = \"$GRIN_DIR/.foreign_api_secret\"" >> "$config"
-        warn "foreign_api_secret_path not found in config — appended."
-    fi
-
-    # peer_max_inbound_count — allow more inbound peers for a community node
-    if grep -qE '^#?[[:space:]]*peer_max_inbound_count' "$config"; then
-        sed -i -E 's/^#?[[:space:]]*peer_max_inbound_count[[:space:]]*=.*/peer_max_inbound_count = 999/' "$config" \
-            || die "Failed to patch $config."
-    else
-        echo "peer_max_inbound_count = 999" >> "$config"
-        warn "peer_max_inbound_count not found in config — appended."
-    fi
-
-    # peer_max_outbound_count — more outbound connections for faster propagation
-    if grep -qE '^#?[[:space:]]*peer_max_outbound_count' "$config"; then
-        sed -i -E 's/^#?[[:space:]]*peer_max_outbound_count[[:space:]]*=.*/peer_max_outbound_count = 199/' "$config" \
-            || die "Failed to patch $config."
-    else
-        echo "peer_max_outbound_count = 199" >> "$config"
-        warn "peer_max_outbound_count not found in config — appended."
-    fi
-
-    # peer_min_preferred_outbound_count — aggressively maintain outbound connections
-    if grep -qE '^#?[[:space:]]*peer_min_preferred_outbound_count' "$config"; then
-        sed -i -E 's/^#?[[:space:]]*peer_min_preferred_outbound_count[[:space:]]*=.*/peer_min_preferred_outbound_count = 199/' "$config" \
-            || die "Failed to patch $config."
-    else
-        echo "peer_min_preferred_outbound_count = 199" >> "$config"
-        warn "peer_min_preferred_outbound_count not found in config — appended."
-    fi
-
-    # log_max_files — keep 10 rotated log files: Debug logging fills each file
-    # fast, and 3 held only ~10 days even at Info (086 design F-6)
-    if grep -qE '^#?[[:space:]]*log_max_files' "$config"; then
-        sed -i -E 's/^#?[[:space:]]*log_max_files[[:space:]]*=.*/log_max_files = 10/' "$config" \
-            || die "Failed to patch $config."
-    else
-        echo "log_max_files = 10" >> "$config"
-        warn "log_max_files not found in config — appended."
-    fi
-
-    # file_log_level — Debug instead of grin's default Info, so a failure leaves
-    # its detail in the log (e.g. the PMMR 'verify failed' lines of a corrupted
-    # start are DEBUG-only). stdout_log_level is left at grin's default (Warning)
-    # so the tmux pane stays readable. Debug fills log_max_size faster, so the
-    # rotated history covers fewer days than at Info.
-    if grep -qE '^#?[[:space:]]*file_log_level' "$config"; then
-        sed -i -E 's/^#?[[:space:]]*file_log_level[[:space:]]*=.*/file_log_level = "Debug"/' "$config" \
-            || die "Failed to patch $config."
-    else
-        echo 'file_log_level = "Debug"' >> "$config"
-        warn "file_log_level not found in config — appended."
-    fi
-
-    # enable_stratum_server — deliberately NOT patched here. Stratum is a mining
-    # concern owned by Script 07 (solo setup / pool setup enable it; solo cleanup
-    # disables it). Forcing it true on every node build would silently re-enable
-    # mining config after a 07 cleanup and confuse the 07 setup flow. The grin
-    # default (false) is kept for a freshly built node.
-
-    # p2p host — no patch needed: grin v5.5+ already defaults to host = "::"
-    # (IPv6 any-address, dual-stack), so no 0.0.0.0→:: rewrite is needed.
+    local row key value why summary=""
+    for row in "${settings[@]}"; do
+        IFS='|' read -r key value why <<< "$row"
+        _s01_set_toml_key "$config" "$key" "$value"
+    done
 
     success "Config patched:"
-    info "  archive_mode                      = $archive_val"
-    info "  db_root                           = \"$db_root\""
-    info "  log_file_path                     = \"$GRIN_DIR/grin-server.log\""
-    info "  api_secret_path                   = \"$GRIN_DIR/.api_secret\""
-    info "  foreign_api_secret_path           = \"$GRIN_DIR/.foreign_api_secret\""
-    info "  peer_max_inbound_count            = 999"
-    info "  peer_max_outbound_count           = 199"
-    info "  peer_min_preferred_outbound_count = 199"
-    info "  log_max_files                     = 10"
-    info "  file_log_level                    = \"Debug\"  (grin default: Info)"
-    info "  enable_stratum_server            = (untouched — Script 07 owns stratum)"
-    info "  host (p2p)                        = \"::\"  (v5.5 default — IPv4 + IPv6 dual-stack)"
-    log "[STEP 8] archive_mode=$archive_val db_root=$db_root api_secret=$GRIN_DIR/.api_secret peer_limits=999in/199out/199min log_max_files=10 file_log_level=Debug stratum=untouched p2p_host=default(::)"
+    for row in "${settings[@]}"; do
+        IFS='|' read -r key value why <<< "$row"
+        info "$(printf '  %-34s= %s' "$key" "$value")"
+        summary+=" ${key}=${value}"
+    done
+    info "$(printf '  %-34s= %s' "enable_stratum_server" "(untouched — Script 07 owns stratum)")"
+    info "$(printf '  %-34s= %s' "host (p2p)" "\"::\"  (v5.5 default — IPv4 + IPv6 dual-stack)")"
+    log "[STEP 8]${summary} stratum=untouched p2p_host=default(::)"
 }
 
 # =============================================================================

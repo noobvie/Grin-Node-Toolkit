@@ -191,20 +191,19 @@ class GrinNodeAPI {
     return Boolean(value && String(value).trim() && !/^CHANGE_ME/i.test(value));
   }
 
-  // Re-read a secret file after the node refused a call; true only when the value changed.
+  // Re-read a secret file after the node refused a call.
   // The file can be repaired after this process started: a node start strips the grinsecret
   // group until grin-secret-sync restores it, and a pool booting in that gap holds no secret.
   // Quiet on failure, because this runs on every refused call while the fault lasts and the
   // startup warning has already named the file.
   _reloadSecret(field) {
     const p = this._secretFiles[field];
-    if (!p) return false;
+    if (!p) return;
     let value;
-    try { value = fs.readFileSync(p, 'utf-8').trim(); } catch (_) { return false; }
-    if (!value || value === this[field]) return false;
+    try { value = fs.readFileSync(p, 'utf-8').trim(); } catch (_) { return; }
+    if (!value || value === this[field]) return;
     this[field] = value;
     console.log(`[grin-node] reloaded the API secret from ${p} after the node refused the old one.`);
-    return true;
   }
 
   // One line at startup, per missing secret. Without it an unresolved secret is completely
@@ -402,13 +401,18 @@ class GrinNodeAPI {
     return this._authedCall(`${this.nodeUrl}/v2/foreign`, method, params, 'foreignSecret');
   }
 
-  // One retry, and only with a value that changed. The node refuses a call before running it,
-  // so repeating a refused push_transaction cannot send it twice.
+  // One retry, and only with a value that differs from the one this call sent. Comparing to
+  // what was SENT matters: when calls overlap, another call may already have reloaded the
+  // secret. The node refuses a call before running it, so repeating a refused
+  // push_transaction cannot send it twice.
   async _authedCall(endpoint, method, params, field) {
+    const sent = this[field];
     try {
-      return await this._rpcCall(endpoint, method, params, this[field]);
+      return await this._rpcCall(endpoint, method, params, sent);
     } catch (err) {
-      if (err.transport !== 'auth' || !this._reloadSecret(field)) throw err;
+      if (err.transport !== 'auth') throw err;
+      this._reloadSecret(field);
+      if (this[field] === sent) throw err;
       return this._rpcCall(endpoint, method, params, this[field]);
     }
   }

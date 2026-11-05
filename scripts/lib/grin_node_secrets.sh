@@ -605,17 +605,25 @@ grin_sync_pool_stratum() {
         if [[ "$changed" == 1 ]]; then
             echo "[grin-secret-sync] pool stratum wiring re-applied to $toml — RESTART the $net node to take effect."
         fi
+    done
 
-        # De-rooted backend secret access (root:grinsecret 640) — a rebuild
-        # regenerates the files 600 root:root, silently 403-ing the pool.
-        if getent group grinsecret >/dev/null 2>&1; then
+    # De-rooted backend secret access (grinsecret group, 640). A node start's
+    # chown strips the group and a rebuild writes the files 600, and either one
+    # makes the pool's calls go out unauthenticated. Both networks, outside the
+    # pool-conf gate above: a mainnet pool also reads the testnet node for its
+    # peer map, with no testnet pool conf on the box. The group exists only
+    # where a pool was installed.
+    if getent group grinsecret >/dev/null 2>&1; then
+        for net in mainnet testnet; do
+            dir=$(grin_live_node_dir "$net" 2>/dev/null || true)
+            [[ -n "$dir" ]] || continue
             for sf in "$dir/.api_secret" "$dir/.foreign_api_secret"; do
                 [[ -f "$sf" ]] || continue
                 chgrp grinsecret "$sf" 2>/dev/null || true
                 chmod 640 "$sf" 2>/dev/null || true
             done
-        fi
-    done
+        done
+    fi
     return 0
 }
 

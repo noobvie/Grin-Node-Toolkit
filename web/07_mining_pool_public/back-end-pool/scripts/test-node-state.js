@@ -203,6 +203,16 @@ const api = (url, network = 'mainnet') => new GrinNodeAPI({
     console.log = realLog;
     ok('the foreign secret reloads on its own', foreign.tip.height === 5 && calls === 2);
 
+    console.error = () => {};
+    fs.rmSync(ownerFile);
+    const racing = fromFiles();
+    console.error = realWarn;
+    fs.writeFileSync(ownerFile, 'right-secret');
+    console.log = () => {};
+    const both = await Promise.all([racing.getStatus(), racing.getStatus()]);
+    console.log = realLog;
+    ok('overlapping refused calls both recover', both.every((s) => s.ok === true));
+
     fs.writeFileSync(ownerFile, 'wrong-secret');
     fs.writeFileSync(foreignFile, 'wrong-secret');
     const wrong = fromFiles();

@@ -456,6 +456,10 @@ function migrateLotteryDraws() {
       db.exec(`ALTER TABLE lottery_draws ADD COLUMN campaign_id INTEGER DEFAULT NULL`);
       console.warn(`[db] lottery_draws: added missing column campaign_id`);
     }
+    if (!have.has('rules_json')) {
+      db.exec(`ALTER TABLE lottery_draws ADD COLUMN rules_json TEXT DEFAULT NULL`);
+      console.warn(`[db] lottery_draws: added missing column rules_json`);
+    }
   } catch (e) {
     console.error(`[db] lottery_draws migration check failed: ${e.message}`);
   }
@@ -1196,8 +1200,15 @@ function createSchema() {
       status TEXT NOT NULL DEFAULT 'pending',
       campaign_id INTEGER DEFAULT NULL,
       drawn_at INTEGER DEFAULT NULL,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      -- Daily giveaway only: the limits frozen at commit, so a settings change cannot alter a
+      -- draw that already named its seed block.
+      rules_json TEXT DEFAULT NULL
     )`,
+
+    // The money guard behind "one giveaway per day": the database refuses a second scheduled draw
+    // for a day, whatever the scheduler does. An admin Run-now has a non-midnight period_start.
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_lottery_daily_once ON lottery_draws(period_start) WHERE draw_type = 'daily'`,
 
     `CREATE INDEX IF NOT EXISTS idx_lottery_draws_time ON lottery_draws(created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_lottery_draws_status ON lottery_draws(status)`,

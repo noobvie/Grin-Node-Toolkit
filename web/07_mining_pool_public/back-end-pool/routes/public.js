@@ -95,7 +95,7 @@ module.exports = function createPublicRoutes(ctx) {
         // when the operator has enabled incentives. Winner addresses are truncated.
         try {
           if (incentivesManager && incentivesManager.enabled()) {
-            const recent = lotteryManager.recentDraws(3);
+            const recent = lotteryManager.recentDraws(3, { paidOnly: true });
             const trunc = (a) => (a && a.length > 14 ? `${a.slice(0, 10)}…${a.slice(-4)}` : a);
             const incCfg = poolSettings.getSection('incentives');
             cfg.incentives = {
@@ -109,7 +109,8 @@ module.exports = function createPublicRoutes(ctx) {
                   address: trunc(w.address || w.grin_address),
                   amount: w.amount,
                 }))
-              ),
+              // This payload is on every page, and a giveaway draw can have up to 1000 winners.
+              ).slice(0, 20),
             };
           } else {
             cfg.incentives = { enabled: false };
@@ -242,7 +243,7 @@ module.exports = function createPublicRoutes(ctx) {
     'GET /api/public/ads': { desc: 'Active operator ads by placement (+ rotation interval). Cached 60s, so ad edits take up to a minute to appear.', shape: 'raw', params: 'placement (omit for every slot keyed by placement)' },
     'POST /api/public/ads/event': { desc: 'Ad impression/click beacon — aggregate counters only, no visitor data. Always 204, even on a malformed body.', shape: 'none', body: 'impressions[], clicks[] (ad ids)' },
     'GET /api/public/lottery/winners': { desc: 'Fortune-board winner history (truncated addresses). Empty when incentives are disabled.', shape: 'envelope', params: 'limit (≤100, default 25) · offset' },
-    'GET /api/public/lottery/stats': { desc: 'Fortune-board aggregates: total prizes/winners/draws, Pot A/B split, monthly series.', shape: 'envelope' },
+    'GET /api/public/lottery/stats': { desc: 'Fortune-board aggregates: total prizes/winners/draws, split by pot (a share-weighted, b equal chance, d daily giveaway), monthly series, and daily_giveaway: the current limits, or null while it is off.', shape: 'envelope' },
     'GET /api/public/pages': { desc: 'Published CMS pages (slug + title) for the header/footer link lists.', shape: 'envelope' },
     'GET /api/public/page/:key': { desc: 'One published CMS page by slug (About / Terms / Privacy / FAQ …). 404 if the slug is unknown or unpublished.', shape: 'envelope' },
     'GET /api/public/posts': { desc: 'Blog: paginated list of published posts (card view — excerpt, cover, date).', shape: 'envelope', params: 'limit (≤50, default 10) · offset' },
@@ -287,7 +288,7 @@ module.exports = function createPublicRoutes(ctx) {
     'GET /api/account/:addr/shares': { desc: 'Raw accepted shares for an address, newest first. Shares are pruned aggressively — use the hashrate history for anything older than ~a day.', shape: 'raw', params: 'limit (≤500, default 100) · offset' },
     'GET /api/account/:addr/workers': { desc: 'Per-worker (rig) hashrate + share quality over a recent window. `donate_percent` per worker = the % of that rig’s share credit donated to the prize pool, read from its `donateN` name tag (0–100); null when untagged or while the operator has donations switched off.', shape: 'raw', params: 'window minutes (1–1440, default 10)' },
     'GET /api/account/:addr/hashrate/history': { desc: 'Account hashrate time-series, downsampled for charting.', shape: 'raw', params: 'hours (1–720, default 24)' },
-    'GET /api/account/:addr/earnings': { desc: 'Credited earnings per period (1h/24h/7d/30d) + 30d in/out totals. Payout reversals count as money-in but never as earnings.', shape: 'raw' },
+    'GET /api/account/:addr/earnings': { desc: 'Credited earnings per period (1h/24h/7d/30d) + 30d in/out totals. Payout reversals count as money-in but never as earnings. prizes = { count, total_grin }: lifetime draw wins (lottery and daily giveaway), from lottery_winners.', shape: 'raw' },
     'GET /api/account/:addr/balance/log': { desc: 'Address ledger. direction=in|out splits it by movement of the spendable balance: a payout appears in OUT once, as its lock at request time (gross, fee included), and a payout that fails, expires or is cancelled comes back in IN as a reversal — the confirm-time settlement rows appear only in the unfiltered view. Payout rows carry payout_method (tor · slatepack · nostr · manual; null on other rows); the CSV does not. Raw rows prune after ~60 days (the durable record is the withdrawal history below). format=csv streams the filtered window as a download on a tighter rate limit.', shape: 'raw · csv', params: 'direction=in|out · days (≤3650, default all) · limit (≤500, default 50) · offset · format=csv' },
     'GET /api/account/:addr/withdrawals': { desc: 'Payout history for an address — kept forever, so this is the durable record for accounting. Payouts only: no donations or orphan clawbacks. fee_charged is the flat withdrawal fee you were charged (you received amount − fee_charged); fee is the real network fee the POOL wallet paid, not a charge to you. The CSV carries withdrawal_fee and received instead, filled only for paid rows. format=csv streams all-time on a tighter rate limit. The on-chain kernel is NOT returned here — rows carry has_kernel_proof and has_payment_proof (booleans) and the proofs themselves need an ownership proof; see POST /api/account/:addr/withdrawals/proofs. A tor_failed row carries fail_code — why the ONE Tor attempt failed (the balance was returned): wallet_offline (your wallet did not answer over Tor), wallet_unreachable (it could not reach your wallet), wallet_not_findable (a fresh Tor connection could not find your wallet: restart your wallet listener and check your clock), pool_send_path (the pool could not deliver), pool_busy (the pool wallet could not cover it), unknown (a held payout that did not go out), wallet_offline_cleared (the operator un-counted it); null on every other row.', shape: 'raw · csv', params: 'limit (≤200, default 20) · offset · format=csv' },
     'POST /api/account/:addr/withdrawals/proofs': { desc: 'Payment proofs for your own payouts, two kinds in one call. proofs: { <withdrawal id>: <kernel excess> } - the on-chain kernel of every confirmed payout (proves the tx was mined). payment_proofs: { <withdrawal id>: <PaymentProof> } - the signed proof grin-wallet requested on Tor and Slatepack payouts: { amount (nanogrin), excess, recipient_address, recipient_sig, sender_address, sender_sig }, the same JSON `grin-wallet export_proof` writes; save one as a file and `grin-wallet verify_proof` it. recipient_sig is YOUR wallet\'s signature, so it proves receipt to anyone. Goblin (nostr) payouts, and Slatepack payouts made before the pool requested proofs on that rail, carry no signed proof (kernel only). Newest 500 signed proofs. Ownership-gated on purpose: publishing an address next to its kernels would be a public address-to-chain index on a privacy coin. 403 = proof failed, 404 = no such account.', shape: 'raw', auth: 'ownership proof', rate: 'withdraw', body: OWNER_PROOF_BODY },
@@ -406,7 +407,7 @@ module.exports = function createPublicRoutes(ctx) {
         if (!incentivesManager || !incentivesManager.enabled()) {
           return res.json({
             success: true,
-            data: { total_prizes_grin: 0, total_winners: 0, unique_winners: 0, total_draws: 0, by_pot: [], by_event: [], monthly: [] },
+            data: { total_prizes_grin: 0, total_winners: 0, unique_winners: 0, total_draws: 0, by_pot: [], by_event: [], monthly: [], daily_giveaway: null },
           });
         }
         res.setHeader('Cache-Control', 'public, max-age=60');

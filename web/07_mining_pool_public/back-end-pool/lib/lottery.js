@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { getDb } = require('./db');
 const IncentivesManager = require('./incentives');
+const DailyGiveaway = require('./daily-giveaway');
 
 const flag = (v) => v === true || v === 'true';
 const SECONDS_PER_DAY = 86400;
@@ -22,6 +23,7 @@ class LotteryManager {
     this.db = getDb();
     this.grinNode = grinNode;
     this.incentives = new IncentivesManager(config);
+    this.daily = new DailyGiveaway(this.db, this.incentives, grinNode, LotteryManager, SEED_DELAY_BLOCKS);
   }
 
   settingsView() {
@@ -263,6 +265,9 @@ class LotteryManager {
     }
     if (!header || !header.hash) return null;
 
+    // The giveaway shares this reveal but rolls its own amount and winner count from the hash.
+    if (draw.draw_type === 'daily') return this.daily.settle(draw, header);
+
     // Read the snapshot back in the committed order — pickWeighted walks the array in order,
     // so this ORDER BY is part of the algorithm, not a cosmetic detail.
     const rows = this.db.prepare(
@@ -359,9 +364,17 @@ class LotteryManager {
     return out;
   }
 
-  // Run every due weekly/special draw — called by the hourly scheduler job in index.js.
+  // Run the daily giveaway commit, then every due weekly/special draw — called by the hourly
+  // scheduler job in index.js.
   async runDueDraws() {
     const out = [];
+    // First and on its own: a weekly draw that keeps throwing must not cost a giveaway day.
+    try {
+      const daily = await this.daily.runDue();
+      if (daily) out.push(daily);
+    } catch (err) {
+      console.error(`[Daily giveaway] scheduler tick failed: ${err.message}`);
+    }
     for (const d of this.dueDraws()) {
       out.push(await this.runDraw(d.type, { eventName: d.event_name, potGrinOverride: d.pot_grin || 0 }));
     }
@@ -518,8 +531,11 @@ class LotteryManager {
   }
 
   // Recent draws + their winners, for the admin panel and public payload.
-  recentDraws(limit = 10) {
-    const draws = this.db.prepare('SELECT * FROM lottery_draws ORDER BY created_at DESC LIMIT ?').all(limit);
+  // paidOnly skips draws with no winners, which would otherwise take the slots of ones that paid.
+  recentDraws(limit = 10, { paidOnly = false } = {}) {
+    const draws = this.db.prepare(
+      `SELECT * FROM lottery_draws ${paidOnly ? "WHERE status = 'paid'" : ''} ORDER BY created_at DESC LIMIT ?`
+    ).all(limit);
     const winStmt = this.db.prepare('SELECT grin_address, pot, ticket_count, amount FROM lottery_winners WHERE draw_id = ?');
     return draws.map((d) => ({ ...d, winners: winStmt.all(d.id) }));
   }
@@ -555,7 +571,8 @@ class LotteryManager {
   // Aggregate winner stats for the public fortune-board charts + headline tiles. Server-side
   // so the figures cover ALL history (the paginated winnerHistory only reflects loaded pages).
   //   total_prizes_grin / total_winners / unique_winners / total_draws — headline placard
-  //   by_pot   — Pot A (share-weighted) vs Pot B (equal-chance) GRIN + winner counts (doughnut)
+  //   by_pot   — Pot A (share-weighted), Pot B (equal-chance) and d (daily giveaway) GRIN +
+  //              winner counts (doughnut)
   //   monthly  — GRIN paid + winner count per calendar month, UTC (bar chart), oldest→newest
   stats() {
     const totals = this.db.prepare(`
@@ -564,7 +581,9 @@ class LotteryManager {
              COALESCE(SUM(amount), 0) AS total_grin
       FROM lottery_winners
     `).get();
-    const totalDraws = this.db.prepare('SELECT COUNT(*) AS c FROM lottery_draws').get().c;
+    // Only draws that reached a result: not one still waiting for its seed block, and not a
+    // giveaway day nobody qualified for.
+    const totalDraws = this.db.prepare("SELECT COUNT(*) AS c FROM lottery_draws WHERE status IN ('paid', 'drawn')").get().c;
     const byPot = this.db.prepare(`
       SELECT pot, COUNT(*) AS count, COALESCE(SUM(amount), 0) AS amount
       FROM lottery_winners GROUP BY pot
@@ -600,6 +619,7 @@ class LotteryManager {
       by_pot: byPot.map((r) => ({ pot: r.pot, count: r.count, amount: r.amount })),
       by_event: byEvent.map((r) => ({ event: r.event, count: r.count, amount: r.amount })),
       monthly: monthly.map((r) => ({ month: r.month, ts: r.ts, count: r.count, amount: r.amount })),
+      daily_giveaway: this.daily.publicRules(),
     };
   }
 

@@ -1053,7 +1053,8 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
         if (r.ok) {
           const d = await r.json();
           const el = document.getElementById('lottery-draws');
-          if (el) el.innerHTML = (d.draws || []).slice(0, 5).map(dr =>
+          renderGiveawayDraws((d.draws || []).filter(dr => dr.draw_type === 'daily'), d.daily_status);
+          if (el) el.innerHTML = (d.draws || []).filter(dr => dr.draw_type !== 'daily').slice(0, 5).map(dr =>
             `#${dr.id} ${escapeHtmlSafe(dr.event_name || 'weekly')} — ${escapeHtmlSafe(dr.status)} — ${(dr.winners || []).map(w => `${escapeHtmlSafe(String(w.grin_address || '').slice(0, 12))}… ${w.amount.toFixed(4)}`).join(', ') || 'no winners'}`
           ).join('<br>');
         }
@@ -1272,6 +1273,103 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
       } catch (e) { showToast(e.message, 'error'); }
     }
 
+    // ─── Daily giveaway ─────────────────────────────────────────────────────
+    const shortAddr = (a) => (a.length > 18 ? a.slice(0, 12) + '…' + a.slice(-4) : a);
+    // First five names, so a draw with many winners stays readable.
+    const winnerNames = (list) => list.slice(0, 5).map((a) => escapeHtmlSafe(shortAddr(a))).join(', ')
+      + (list.length > 5 ? ` +${list.length - 5} more` : '');
+    const winnerWord = (n) => (n === 1 ? '1 winner' : n + ' winners');
+    const prizeWord = (n) => (n === 1 ? '1 prize' : n + ' prizes');
+    const prizeNames = (list) => list.slice(0, 5)
+      .map((w) => escapeHtmlSafe(shortAddr(w.address)) + (w.wins > 1 ? ` ×${w.wins}` : '')).join(', ')
+      + (list.length > 5 ? ` +${list.length - 5} more` : '');
+    const utcDay = (sec) => new Date(sec * 1000).toISOString().slice(0, 10);
+
+    function giveawayDrawState(dr, holds) {
+      const n = (dr.winners || []).length;
+      if (dr.status === 'paid') {
+        const total = dr.winners.reduce((s, w) => s + w.amount, 0);
+        return `Paid ${total.toFixed(4)} GRIN to ${winnerWord(n)}: ${winnerNames(dr.winners.map((w) => w.grin_address))}`;
+      }
+      if (dr.status === 'empty') return 'Nobody qualified. Nothing paid.';
+      if (dr.status === 'drawn') return 'Nothing paid: every winner was banned.';
+      if (holds[dr.id] === 'short') return 'On hold: the prize pool is too low. It pays once you top it up.';
+      if (holds[dr.id] === 'off') return 'On hold: the giveaway is switched off. It pays when you switch it back on.';
+      return `Waiting for block ${escapeHtmlSafe(dr.seed_height)}. Winners are picked at the first hourly check after it.`;
+    }
+
+    function renderGiveawayDraws(draws, status) {
+      const el = document.getElementById('daily-draws');
+      if (!el) return;
+      const st = status || {};
+      const lines = [];
+      if (st.last_skip) {
+        const s = st.last_skip;
+        const why = s.reason === 'underfunded'
+          ? `the prize pool holds ${Number(s.prize_pool).toFixed(4)} GRIN, below the ${Number(s.min_grin).toFixed(4)} GRIN minimum`
+          : s.reason === 'no_seed' ? 'the node did not answer' : 'the saved limits are not valid';
+        lines.push(`Last check ${new Date(s.at * 1000).toISOString().slice(11, 16)} UTC: skipped, ${why}.`);
+      }
+      for (const dr of draws.slice(0, 7)) {
+        // A scheduled draw covers one exact UTC day; Run now covers the 24 h before it was pressed.
+        const label = dr.period_start % 86400 === 0 ? utcDay(dr.period_start) : `Run now, ${utcDay(dr.period_end)}`;
+        lines.push(`#${escapeHtmlSafe(dr.id)} ${label}: ${giveawayDrawState(dr, st.holds || {})}`);
+      }
+      el.innerHTML = lines.length ? lines.join('<br>') : 'No giveaway draws yet.';
+    }
+
+    async function previewDailyGiveaway() {
+      const out = document.getElementById('daily-preview-out');
+      const extra = document.getElementById('daily-preview-extra').value || 0;
+      out.textContent = 'Working…';
+      try {
+        const r = await fetch('/api/admin/incentives/daily-giveaway/preview?extra_miners=' + encodeURIComponent(extra), { credentials: 'include' });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Preview failed');
+        if (!d.success) { out.textContent = 'Check the limits above and press Save first.'; return; }
+        const head = `Simulated with saved limits, using miners who qualified yesterday (UTC): ${d.real_eligible} real + ${d.pretend_miners} pretend. Prize pool ${d.prize_pool.toFixed(4)} GRIN. Nothing was paid.`
+          + (d.enabled ? '' : '<br>The giveaway is off, so no real draw will run.');
+        if (d.real_eligible + d.pretend_miners === 0) {
+          out.innerHTML = head + '<br>Nobody qualified yesterday, so no day would pay. Add pretend miners to see a result.';
+          return;
+        }
+        const lines = d.days.map((x) => {
+          if (x.skipped) return `Day ${x.day}: skipped, prize pool below the minimum`;
+          return `Day ${x.day}: <strong>${x.total_grin.toFixed(4)}</strong> GRIN, ${prizeWord(x.winners.reduce((s, w) => s + w.wins, 0))} at ${x.share_grin.toFixed(4)} each: ${prizeNames(x.winners)} (pool left ${x.prize_pool_after.toFixed(4)})`;
+        });
+        out.innerHTML = head + '<br>' + lines.join('<br>');
+      } catch (e) { out.textContent = e.message; }
+    }
+
+    async function runDailyGiveawayNow() {
+      if (!confirm('Run a real giveaway draw now?\n\nThis pays your saved daily amount from the prize pool to REAL miners only. Pretend miners are not included. '
+                 + 'It is an extra draw over the last 24 hours and does not replace the scheduled one. '
+                 + 'Winners are picked at the next hourly check after the seed block is mined. This cannot be undone.')) return;
+      const out = document.getElementById('daily-run-out');
+      const tell = (text, kind) => { out.textContent = text; showToast(text, kind); };
+      const failure = (res) => ({
+        disabled: 'The giveaway is off. Tick "Run the daily giveaway" and "Enable incentive features", then press Save.',
+        draw_open: `Draw #${res.draw_id || '?'} is still open: it is waiting for its block, or on hold. See Recent giveaway draws below.`,
+        underfunded: `Not drawn: the prize pool holds ${Number(res.prize_pool).toFixed(4)} GRIN, less than your minimum of ${Number(res.min_grin).toFixed(4)} GRIN. Add funds under Prize Pool Funding.`,
+        bad_rules: 'Check the limits above and press Save first.',
+        no_seed: 'The node did not answer, so no draw was made and nothing changed. Try again in a few minutes.',
+      })[res.reason] || 'Nothing was drawn.';
+      try {
+        const r = await adminFetch('/api/admin/incentives/daily-giveaway/run', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Draw failed');
+        const res = d.result || {};
+        if (!res.success) tell(failure(res), 'warn');
+        else if (res.eligible === 0) tell('Nobody mined enough in the last 24 hours, so nothing will be paid. To test alone, set "Hours mined that day to qualify" to 1, press Save, and mine for an hour.', 'warn');
+        else tell(`Draw #${res.draw_id} started with ${res.eligible} miner(s). Winners are picked after block ${res.seed_height} (about 10 minutes), at the next hourly check. Press Refresh below to see the result.`, 'success');
+        loadIncentiveData();
+      } catch (e) { tell(e.message, 'error'); }
+    }
+
     async function drawLotteryNow(type) {
       // Draws are commit-reveal: this freezes the entry set and commits to a seed block that
       // has not been mined yet. Winners are picked (and paid) when the chain reaches it, on a
@@ -1364,6 +1462,9 @@ document.addEventListener('click', function (e) {
     case 'award-prize': awardPrize(); break;
     case 'add-event': addEvent(); break;
     case 'draw-lottery-now': drawLotteryNow(el.dataset.kind); break;
+    case 'daily-preview': previewDailyGiveaway(); break;
+    case 'daily-run-now': runDailyGiveawayNow(); break;
+    case 'daily-refresh': loadIncentiveData(); break;
     case 'set-campaign-duration': setCampaignDuration(Number(el.dataset.days)); break;
     case 'save-campaign': saveCampaign(); break;
     case 'reset-campaign-form': resetCampaignForm(); break;

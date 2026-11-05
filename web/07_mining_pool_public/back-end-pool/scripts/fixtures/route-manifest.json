@@ -1888,6 +1888,27 @@
  },
  {
   "method": "get",
+  "path": "/api/admin/incentives/daily-giveaway/preview",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireAdmin()"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "post",
+  "path": "/api/admin/incentives/daily-giveaway/run",
+  "chain": [
+   "rateLimiter.middleware('admin')",
+   "ipFilter.middleware('admin')",
+   "requireFreshAuth(300)",
+   "requireTotpEnrolled"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
   "path": "/api/admin/incentives/campaigns",
   "chain": [
    "rateLimiter.middleware('admin')",

@@ -13,6 +13,7 @@
 const net = require('net');
 const {
   parseStratumMessage,
+  isCanonicalU64,
   validateUsername,
   createJobNotification,
   createLoginResponse,
@@ -549,7 +550,18 @@ class StratumServer {
     // than the submit window (keys ascend in insertion order, so stop at the first keeper).
     // `difficulty` rides along too: it is the target the miner filtered THIS job's solutions
     // against, and so the work one accepted share on it is credited (shareCreditDifficulty).
-    this.jobIdMap.set(this.jobCounter, { node: job.node_job_id, pre_pow: job.pre_pow, difficulty: job.difficulty });
+    //
+    // A node job id is a per-height index, and the node checks a submit against the NEWEST job with
+    // that id. An older entry holding the same id for different work would let a share solved on
+    // this job be sent under the old pre_pow, giving it a second dedup key, so that entry goes.
+    if (job.node_job_id !== undefined) {
+      for (const [k, entry] of this.jobIdMap) {
+        if (entry.node === job.node_job_id && entry.pre_pow !== job.pre_pow) this.jobIdMap.delete(k);
+      }
+    }
+    this.jobIdMap.set(this.jobCounter, {
+      node: job.node_job_id, pre_pow: job.pre_pow, difficulty: job.difficulty, height: job.height,
+    });
     for (const k of this.jobIdMap.keys()) {
       if (k >= this.jobCounter - JOB_WINDOW) break;
       this.jobIdMap.delete(k);
@@ -920,6 +932,56 @@ class StratumServer {
     console.log(`[${new Date().toISOString()}] Miner login: ${maskAddress(parsed.grin_address)}.${parsed.worker_name} (${ip})`);
   }
 
+  // Record a block the node has accepted. Never throws: every failure ends in a CRITICAL log and an
+  // alert carrying what is needed to re-enter the block by hand.
+  async _recordFoundBlock(height, hash, nonce, miner, feePercent) {
+    console.log(`[${new Date().toISOString()}] BLOCK FOUND: height=${height} hash=${hash} miner=${miner}`);
+    // Credit the found block to the local DB (creditBlock dedups by hash UNIQUE). Under
+    // Model C every region's submits arrive here, so the central box is the sole crediter.
+    if (this.blockManager) {
+      // ⚠ creditBlock does NOT throw — it catches internally and returns {success:false}
+      // (blocks.js). A try/catch alone never fires, and a discarded return value
+      // lets the very next statement tell the miner the submit succeeded. A
+      // block the node accepted but the DB never recorded is then invisible everywhere:
+      // §J5-8's distribution_stalled detector reads `FROM blocks` and a row that was never
+      // INSERTed has nothing to be stuck. The end state is indistinguishable from bad luck.
+      // Audit §J7-1 — read the result, and make the failure impossible to miss.
+      let credited = null;
+      try {
+        credited = await this.blockManager.creditBlock(
+          height, hash, nonce, GRIN_BLOCK_REWARD, miner,
+          feePercent
+        );
+      } catch (err) {
+        credited = { success: false, error: err.message };
+      }
+      if (!credited || credited.success === false) {
+        const reason = (credited && credited.error) || 'unknown';
+        console.error(
+          `[CRITICAL] BLOCK NOT RECORDED: height=${height} hash=${hash} ` +
+          `miner=${miner} nonce=${nonce} — ${reason}. The node accepted this ` +
+          `block but the pool database did not store it, so its reward will never mature, ` +
+          `distribute or reconcile. RECORD THESE VALUES: they are the only copy outside the chain.`
+        );
+        // Fire-and-forget: the miner's submit response must not wait on a webhook. The
+        // alert carries every field needed to re-enter the block by hand.
+        if (this.alertMonitor && typeof this.alertMonitor.triggerAlert === 'function') {
+          Promise.resolve(this.alertMonitor.triggerAlert('block_record_failed', {
+            level: 'critical',
+            message:
+              `Block ${height} (${hash}) was accepted by the node but could NOT be ` +
+              `written to pool.db: ${reason}. Its reward will never be distributed until it is ` +
+              `re-entered by hand. Found by ${miner}.`,
+            data: {
+              height, hash: hash, nonce: String(nonce),
+              found_by: miner, reward: GRIN_BLOCK_REWARD, error: reason,
+            },
+          })).catch((e) => console.error(`[CRITICAL] and the alert failed too: ${e.message}`));
+        }
+      }
+    }
+  }
+
   handleSubmit(socket, msg, sessionId) {
     const { id, params } = msg;
     const session = this.minerManager.getSession(sessionId);
@@ -944,7 +1006,7 @@ class StratumServer {
       typeof edge_bits !== 'number' || !Number.isFinite(edge_bits) ||
       typeof height    !== 'number' || !Number.isFinite(height) ||
       typeof job_id    !== 'number' || !Number.isFinite(job_id) ||
-      nonce === undefined || nonce === null ||
+      !isCanonicalU64(nonce) ||
       !Array.isArray(pow) || pow.length === 0 ||
       !pow.every((n) => typeof n === 'number' && Number.isFinite(n));
 
@@ -987,13 +1049,23 @@ class StratumServer {
       return;
     }
 
+    // The check above compares the submitted height with the tip; this one ties it to the job
+    // named. Without it an older job's id can reach the current block at the node while the share
+    // is keyed on the older pre_pow, so one solution earns one credit per height in the window.
+    if (jobEntry.height !== height) {
+      this._stat(sessionId, 'rejected');
+      if (this._rejectCeilingHit(socket, session)) return;
+      socket.write(JSON.stringify(createSubmitResponse(id, false, null, 'Height mismatch')) + '\n');
+      return;
+    }
+
     // Dedup key is bound to the ACTUAL WORK (pre_pow), not the pool's incrementing job_id.
     // The node re-issues many job_ids for one identical pre_pow, so keying on job_id would let
     // the same solved (nonce,pow) be credited once per wrapping job. pre_pow collapses
-    // every re-version of one template to a single dedup identity. The worker name is passed for
-    // signature compatibility only and is NOT hashed — see generateShareHash (audit §J6-1).
+    // every re-version of one template to a single dedup identity. Neither the address nor the
+    // worker name is in the key — see generateShareHash (audit §J6-1).
     const workId = jobEntry.pre_pow;
-    const shareHash = this.shareValidator.generateShareHash(session.grinAddress, workId, session.workerName, nonce);
+    const shareHash = this.shareValidator.generateShareHash(workId, nonce, pow);
     // Work this share is worth, in the chain's difficulty unit (job target × C32 graph weight)
     // — taken from the JOB the submit references, since that is the target the miner filtered
     // this solution against. Never `session.difficulty`'s 1.0 placeholder: that is what made
@@ -1028,9 +1100,8 @@ class StratumServer {
         // (audit §J6-11). Spreading `{ ...params, job_id }` would forward every key the miner
         // invents, in the miner's own insertion order, onto the single upstream socket every
         // miner's shares share — which is what let a decoy `nonce` key win the send-side
-        // quote-stripping replacement, and what would turn one crafted frame into a pool-wide
-        // outage if grin's stratum ever dropped a connection on a malformed message rather than
-        // answering with an error.
+        // quote-stripping replacement. One crafted frame there is a pool-wide outage: grin's
+        // stratum ends the connection on a line it cannot parse.
         const nodeJobId = jobEntry.node === undefined ? job_id : jobEntry.node;
         nodeResult = await this.nodeStratumClient.forwardSubmit({
           edge_bits, height, job_id: nodeJobId, nonce, pow
@@ -1058,10 +1129,17 @@ class StratumServer {
       );
       if (!result.success) {
         // Node accepted the PoW but we couldn't record it (duplicate share_hash UNIQUE, or DB
-        // error). Don't double-credit — report rejected without counting it.
+        // error). Don't double-credit — report rejected without counting it. A block is another
+        // matter: the node has already taken it, so it is recorded whatever became of the share.
         this._stat(sessionId, 'rejected');
-        socket.write(JSON.stringify(createSubmitResponse(id, false, null, result.error)) + '\n');
         console.log(`[${new Date().toISOString()}] Share not recorded: ${result.error}`);
+        if (nodeResult.blockHash) {
+          inflightEntry.isBlock = true;
+          await this._recordFoundBlock(height, nodeResult.blockHash, nonce, session.grinAddress, feePercentAtSubmit);
+          socket.write(JSON.stringify(createSubmitResponse(id, true, nodeResult.blockHash)) + '\n');
+          return;
+        }
+        socket.write(JSON.stringify(createSubmitResponse(id, false, null, result.error)) + '\n');
         return;
       }
 
@@ -1114,51 +1192,7 @@ class StratumServer {
 
       if (nodeResult.blockHash) {
         inflightEntry.isBlock = true;
-        console.log(`[${new Date().toISOString()}] BLOCK FOUND: height=${height} hash=${nodeResult.blockHash} miner=${session.grinAddress}`);
-        // Credit the found block to the local DB (creditBlock dedups by hash UNIQUE). Under
-        // Model C every region's submits arrive here, so the central box is the sole crediter.
-        if (this.blockManager) {
-          // ⚠ creditBlock does NOT throw — it catches internally and returns {success:false}
-          // (blocks.js). A try/catch alone never fires, and a discarded return value
-          // lets the very next statement tell the miner the submit succeeded. A
-          // block the node accepted but the DB never recorded is then invisible everywhere:
-          // §J5-8's distribution_stalled detector reads `FROM blocks` and a row that was never
-          // INSERTed has nothing to be stuck. The end state is indistinguishable from bad luck.
-          // Audit §J7-1 — read the result, and make the failure impossible to miss.
-          let credited = null;
-          try {
-            credited = await this.blockManager.creditBlock(
-              height, nodeResult.blockHash, nonce, GRIN_BLOCK_REWARD, session.grinAddress,
-              feePercentAtSubmit
-            );
-          } catch (err) {
-            credited = { success: false, error: err.message };
-          }
-          if (!credited || credited.success === false) {
-            const reason = (credited && credited.error) || 'unknown';
-            console.error(
-              `[CRITICAL] BLOCK NOT RECORDED: height=${height} hash=${nodeResult.blockHash} ` +
-              `miner=${session.grinAddress} nonce=${nonce} — ${reason}. The node accepted this ` +
-              `block but the pool database did not store it, so its reward will never mature, ` +
-              `distribute or reconcile. RECORD THESE VALUES: they are the only copy outside the chain.`
-            );
-            // Fire-and-forget: the miner's submit response must not wait on a webhook. The
-            // alert carries every field needed to re-enter the block by hand.
-            if (this.alertMonitor && typeof this.alertMonitor.triggerAlert === 'function') {
-              Promise.resolve(this.alertMonitor.triggerAlert('block_record_failed', {
-                level: 'critical',
-                message:
-                  `Block ${height} (${nodeResult.blockHash}) was accepted by the node but could NOT be ` +
-                  `written to pool.db: ${reason}. Its reward will never be distributed until it is ` +
-                  `re-entered by hand. Found by ${session.grinAddress}.`,
-                data: {
-                  height, hash: nodeResult.blockHash, nonce: String(nonce),
-                  found_by: session.grinAddress, reward: GRIN_BLOCK_REWARD, error: reason,
-                },
-              })).catch((e) => console.error(`[CRITICAL] and the alert failed too: ${e.message}`));
-            }
-          }
-        }
+        await this._recordFoundBlock(height, nodeResult.blockHash, nonce, session.grinAddress, feePercentAtSubmit);
         socket.write(JSON.stringify(createSubmitResponse(id, true, nodeResult.blockHash)) + '\n');
         return;
       }

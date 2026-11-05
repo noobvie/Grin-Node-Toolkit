@@ -7,6 +7,16 @@
 //   client → server: login, submit, getjobtemplate, status
 //   server → client: job (push), and responses to the above
 
+const MAX_U64 = (1n << 64n) - 1n;
+
+// A nonce as the node can read it: the digits of a u64, with no leading zero. Everything else stops
+// at the pool. The nonce goes onto the node's wire as a bare number, so "0123" there is a line of
+// invalid JSON, and grin ends the connection on a line it cannot parse: every miner's shares share
+// that one socket.
+function isCanonicalU64(value) {
+  return typeof value === 'string' && /^(0|[1-9]\d{0,19})$/.test(value) && BigInt(value) <= MAX_U64;
+}
+
 function parseStratumMessage(jsonStr) {
   try {
     const msg = JSON.parse(jsonStr.trim());
@@ -328,6 +338,7 @@ function createStatusResponse(id, sessionStats) {
 
 module.exports = {
   parseStratumMessage,
+  isCanonicalU64,
   validateUsername,
   C32_GRAPH_WEIGHT,
   shareCreditDifficulty,

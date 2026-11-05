@@ -777,6 +777,14 @@ PASS      any-password-you-choose</code>
       lottery_min_active_days: 1,              // min distinct active days to qualify (anti-sybil gate)
       lottery_max_ticket_share_percent: 0,     // whale cap on Pot A tickets (% of total; 0 = off)
       lottery_pot_fraction_percent: 100,       // % of prize_pool paid out per draw
+      // Daily giveaway (lib/daily-giveaway.js). Needs incentives_enabled but NOT lottery_enabled:
+      // it is its own switch, so turning it on arms no weekly draw and no campaign.
+      daily_giveaway_enabled: 'false',
+      daily_giveaway_min_grin: 1,            // the day's total is rolled between these two
+      daily_giveaway_max_grin: 5,
+      daily_giveaway_min_winners: 1,         // the day's prize count is rolled between these two
+      daily_giveaway_max_winners: 3,
+      daily_giveaway_min_active_hours: 6,    // hours of mining time within the UTC day
       // special events: JSON array of {name, date:"MM-DD", pot_grin, enabled}
       lottery_special_events: JSON.stringify([
         { name: 'Christmas', date: '12-25', pot_grin: 0, enabled: false },
@@ -1363,6 +1371,11 @@ PASS      any-password-you-choose</code>
         if (isNaN(n) || n < 0 || n > 100) throw new Error(`${name} must be 0-100`);
         return n;
       };
+      const giveawayGrin = (name) => (val) => {
+        const n = parseFloat(val);
+        if (!Number.isFinite(n) || n < 1e-9 || n > 1000000) throw new Error(`${name} must be at least 0.000000001 and at most 1000000`);
+        return n;
+      };
       // Finiteness, not just NaN (audit §J9-4) — this is the only unbounded numeric family in
       // the schema, and both keys it guards (join_bonus_amount, jackpot_amount) are credited
       // straight onto a REAL miner balance. §J7-5 records what +Inf does to one: permanent,
@@ -1408,6 +1421,12 @@ PASS      any-password-you-choose</code>
         lottery_min_shares: intRange('lottery_min_shares', 0, 1000000),
         lottery_min_active_days: intRange('lottery_min_active_days', 0, 366),
         lottery_max_ticket_share_percent: percent('lottery_max_ticket_share_percent'),
+        // Capped so a rolled amount stays an exact integer in nanogrin (seededMod returns a Number).
+        daily_giveaway_min_grin: giveawayGrin('Daily giveaway: minimum per day'),
+        daily_giveaway_max_grin: giveawayGrin('Daily giveaway: maximum per day'),
+        daily_giveaway_min_winners: intRange('Daily giveaway: minimum prizes', 1, 1000),
+        daily_giveaway_max_winners: intRange('Daily giveaway: maximum prizes', 1, 1000),
+        daily_giveaway_min_active_hours: intRange('Daily giveaway: hours mined', 1, 24),
         lottery_special_events: (val) => {
           let arr = val;
           if (typeof arr === 'string') {
@@ -1797,6 +1816,12 @@ PASS      any-password-you-choose</code>
         const e = parseFloat(merged.lottery_pot_equal_chance_percent) || 0;
         if (w + e > 100) {
           throw new Error('lottery_pot_share_weighted_percent + lottery_pot_equal_chance_percent must not exceed 100');
+        }
+        if (parseFloat(merged.daily_giveaway_min_grin) > parseFloat(merged.daily_giveaway_max_grin)) {
+          throw new Error('Daily giveaway: the minimum GRIN must not exceed the maximum');
+        }
+        if (parseInt(merged.daily_giveaway_min_winners, 10) > parseInt(merged.daily_giveaway_max_winners, 10)) {
+          throw new Error('Daily giveaway: the minimum prizes must not exceed the maximum');
         }
       }
 

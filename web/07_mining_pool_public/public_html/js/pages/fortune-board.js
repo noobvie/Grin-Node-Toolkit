@@ -16,7 +16,8 @@
         function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
         function fmtDate(sec) { return sec ? new Date(sec * 1000).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' }) : '—'; }
         function shortHash(h) { return h ? esc(h.slice(0, 10)) + '…' : '—'; }
-        function potLabel(p) { return p === 'a' ? 'Share-weighted' : 'Equal chance'; }
+        var POT_LABELS = { a: 'Share-weighted', b: 'Equal chance', d: 'Daily giveaway' };
+        function potLabel(p) { return POT_LABELS[p] || 'Equal chance'; }
         function fmtGrin(v) { return Number(v || 0).toLocaleString('en-US', { maximumFractionDigits: 3 }) + ' GRIN'; }
         function setStat(id, text) { var el = document.getElementById(id); if (el) el.textContent = text; }
         function toggleEmpty(id, show) { var el = document.getElementById(id); if (el) el.style.display = show ? 'flex' : 'none'; }
@@ -53,8 +54,9 @@
                     '</td></tr>';
             } else {
                 body.innerHTML = rows.map(function (w) {
-                    // Seed = the verifiable Grin block each draw is derived from. Deep-link the
-                    // height out to a chain explorer (new tab) so anyone can audit the draw.
+                    // Seed = the Grin block each draw is derived from. Deep-link the height out to a
+                    // chain explorer (new tab) so anyone can look up the seed block. Giveaway
+                    // entries are not published, so this shows the seed, not the whole draw.
                     var seedH = w.seed_height;
                     var seedLabel = '#' + (seedH || '?') + ' · ' +
                         (w.seed_hash ? w.seed_hash.slice(0, 10) + '…' : '—');
@@ -121,8 +123,32 @@
                     setStat('fb-draws', Number(d.total_draws || 0).toLocaleString('en-US'));
                     setStat('fb-unique', Number(d.unique_winners || 0).toLocaleString('en-US'));
                     renderCharts(d);
+                    renderDaily(d.daily_giveaway);
                 })
                 .catch(function () { /* tiles keep placeholders, charts keep empty state */ });
+        }
+
+        // "1–5 GRIN", or "2 GRIN" when the operator set one fixed figure.
+        function rangeText(lo, hi) {
+            var fmt = function (n) { return Number(n).toLocaleString('en-US', { maximumFractionDigits: 9 }); };
+            return lo === hi ? fmt(lo) : fmt(lo) + '–' + fmt(hi);
+        }
+
+        function renderDaily(r) {
+            var box = document.getElementById('fb-daily');
+            if (!r) { box.style.display = 'none'; return; }
+            var who = r.max_winners === 1 ? ' to 1 miner'
+                : ', split into ' + rangeText(r.min_winners, r.max_winners) + ' equal prizes';
+            setStat('fb-daily-text', 'Every day, while the prize pool can cover it, the pool gives away ' + rangeText(r.min_grin, r.max_grin) + ' GRIN' + who + '. ' +
+                'Mine for at least ' + r.min_active_hours + (r.min_active_hours === 1 ? ' hour' : ' hours') +
+                ' in a UTC day to enter that day\'s draw. ' +
+                (r.max_winners === 1
+                    ? 'Your chance follows the work you did that day. '
+                    : 'Each prize is drawn separately and your chance of each one follows the work you did that day, so one miner can win more than one. ') +
+                'A very slow rig may need longer, because only minutes with an accepted share count. ' +
+                'Winners are drawn within about two hours of 00:00 UTC. Prizes go to your pool balance, ' +
+                'which you can withdraw from your Account page once it reaches the payout minimum.');
+            box.style.display = '';
         }
 
         function renderCharts(d) {
@@ -136,15 +162,18 @@
                 monthly.map(function (m) { return m.amount; }),
                 { valueFmt: fmtGrin, label: 'Prizes paid' });
 
-            // P-02 — GRIN awarded by pot type (doughnut). a = share-weighted, b = equal chance.
-            var byPot = { a: 0, b: 0 };
+            // P-02 — GRIN awarded by pot type (doughnut). a = share-weighted, b = equal chance,
+            // d = daily giveaway.
+            var byPot = { a: 0, b: 0, d: 0 };
             (d.by_pot || []).forEach(function (p) { byPot[p.pot] = p.amount; });
-            var a = byPot.a || 0, b = byPot.b || 0;
-            toggleEmpty('fb-empty-pots', (a + b) === 0);
+            var a = byPot.a || 0, b = byPot.b || 0, dg = byPot.d || 0;
+            toggleEmpty('fb-empty-pots', (a + b + dg) === 0);
             PoolCharts.renderDoughnutChart('fb-chart-pots',
-                ['Share-weighted (Pot A)', 'Equal chance (Pot B)'],
-                [a, b],
-                { colors: ['#7cb342', '#58a6ff'] });
+                ['Share-weighted (Pot A) · ' + fmtGrin(a), 'Equal chance (Pot B) · ' + fmtGrin(b), 'Daily giveaway · ' + fmtGrin(dg)],
+                [a, b, dg],
+                { colors: ['#7cb342', '#58a6ff', '#f2cc60'] });
+            document.getElementById('fb-chart-pots').setAttribute('aria-label',
+                'GRIN awarded by pot: share-weighted ' + fmtGrin(a) + ', equal chance ' + fmtGrin(b) + ', daily giveaway ' + fmtGrin(dg));
 
             // P-03 — GRIN awarded per event/campaign (horizontal bar, top events by amount).
             var byEvent = Array.isArray(d.by_event) ? d.by_event : [];

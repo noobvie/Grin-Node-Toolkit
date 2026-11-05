@@ -158,11 +158,18 @@
                 return;
             }
             setMsg(msg, 'Loading…', true);
+            $id('acct-demo-hint').style.display = 'none';
             try {
                 const a = await getJson('/api/account/' + encodeURIComponent(addr));
                 if (addr !== currentAddr || wasDemo) forgetPreviousAddress();
+                // A failed earnings call must not leave the last address's wins on show.
+                if (addr !== currentAddr || wasDemo) renderPrizes(null);
                 currentAddr = addr;
                 try { localStorage.setItem(ADDR_KEY, addr); } catch (e) {}
+                // ?addr= outranks the saved address, so a reload would go back to the demo.
+                if (new URLSearchParams(location.search).get('addr') === DEMO_ADDR) {
+                    history.replaceState(null, '', location.pathname);
+                }
 
                 renderSummary(a);
                 $id('acct-view').style.display = '';
@@ -191,6 +198,7 @@
                 $id('acct-view').style.display = 'none';
                 $id('acct-gate').style.display = 'none';
                 $id('acct-lamp').style.display = 'none';
+                $id('acct-demo-hint').style.display = '';
                 setMsg(msg, e.message === 'Account not found'
                     ? 'No mining account for this address yet — point a miner at the pool first.'
                     : 'Lookup failed: ' + e.message, false);
@@ -1643,8 +1651,18 @@
                 const usd = (typeof p.usd === 'number') ? (g * p.usd).toFixed(2) : '—';
                 return '<tr><td>' + label + '</td><td class="grin">' + g.toFixed(4) + '</td><td>' + btc + '</td><td>' + usd + '</td></tr>';
             }).join('');
+            renderPrizes(earn.prizes);
             $id('in-sum').textContent = 'Σ 30d +' + Number(earn.in_30d || 0).toFixed(2) + ' ツ';
             $id('out-sum').textContent = 'Σ 30d −' + Number(earn.out_30d || 0).toFixed(2) + ' ツ';
+        }
+        function renderPrizes(prizes) {
+            const el = $id('acct-prizes-text');
+            if (!prizes) { el.textContent = 'Draw prizes won: —'; return; }
+            const count = Number(prizes.count) || 0;
+            el.textContent = count
+                ? 'Draw prizes won: ' + count.toLocaleString('en-US') + ' (' + Number(prizes.total_grin).toLocaleString('en-US',
+                  { minimumFractionDigits: 4, maximumFractionDigits: 4 }) + ' GRIN in total)'
+                : 'Draw prizes won: none yet';
         }
         async function loadEarnings() {
             if (isDemo) { renderEarnings(DEMO.earnings, DEMO.price); return; }
@@ -1664,6 +1682,7 @@
             'credit/join_bonus': 'join bonus',
             'credit/prize_award': 'prize',
             'credit/jackpot': 'jackpot',
+            'credit/lottery': 'prize won',
             'credit/admin_inject': 'adjustment',
             // A payout shows in Money out ONCE, as its lock at request time (gross, fee included).
             // The confirm-time 'debit' rows only drain the locked balance, so the server filters
@@ -2380,7 +2399,7 @@
                 logIn.push({
                     created_at: now - 6 * 3600 - i * 7 * 3600,
                     event_type: 'credit',
-                    reference_type: (i === 2) ? 'jackpot' : 'block',
+                    reference_type: (i === 2) ? 'jackpot' : (i === 1) ? 'lottery' : 'block',
                     amount: amt, balance_after: bal
                 });
                 bal = Math.max(0.5, bal - amt);
@@ -2436,7 +2455,7 @@
                     nostr_payouts_enabled: false, nostr_destination: null
                 },
                 series, workers10, workers24,
-                earnings: { periods: { h1: 0.2604, h24: 6.1418, d7: 41.0317, d30: 172.4402 }, in_30d: 174.4402, out_30d: 50.742 },
+                earnings: { periods: { h1: 0.2604, h24: 6.1418, d7: 41.0317, d30: 172.4402 }, in_30d: 174.4402, out_30d: 50.742, prizes: { count: 4, total_grin: 7.35 } },
                 price: { data: { usd: 0.0181, btc: 0.00000028 } },
                 ledger: { in: logIn, out: logOut },
                 withdrawals: [
@@ -2458,7 +2477,8 @@
             renderSummary(DEMO.summary);
             $id('acct-view').style.display = '';
             $id('acct-gate').style.display = '';
-            setMsg($id('acct-msg'), 'Demo account — sample data, no API calls. Actions are disabled.', true);
+            $id('acct-demo-hint').style.display = 'none';
+            setMsg($id('acct-msg'), 'Demo account: sample data, actions are disabled. To leave, enter your own address above.', true);
             ledger.in.page = 0; ledger.out.page = 0; wd.page = 0;
             renderChart(DEMO.series(acctRange));
             renderWorkers(DEMO.workers10, DEMO.workers24);

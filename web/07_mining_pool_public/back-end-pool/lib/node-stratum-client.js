@@ -17,7 +17,7 @@
 // Pool connects to that port; miners connect to stratum_port.
 
 const net = require('net');
-const { parseStratumMessage } = require('./stratum-protocol');
+const { parseStratumMessage, isCanonicalU64 } = require('./stratum-protocol');
 
 const RECONNECT_DELAY_MS = 5000;
 const SUBMIT_TIMEOUT_MS  = 15000;
@@ -212,10 +212,13 @@ class NodeStratumClient {
   // fields and type-checks them, and the substitution below targets a placeholder THIS module
   // put in the object rather than pattern-matching miner data. The placeholder cannot collide
   // with miner input because every remaining value is a number or a digits-only string.
+  //
+  // Only a canonical u64 loses its quotes: handleSubmit already refuses anything else, and a
+  // quoted bad value gets an error reply where a bare one would end the connection.
   _serialize(msgObj) {
     const p = msgObj.params;
     if (p && typeof p === 'object' && !Array.isArray(p) &&
-        typeof p.nonce === 'string' && /^\d+$/.test(p.nonce)) {
+        isCanonicalU64(p.nonce)) {
       const raw = p.nonce;
       return JSON.stringify({ ...msgObj, params: { ...p, nonce: NONCE_PLACEHOLDER } })
         .replace(`"${NONCE_PLACEHOLDER}"`, raw);

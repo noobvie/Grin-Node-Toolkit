@@ -83,7 +83,7 @@
         <div class="deck-head">
             <div>
                 <h1>🎉 Fortune Board</h1>
-                <div class="sub">Every prize the pool has ever paid &middot; each draw seeded from a verifiable Grin block hash <span class="dim">(all times UTC)</span></div>
+                <div class="sub">Every prize the pool has ever paid &middot; each draw seeded from a Grin block hash you can look up <span class="dim">(all times UTC)</span></div>
             </div>
         </div>
 
@@ -103,6 +103,14 @@
             <div data-brand="upcoming-campaigns"></div>
         </div>
 
+        <!-- ═══ Daily giveaway rules (fortune-board.js; hidden while it is off) ═══ -->
+        <div class="panel" id="fb-daily" style="display:none;margin:14px 0;"><span class="screws"></span>
+            <h2 class="panel-title">🎁 Daily giveaway</h2>
+            <div class="panel-body">
+                <p class="dim" id="fb-daily-text" style="margin:0;font-size:13px;"></p>
+            </div>
+        </div>
+
         <div class="deck">
 
             <div class="deck-row half">
@@ -117,7 +125,7 @@
 
                 <!-- ═══ P-02 · POT SPLIT ═══ -->
                 <div class="panel"><span class="screws"></span>
-                    <h2 class="panel-title"><span class="tag">P-02</span> Prize split by pot <span class="right">share-weighted vs equal chance</span></h2>
+                    <h2 class="panel-title"><span class="tag">P-02</span> Prize split by pot <span class="right">GRIN per pot</span></h2>
                     <div class="panel-body chart-wrap">
                         <canvas id="fb-chart-pots" aria-label="GRIN awarded by pot type" role="img"></canvas>
                         <div class="chart-empty" id="fb-empty-pots">NO PRIZES PAID YET</div>
@@ -148,13 +156,14 @@
                             <option value="">All pots</option>
                             <option value="a">Share-weighted</option>
                             <option value="b">Equal chance</option>
+                            <option value="d">Daily giveaway</option>
                         </select>
                         <span id="fb-count" class="fb-count"></span>
                     </div>
                     <div class="table-wrap">
                         <table class="data-table">
                             <thead>
-                                <tr><th>Event</th><th>Winner</th><th>Pot</th><th class="num">Amount</th><th>Date</th><th>Draw seed (audit)</th></tr>
+                                <tr><th>Event</th><th>Winner</th><th>Pot</th><th class="num">Amount</th><th>Date</th><th>Draw seed</th></tr>
                             </thead>
                             <tbody id="winners-body">
                                 <tr><td colspan="6">Loading…</td></tr>

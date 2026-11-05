@@ -1368,6 +1368,8 @@ for dir in /opt/grin/node/mainnet-prune /opt/grin/node/mainnet-full /opt/grin/no
     fi
     if id grin &>/dev/null; then
         chown -R grin:grin "$dir" 2>/dev/null || true
+        chgrp grinsecret "$dir/.api_secret" "$dir/.foreign_api_secret" 2>/dev/null \
+            && chmod 640 "$dir/.api_secret" "$dir/.foreign_api_secret" 2>/dev/null
         su -s /bin/bash grin -c "cd $dir && env HOME=$dir SHELL=/bin/bash tmux new-session -d -s $sess \"./grin server run; echo; read\"" && \
             echo "  started: $sess (view: gtmux attach -t $sess)" || echo "  tmux failed: $sess"
     else

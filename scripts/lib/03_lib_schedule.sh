@@ -548,7 +548,7 @@ add_grin_autostart() {
         # capture + a `read` tail, so a crash after a reboot keeps its panic text.
         local run_cmd
         run_cmd=$(_gnc_node_run_cmd "$GRIN_DIR" "$GRIN_BINARY" cron)
-        local cron_line="@reboot sleep $delay && chown -R grin:grin '$GRIN_DIR' 2>/dev/null; su -s /bin/bash grin -c \"cd '$GRIN_DIR' && env HOME='$GRIN_DIR' SHELL=/bin/bash tmux new-session -d -s $TMUX_SESSION '$run_cmd'\" $cron_marker"
+        local cron_line="@reboot sleep $delay && chown -R grin:grin '$GRIN_DIR' 2>/dev/null; $(_gnc_secret_group_cmd "$GRIN_DIR"); su -s /bin/bash grin -c \"cd '$GRIN_DIR' && env HOME='$GRIN_DIR' SHELL=/bin/bash tmux new-session -d -s $TMUX_SESSION '$run_cmd'\" $cron_marker"
 
         # Check for existing entry
         if echo "$existing_cron" | grep -qF "$cron_marker"; then

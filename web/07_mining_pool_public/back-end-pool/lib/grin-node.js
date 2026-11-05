@@ -132,14 +132,15 @@ class GrinNodeAPI {
     // through the `grinsecret` group — 640 root:grinsecret, applied by pool_deroot() and
     // re-applied by grin_sync_pool_stratum() after a node rebuild.
     const nodeDir = config.node_dir || this._detectNodeDir();
-    this.secret = this._resolveSecret(
-      config.node_api_secret, config.node_api_secret_path,
-      path.join(nodeDir, '.api_secret')
-    );
-    this.foreignSecret = this._resolveSecret(
-      config.node_foreign_api_secret, config.node_foreign_api_secret_path,
-      path.join(nodeDir, '.foreign_api_secret')
-    );
+    const ownerFile = config.node_api_secret_path || path.join(nodeDir, '.api_secret');
+    const foreignFile = config.node_foreign_api_secret_path || path.join(nodeDir, '.foreign_api_secret');
+    this.secret = this._resolveSecret(config.node_api_secret, ownerFile);
+    this.foreignSecret = this._resolveSecret(config.node_foreign_api_secret, foreignFile);
+    // Where _reloadSecret() looks after a 401. An explicit pool.json value has no file.
+    this._secretFiles = {
+      secret: this._usableValue(config.node_api_secret) ? null : ownerFile,
+      foreignSecret: this._usableValue(config.node_foreign_api_secret) ? null : foreignFile,
+    };
   }
 
   // Which node dir actually serves this network. Mirrors the fallback branch of
@@ -172,11 +173,8 @@ class GrinNodeAPI {
   // group grant is missing, and the resulting unauthenticated call gets a 401 that looks
   // exactly like a dead node. Never let that one pass silently — it is not diagnosable
   // from the symptom.
-  _resolveSecret(value, explicitPath, defaultPath) {
-    if (value && String(value).trim() && !/^CHANGE_ME/i.test(value)) {
-      return String(value).trim();
-    }
-    const p = explicitPath || defaultPath;
+  _resolveSecret(value, p) {
+    if (this._usableValue(value)) return String(value).trim();
     try {
       if (p && fs.existsSync(p)) return fs.readFileSync(p, 'utf-8').trim();
       this._warnNoSecret(p, `no such file (wrong node dir? this box may run a different ${this.network} layout)`);
@@ -187,6 +185,26 @@ class GrinNodeAPI {
         : (err.code || err.message));
     }
     return '';
+  }
+
+  _usableValue(value) {
+    return Boolean(value && String(value).trim() && !/^CHANGE_ME/i.test(value));
+  }
+
+  // Re-read a secret file after the node refused a call; true only when the value changed.
+  // The file can be repaired after this process started: a node start strips the grinsecret
+  // group until grin-secret-sync restores it, and a pool booting in that gap holds no secret.
+  // Quiet on failure, because this runs on every refused call while the fault lasts and the
+  // startup warning has already named the file.
+  _reloadSecret(field) {
+    const p = this._secretFiles[field];
+    if (!p) return false;
+    let value;
+    try { value = fs.readFileSync(p, 'utf-8').trim(); } catch (_) { return false; }
+    if (!value || value === this[field]) return false;
+    this[field] = value;
+    console.log(`[grin-node] reloaded the API secret from ${p} after the node refused the old one.`);
+    return true;
   }
 
   // One line at startup, per missing secret. Without it an unresolved secret is completely
@@ -377,11 +395,22 @@ class GrinNodeAPI {
   }
 
   async _ownerRpcCall(method, params = []) {
-    return this._rpcCall(`${this.nodeUrl}/v2/owner`, method, params, this.secret);
+    return this._authedCall(`${this.nodeUrl}/v2/owner`, method, params, 'secret');
   }
 
   async _foreignRpcCall(method, params = []) {
-    return this._rpcCall(`${this.nodeUrl}/v2/foreign`, method, params, this.foreignSecret);
+    return this._authedCall(`${this.nodeUrl}/v2/foreign`, method, params, 'foreignSecret');
+  }
+
+  // One retry, and only with a value that changed. The node refuses a call before running it,
+  // so repeating a refused push_transaction cannot send it twice.
+  async _authedCall(endpoint, method, params, field) {
+    try {
+      return await this._rpcCall(endpoint, method, params, this[field]);
+    } catch (err) {
+      if (err.transport !== 'auth' || !this._reloadSecret(field)) throw err;
+      return this._rpcCall(endpoint, method, params, this[field]);
+    }
   }
 
   async _rpcCall(endpoint, method, params = [], secret = '') {

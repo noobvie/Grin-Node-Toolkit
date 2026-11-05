@@ -152,6 +152,79 @@ const api = (url, network = 'mainnet') => new GrinNodeAPI({
     /nodeState === 'starting' \|\| nodeState === 'busy'/.test(lampSrc) &&
     /setLamp\('an-node', 'warn', nodeState\)/.test(lampSrc));
 
+  console.log('\n[5] a secret repaired after startup is picked up on the next 401\n');
+
+  // A node that accepts one credential and counts every call.
+  const http = require('http');
+  let calls = 0;
+  const nodeSrv = http.createServer((req, res) => {
+    calls++;
+    req.resume();
+    req.on('end', () => {
+      const good = req.headers.authorization === `Basic ${Buffer.from('grin:right-secret').toString('base64')}`;
+      res.statusCode = good ? 200 : 401;
+      res.end(good ? JSON.stringify({ id: 1, result: { Ok: { tip: { height: 5 } } } }) : '');
+    });
+  });
+  await new Promise((resolve) => nodeSrv.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${nodeSrv.address().port}`;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grin-secret-'));
+  const ownerFile = path.join(dir, '.api_secret');
+  const foreignFile = path.join(dir, '.foreign_api_secret');
+  const fromFiles = () => new GrinNodeAPI({
+    node_api_url: url, network: 'mainnet',
+    node_api_secret_path: ownerFile, node_foreign_api_secret_path: foreignFile,
+  });
+  const realWarn = console.error, realLog = console.log;
+  try {
+    console.error = () => {};
+    const node = fromFiles();                 // the files are missing: the boot-time gap
+    console.error = realWarn;
+    ok('a pool started without its secret holds none', node.secret === '');
+
+    calls = 0;
+    const refused = await node.getStatus();
+    ok('still unreadable → auth fault, no retry', refused.transport === 'auth' && calls === 1);
+
+    fs.writeFileSync(ownerFile, 'right-secret\n');
+    fs.writeFileSync(foreignFile, 'right-secret\n');
+    calls = 0;
+    console.log = () => {};
+    const healed = await node.getStatus();
+    console.log = realLog;
+    ok('repaired file → the same call succeeds', healed.ok === true && calls === 2);
+    calls = 0;
+    await node.getStatus();
+    ok('the reloaded secret is kept: one call, no 401', calls === 1);
+
+    calls = 0;
+    console.log = () => {};
+    const foreign = await node._foreignRpcCall('get_tip', []);
+    console.log = realLog;
+    ok('the foreign secret reloads on its own', foreign.tip.height === 5 && calls === 2);
+
+    fs.writeFileSync(ownerFile, 'wrong-secret');
+    fs.writeFileSync(foreignFile, 'wrong-secret');
+    const wrong = fromFiles();
+    calls = 0;
+    const unchanged = await wrong.getStatus();
+    ok('an unchanged wrong secret is not retried', unchanged.transport === 'auth' && calls === 1);
+
+    fs.writeFileSync(ownerFile, 'right-secret');
+    const pinned = new GrinNodeAPI({
+      node_api_url: url, network: 'mainnet',
+      node_api_secret: 'pinned-value', node_api_secret_path: ownerFile,
+    });
+    calls = 0;
+    const kept = await pinned.getStatus();
+    ok('an explicit pool.json value is never replaced from a file',
+      kept.transport === 'auth' && pinned.secret === 'pinned-value' && calls === 1);
+  } finally {
+    console.error = realWarn; console.log = realLog;
+    fs.rmSync(dir, { recursive: true, force: true });
+    await new Promise((resolve) => nodeSrv.close(resolve));
+  }
+
   console.log(`\n${pass} passed, ${fail} failed\n`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -135,6 +135,12 @@ serves first install and every rebuild — there is no separate "first time" pat
 - **Never blanket-chown/chmod an existing secret file** — Script 04 sets the foreign secret to
   `root:<web_user>` 640 for its REST collector and the de-rooted pool sets `root:grinsecret` 640.
   `_gns_node_put` rewrites in place; only brand-new files get 600 grin:grin.
+- **Every `chown -R grin:grin <node_dir>` must be followed by `_gnc_secret_group_cmd <dir>`**
+  (`grin_node_control.sh`; 081's remote start inlines the same two commands). The chown strips
+  `grinsecret`, so a pool that starts before the next `grin-secret-sync` run reads no secret and
+  shows a healthy node as offline (401). Seen live 2026-11-05 after a binary update + reboot.
+  `lib/grin-node.js` re-reads the file after a 401, so the pool recovers once the group is back.
+  An installed `@reboot` line changes only when autostart is re-enabled.
 - **Rotation is explicit:** `grin-secret-sync --rotate <net>` (updates vault + node dir, re-syncs
   consumers, then **requires a node restart**). Vault rides along in 089 backups.
 

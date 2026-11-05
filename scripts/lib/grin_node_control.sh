@@ -24,6 +24,7 @@
 #   gnc_kill_grin_procs [dir] [grace] TERM→wait→KILL grin server processes
 #   _gnc_heal_grin_socket_dir         reclaim /tmp/tmux-<grin uid> from a foreign owner
 #   _gnc_node_run_cmd <dir> <bin> [cron]   the command a node's tmux pane runs
+#   _gnc_secret_group_cmd <dir>       shell text re-granting the API secrets to grinsecret
 #   gnc_launch_node_session <dir> <bin> <sess>   THE ONLY sanctioned node launcher
 #   gnc_start_node_tmux <network>     conf-resolved wrapper around the launcher
 #   gnc_owner_get_status <network>    raw get_status JSON (Owner API, localhost)
@@ -584,6 +585,7 @@ gnc_launch_node_session() {
         # chown first reclaims any root-owned leftovers from an earlier root-run
         # start (a root-run node writes root:root files that EACCES-block grin).
         chown -R grin:grin "$dir" 2>/dev/null || true
+        bash -c "$(_gnc_secret_group_cmd "$dir")" || true
         # Reclaim grin's tmux socket path if a root/foreign owner squats on it
         # ("error connecting to /tmp/tmux-<uid>/default (Permission denied)").
         _gnc_heal_grin_socket_dir
@@ -617,6 +619,21 @@ gnc_launch_node_session() {
     gnc_install_gtmux_helper
     info "View: gtmux attach -t $sess   (grin-owned — plain 'tmux attach' won't find it; detach: Ctrl+B then D)"
     return 0
+}
+
+# -----------------------------------------------------------------------------
+# _gnc_secret_group_cmd <dir> — shell text that hands the node's two API secrets
+# back to the grinsecret group. Every `chown -R grin:grin <dir>` on a node dir
+# must run it straight after: the chown strips that group, and the de-rooted pool
+# (user grinpool) can then no longer read the secrets. A pool started in that gap
+# calls the node with no credential, gets 401 and shows a healthy node as offline.
+# It is text, not a function, because the @reboot crontab lines have no libs to
+# source. A box without the group fails the chgrp and leaves the mode alone.
+# -----------------------------------------------------------------------------
+_gnc_secret_group_cmd() {
+    local d="${1:-}"
+    printf "chgrp grinsecret '%s/.api_secret' '%s/.foreign_api_secret' 2>/dev/null && chmod 640 '%s/.api_secret' '%s/.foreign_api_secret' 2>/dev/null" \
+        "$d" "$d" "$d" "$d"
 }
 
 # -----------------------------------------------------------------------------

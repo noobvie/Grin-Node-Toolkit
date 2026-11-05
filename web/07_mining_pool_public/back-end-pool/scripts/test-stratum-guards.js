@@ -23,7 +23,7 @@
 const ShareValidator = require('../lib/shares');
 const NodeStratumClient = require('../lib/node-stratum-client');
 const StratumServer = require('../lib/stratum-server');
-const { validateUsername, bech32ChecksumValid, isCanonicalU64 } = require('../lib/stratum-protocol');
+const { validateUsername, bech32ChecksumValid, isCanonicalU64, isValidProofShape } = require('../lib/stratum-protocol');
 const {
   tokenBucketStep,
   MSG_RATE_PER_SEC,
@@ -72,6 +72,17 @@ const shareHash = (workId, nonce, pow = POW) =>
     ShareValidator.prototype.generateShareHash.length === 3);
   check('a second cycle in one graph is a different share',
     shareHash(prePow, nonce, [1, 2, 3]) !== shareHash(prePow, nonce, [1, 2, 4]));
+
+  // Only a proof grin can pack gets through: anything else panics the task serving the node link.
+  const proof = Array.from({ length: 42 }, (_, i) => i * 1000);
+  check('a 42-edge ascending proof passes at C31 and C32', isValidProofShape(32, proof) && isValidProofShape(31, proof));
+  check('the widest edge that fits passes', isValidProofShape(32, [...proof.slice(0, 41), 2 ** 32 - 1]));
+  check('every other proof is refused', ![
+    [32, [1]], [32, []], [32, proof.slice(0, 41)], [32, [...proof, 50000]], [32, 'x'], [32, null],
+    [32, [...proof.slice(0, 41), 2 ** 32]], [32, [...proof].reverse()], [32, [...proof.slice(0, 41), proof[40]]],
+    [32, [...proof.slice(0, 41), 41000.5]], [32, [-1, ...proof.slice(1)]], [32, [...proof.slice(0, 41), '41000']],
+    [64, proof], [28, proof], [54, proof], [31.5, proof], ['32', proof],
+  ].some(([bits, pow]) => isValidProofShape(bits, pow)));
 
   // Only the form the node can read gets through: a bare 0123 on its wire ends the connection.
   check('canonical u64 nonces pass', ['0', '1', '123', '18446744073709551615'].every(isCanonicalU64));

@@ -41,6 +41,13 @@
             });
         }
 
+        // A giveaway winner with several prizes shows a multiple of the prize, so say why. Weekly
+        // rows use ticket_count for tickets, which is not for display.
+        function prizeCount(w) {
+            var n = Number(w.ticket_count);
+            return w.pot === 'd' && n > 1 ? ' <span class="dim">×' + n + ' prizes</span>' : '';
+        }
+
         function render() {
             var body = document.getElementById('winners-body');
             var count = document.getElementById('fb-count');
@@ -67,14 +74,14 @@
                         '<td>' + esc(w.event) + '</td>' +
                         '<td>' + esc(w.address) + '</td>' +
                         '<td><span class="pot-tag">' + potLabel(w.pot) + '</span></td>' +
-                        '<td class="num"><span class="fb-amount">' + (w.amount || 0).toFixed(4) + ' GRIN</span></td>' +
+                        '<td class="num"><span class="fb-amount">' + (w.amount || 0).toFixed(4) + ' GRIN</span>' + prizeCount(w) + '</td>' +
                         '<td>' + fmtDate(w.drawn_at) + '</td>' +
                         '<td class="fb-seed">' + seedCell + '</td>' +
                         '</tr>';
                 }).join('');
             }
             count.textContent = isFiltering
-                ? (rows.length + ' of ' + all.length + ' loaded' + (all.length < total ? ' · ' + total + ' total' : ''))
+                ? (rows.length + ' shown from the ' + all.length + ' loaded' + (all.length < total ? ' · load more to search all ' + total : ''))
                 : (all.length + (all.length < total ? ' of ' + total + ' total' : ' total'));
         }
 

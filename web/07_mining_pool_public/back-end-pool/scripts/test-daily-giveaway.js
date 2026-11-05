@@ -92,6 +92,12 @@ const wipe = () => {
   threw = false;
   try { ps.updateSection('incentives', { daily_giveaway_max_grin: 'Infinity' }, uid); } catch (_) { threw = true; }
   ok('an infinite amount is refused on save', threw);
+  threw = false;
+  try { ps.updateSection('incentives', { daily_giveaway_max_grin: 60 }, uid); } catch (_) { threw = true; }
+  ok('a maximum of one block reward is refused on save', threw);
+  threw = false;
+  try { ps.updateSection('incentives', { daily_giveaway_max_grin: 59.9 }, uid); } catch (_) { threw = true; }
+  ok('a maximum just below it is saved', !threw);
   ps.updateSection('incentives', {
     daily_giveaway_min_grin: 2, daily_giveaway_max_grin: 6,
     daily_giveaway_min_winners: 2, daily_giveaway_max_winners: 4, daily_giveaway_min_active_hours: 6,
@@ -100,6 +106,8 @@ const wipe = () => {
   const realView = inc.settingsView;
   inc.settingsView = () => ({ ...realView.call(inc), daily_giveaway_max_grin: 1e300 });
   ok('an out-of-range stored amount makes no rules', daily.rules() === null);
+  inc.settingsView = () => ({ ...realView.call(inc), daily_giveaway_max_grin: 60 });
+  ok('a stored maximum of one block reward makes no rules', daily.rules() === null);
   inc.settingsView = realView;
 
   console.log('\n[2] plan(): limits hold across 3000 seeds');
@@ -203,10 +211,17 @@ const wipe = () => {
   ok('a sample at the end of the day does not', !el.includes('grin1last'));
   ok('six minutes of samples per address does not qualify', !el.some((a) => tour.includes(a)), String(el.length));
   ok('work is hashrate over mining time', elEntries.find((e) => e.address === 'grin1steady').work === 100 * 6 * 3600);
-  const qplan = db.prepare(`EXPLAIN QUERY PLAN SELECT grin_address FROM hashrate_history
-    WHERE recorded_at >= 1 AND recorded_at < 2 AND hashrate_gps > 0 GROUP BY grin_address HAVING SUM(window_seconds) >= 1`)
-    .all().map((r) => r.detail).join(' | ');
-  ok('a copy of the eligibility query stays on the time index', /SEARCH .*idx_hashrate_time/.test(qplan), qplan);
+  const realPrepare = db.prepare;
+  let scanSql = '';
+  db.prepare = function (sql) {
+    if (/FROM hashrate_history/.test(sql)) scanSql = sql;
+    return realPrepare.call(db, sql);
+  };
+  daily.eligibleEntries(1, 2, 1);
+  db.prepare = realPrepare;
+  const reserved = require(path.join(APP, 'lib/incentives.js')).RESERVED_ADDRESSES;
+  const qplan = db.prepare(`EXPLAIN QUERY PLAN ${scanSql}`).all(1, 2, ...reserved, 3600).map((r) => r.detail).join(' | ');
+  ok('the eligibility query stays on the time index', /SEARCH .*idx_hashrate_time/.test(qplan), qplan);
 
   console.log('\n[3b] a draw that uses the whole prize pool pays every winner');
   // min = the pool and max above it, so the roll always asks for at least the whole pool.
@@ -282,6 +297,13 @@ const wipe = () => {
     ok(`${n} miners: the ledger balances`, near(before - pool(), paid));
     const ledger = db.prepare("SELECT COALESCE(SUM(amount),0) s FROM balance_log WHERE reference_type='lottery' AND reference_id=? AND event_type='credit'").get(res.draw_id).s;
     ok(`${n} miners: credits match the winners rows`, near(ledger, paid));
+    // From stored data alone, in the order the code promises.
+    const drawRow = db.prepare('SELECT seed_hash, rules_json FROM lottery_draws WHERE id=?').get(res.draw_id);
+    const entryRows = db.prepare('SELECT grin_address AS address, tickets_b AS tickets FROM lottery_entries WHERE draw_id=? ORDER BY grin_address ASC').all(res.draw_id);
+    const frozenRules = JSON.parse(drawRow.rules_json);
+    const again = daily.plan(drawRow.seed_hash, res.draw_id, entryRows, frozenRules, frozenRules.prize_pool);
+    ok(`${n} miners: the draw recomputes from what is stored`, JSON.stringify(again.winners.map((x) => [x.address, x.wins]))
+       === JSON.stringify(w.map((x) => [x.address, x.wins])), JSON.stringify(again.winners));
   }
 
   console.log('\n[5b] a real draw uses frozen work');
@@ -327,7 +349,7 @@ const wipe = () => {
   wipe();
   mineDay('grin1frozen', yesterday, 12);
   res = await daily.runDue();
-  ps.updateSection('incentives', { daily_giveaway_min_grin: 50, daily_giveaway_max_grin: 60 }, uid);
+  ps.updateSection('incentives', { daily_giveaway_min_grin: 50, daily_giveaway_max_grin: 55 }, uid);
   const frozenBefore = balance('grin1frozen');
   await seedAndReveal(res);
   const frozenPaid = balance('grin1frozen') - frozenBefore;
@@ -471,6 +493,10 @@ const wipe = () => {
   ok('repeat previews reuse one scan', scans === 1, String(scans));
   daily.preview({ now: t0 + 61000 });
   ok('and refresh after a minute', scans === 2, String(scans));
+  ps.updateSection('incentives', { daily_giveaway_min_active_hours: 7 }, uid);
+  daily.preview({ now: t0 + 62000 });
+  ok('a change of the hours gate does not reuse the scan', scans === 3, String(scans));
+  ps.updateSection('incentives', { daily_giveaway_min_active_hours: 6 }, uid);
   daily.eligibleEntries = realEligible;
   ps.updateSection('incentives', { daily_giveaway_enabled: 'false' }, uid);
   ok('preview still works while switched off', daily.preview({}).success === true);
@@ -480,7 +506,50 @@ const wipe = () => {
   const pub = lot.stats().daily_giveaway;
   ok('public rules show the limits while on', pub && pub.min_grin === 2 && pub.max_winners === 4, JSON.stringify(pub));
 
+  console.log('\n[9b] preview odds come from real work');
+  wipe();
+  // Biggest work on the LAST address, so work order and address order disagree.
+  const oddsWork = { grin1oddsg: 900, grin1oddsf: 50, grin1oddse: 30, grin1oddsd: 10, grin1oddsc: 6, grin1oddsb: 3, grin1oddsa: 1 };
+  for (const [address, gps] of Object.entries(oddsWork)) mineDay(address, yesterday, 12, gps);
+  daily.previewCache = null;
+  const odds = daily.preview({ extraMiners: 0 });
+  ok('it counts every real miner that qualified', odds.real_eligible === 7, String(odds.real_eligible));
+  ok('it lists the top five by work, biggest first',
+     JSON.stringify(odds.top_real.map((m) => m.address)) === JSON.stringify(Object.keys(oddsWork).slice(0, 5)), JSON.stringify(odds.top_real));
+  ok('each share is that miner\'s share of the day\'s work',
+     odds.top_real.every((m) => near(m.work_share, oddsWork[m.address] / 1000)), JSON.stringify(odds.top_real));
+  const diluted = daily.preview({ extraMiners: 20 });
+  ok('pretend miners change neither the shares nor the list',
+     JSON.stringify(diluted.top_real) === JSON.stringify(odds.top_real) && diluted.pretend_miners === 20);
+  ok('no pretend miner is ever in the list', !JSON.stringify(diluted.top_real).includes('pretend'));
+  const unsorted = daily.previewCache.real.map((e) => e.address);
+  ok('the cached list keeps the address order the pick walks', JSON.stringify(unsorted) === JSON.stringify([...unsorted].sort()));
+
+  const unspiedPlan = daily.plan;
+  let planned = null;
+  daily.plan = function spy(seed, salt, entries, ...rest) { planned = entries; return unspiedPlan.call(this, seed, salt, entries, ...rest); };
+  daily.preview({ extraMiners: 0 });
+  daily.plan = unspiedPlan;
+  const plannedTickets = (a) => (planned.find((e) => e.address === a) || {}).tickets;
+  ok('the simulated days pick on work tickets, not one per miner',
+     planned.length === 7 && plannedTickets('grin1oddsg') === 900 * plannedTickets('grin1oddsa') && plannedTickets('grin1oddsa') > 1, JSON.stringify(planned));
+  ps.updateSection('incentives', { daily_giveaway_min_winners: 300, daily_giveaway_max_winners: 300 }, uid);
+  const heavy = daily.preview({ extraMiners: 0 }).days.filter((d) => !d.skipped);
+  const heavyWins = heavy.flatMap((d) => d.winners);
+  const whaleWins = heavyWins.filter((w) => w.address === 'grin1oddsg').reduce((sum, w) => sum + w.wins, 0);
+  const heavyShare = whaleWins / prizesOf(heavyWins);
+  ok('and the wins follow the work: 90% of the work takes about 90% of the prizes',
+     heavy.length > 0 && heavyShare > 0.8 && heavyShare < 0.97, String(heavyShare));
+  ps.updateSection('incentives', { daily_giveaway_min_winners: 2, daily_giveaway_max_winners: 4 }, uid);
+  wipe();
+  daily.previewCache = null;
+  const none = daily.preview({ extraMiners: 3 });
+  ok('with no real miner there are no real odds', none.success && none.real_eligible === 0 && none.top_real.length === 0);
+
   console.log('\n[10] what the pages read');
+  const boardHtml = fs.readFileSync(path.join(APP, '../public_html/fortune-board.html'), 'utf8');
+  ok('the fortune board does not call a draw verifiable: entry lists are not published', !/verifiable/i.test(boardHtml));
+  ok('and says why a draw cannot be recomputed', /seed block is public, but the entry list is not/.test(boardHtml));
   wipe();
   const boardAddr = 'grin1boardqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq';
   mineDay(boardAddr, yesterday, 12);
@@ -497,8 +566,12 @@ const wipe = () => {
   const publicJson = JSON.stringify([st, hist]);
   ok('the public feeds carry no full address and no draw internals',
      !publicJson.includes(boardAddr) && !publicJson.includes('rules_json') && !publicJson.includes('prize_pool'));
-  const earned = db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(amount), 0) AS total_grin FROM lottery_winners WHERE grin_address = ?').get(boardAddr);
-  ok('a copy of the account prize query matches the ledger credit', earned.count === 1 && near(earned.total_grin, balance(boardAddr)));
+  const earned = LotteryManager.prizeTotals(db, boardAddr);
+  const boardPrizes = db.prepare('SELECT ticket_count t FROM lottery_winners WHERE grin_address=?').get(boardAddr).t;
+  ok('the account prize figures count prizes and match the ledger credit', earned.count === boardPrizes && boardPrizes >= 2
+     && near(earned.total_grin, balance(boardAddr)), JSON.stringify(earned));
+  db.prepare("INSERT INTO lottery_winners (draw_id, grin_address, pot, ticket_count, amount) VALUES (?, ?, 'a', 500, 1)").run(res.draw_id, boardAddr);
+  ok('a weekly win counts once, whatever its tickets', LotteryManager.prizeTotals(db, boardAddr).count === boardPrizes + 1);
 
   cleanup();
   console.log(`\n${pass} passed, ${fail} failed`);

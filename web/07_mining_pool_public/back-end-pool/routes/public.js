@@ -380,7 +380,7 @@ module.exports = function createPublicRoutes(ctx) {
   );
 
   // ─── Public Fortune Board: lottery winner history (no auth, rate-limited) ──────
-  // Transparency/audit feed — winner (truncated address) + amount + date + verifiable seed.
+  // Transparency/audit feed — winner (truncated address) + amount + date + seed block.
   router.get('/api/public/lottery/winners',
     rateLimiter.middleware('public'),
     (req, res) => {

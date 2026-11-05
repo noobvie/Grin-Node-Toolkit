@@ -7,11 +7,11 @@
     <meta name="robots" content="index, follow, max-image-preview:large">
     <meta name="author" content="GRINIUM Mining Pool">
     <title>Fortune Board — Lottery Winners | GRINIUM Mining Pool</title>
-    <meta name="description" content="Public lottery winner history — every prize the pool has paid, with a verifiable draw seed for full transparency. Prize totals, pot split and monthly trends.">
-    <meta name="keywords" content="grin lottery winners, mining pool prizes, fortune board, verifiable draw, prize pool transparency">
+    <meta name="description" content="Public lottery winner history — every prize the pool has paid, with the seed block of each draw. Prize totals, pot split and monthly trends.">
+    <meta name="keywords" content="grin lottery winners, mining pool prizes, fortune board, draw seed block, prize pool transparency">
     <meta property="og:type" content="website">
     <meta property="og:title" content="Fortune Board — Lottery Winners | GRINIUM">
-    <meta property="og:description" content="Public lottery winner history — every prize paid, with a verifiable draw seed for full transparency.">
+    <meta property="og:description" content="Public lottery winner history — every prize paid, with the seed block of each draw.">
     <meta property="og:url" content="https://pool.grin.money/fortune-board.html">
     <meta property="og:site_name" content="GRINIUM Mining Pool">
     <meta property="og:image" content="https://pool.grin.money/images/og-image.svg">
@@ -29,7 +29,7 @@
       "@context": "https://schema.org",
       "@type": "WebPage",
       "name": "GRINIUM Mining Pool — Fortune Board",
-      "description": "Public lottery winner history with verifiable draw seeds",
+      "description": "Public lottery winner history with draw seed blocks",
       "url": "https://pool.grin.money/fortune-board.html",
       "isPartOf": { "@type": "WebSite", "name": "GRINIUM Mining Pool", "url": "https://pool.grin.money" }
     }
@@ -84,6 +84,7 @@
             <div>
                 <h1>🎉 Fortune Board</h1>
                 <div class="sub">Every prize the pool has ever paid &middot; each draw seeded from a Grin block hash you can look up <span class="dim">(all times UTC)</span></div>
+                <div class="sub">The seed block is public, but the entry list is not, so a draw cannot be recomputed from outside.</div>
             </div>
         </div>
 
@@ -145,7 +146,7 @@
             <!-- ═══ P-04 · WINNER HISTORY ═══ -->
             <div class="panel"><span class="screws"></span>
                 <h2 class="panel-title"><span class="tag">P-04</span> Winner history
-                    <span class="right">winner · amount · verifiable draw seed</span></h2>
+                    <span class="right">winner · amount · draw seed block</span></h2>
                 <div class="panel-body">
                     <div class="fb-toolbar">
                         <!-- aria-label, not placeholder alone: a placeholder is not an

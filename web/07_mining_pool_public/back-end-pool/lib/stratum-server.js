@@ -14,6 +14,7 @@ const net = require('net');
 const {
   parseStratumMessage,
   isCanonicalU64,
+  isValidProofShape,
   validateUsername,
   createJobNotification,
   createLoginResponse,
@@ -932,6 +933,18 @@ class StratumServer {
     console.log(`[${new Date().toISOString()}] Miner login: ${maskAddress(parsed.grin_address)}.${parsed.worker_name} (${ip})`);
   }
 
+  // The node reported a block for a submit the pool no longer holds, so its height, nonce and finder
+  // are gone. The hash is enough for the operator to find it on chain and enter it by hand.
+  reportUnmatchedBlock(hash) {
+    const message = `The node reported block ${hash} for a submit the pool no longer holds, so it was ` +
+      'NOT recorded. Its reward will not be distributed until it is entered by hand.';
+    console.error(`[CRITICAL] BLOCK NOT RECORDED: ${message}`);
+    if (this.alertMonitor && typeof this.alertMonitor.triggerAlert === 'function') {
+      Promise.resolve(this.alertMonitor.triggerAlert('block_record_failed', { level: 'critical', message, data: { hash } }))
+        .catch((e) => console.error(`[CRITICAL] and the alert failed too: ${e.message}`));
+    }
+  }
+
   // Record a block the node has accepted. Never throws: every failure ends in a CRITICAL log and an
   // alert carrying what is needed to re-enter the block by hand.
   async _recordFoundBlock(height, hash, nonce, miner, feePercent) {
@@ -1003,12 +1016,10 @@ class StratumServer {
       : (params || {}).job_id;
 
     const badParams =
-      typeof edge_bits !== 'number' || !Number.isFinite(edge_bits) ||
       typeof height    !== 'number' || !Number.isFinite(height) ||
       typeof job_id    !== 'number' || !Number.isFinite(job_id) ||
       !isCanonicalU64(nonce) ||
-      !Array.isArray(pow) || pow.length === 0 ||
-      !pow.every((n) => typeof n === 'number' && Number.isFinite(n));
+      !isValidProofShape(edge_bits, pow);
 
     if (badParams) {
       this._stat(sessionId, 'rejected');
@@ -1105,6 +1116,8 @@ class StratumServer {
         const nodeJobId = jobEntry.node === undefined ? job_id : jobEntry.node;
         nodeResult = await this.nodeStratumClient.forwardSubmit({
           edge_bits, height, job_id: nodeJobId, nonce, pow
+        }, {
+          onLateBlock: (hash) => this._recordFoundBlock(height, hash, nonce, session.grinAddress, feePercentAtSubmit),
         });
         if (!nodeResult.accepted) {
           this._stat(sessionId, 'rejected');
@@ -1129,17 +1142,25 @@ class StratumServer {
       );
       if (!result.success) {
         // Node accepted the PoW but we couldn't record it (duplicate share_hash UNIQUE, or DB
-        // error). Don't double-credit — report rejected without counting it. A block is another
-        // matter: the node has already taken it, so it is recorded whatever became of the share.
-        this._stat(sessionId, 'rejected');
-        console.log(`[${new Date().toISOString()}] Share not recorded: ${result.error}`);
+        // error). Don't double-credit. A block is another matter: the node has already taken it,
+        // so it is recorded whatever became of the share.
+        this._warnThrottled(session, 'unrecorded',
+          (n) => `[${new Date().toISOString()}] Share not recorded: ${result.error}` + (n ? ` [+${n} suppressed]` : ''));
         if (nodeResult.blockHash) {
           inflightEntry.isBlock = true;
           await this._recordFoundBlock(height, nodeResult.blockHash, nonce, session.grinAddress, feePercentAtSubmit);
           socket.write(JSON.stringify(createSubmitResponse(id, true, nodeResult.blockHash)) + '\n');
           return;
         }
-        socket.write(JSON.stringify(createSubmitResponse(id, false, null, result.error)) + '\n');
+        // A repeat counts towards the reject ceiling, because each one costs the node a check. A
+        // database fault is the pool's, and must not walk an honest rig towards a disconnect.
+        if (/UNIQUE/i.test(result.error || '')) {
+          this._stat(sessionId, 'rejected');
+          if (this._rejectCeilingHit(socket, session)) return;
+          socket.write(JSON.stringify(createSubmitResponse(id, false, null, 'Duplicate share')) + '\n');
+          return;
+        }
+        socket.write(JSON.stringify(createSubmitResponse(id, false, null, 'Share not recorded')) + '\n');
         return;
       }
 

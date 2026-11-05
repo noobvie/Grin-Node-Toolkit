@@ -396,7 +396,7 @@ async function initializePool() {
 
     // Incentive system: prize pool, join bonus, jackpot, streaks, lottery. All no-ops unless
     // enabled in the admin panel. LotteryManager reuses the block monitor's node client for
-    // its verifiable draw seed.
+    // its draw seed.
     incentivesManager = new IncentivesManager(config);
     adsManager = new AdsManager(config);
     try {

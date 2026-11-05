@@ -238,7 +238,8 @@
             <div class="form-group">
               <label for="daily_giveaway_max_grin">Maximum per day (GRIN)</label>
               <input type="number" id="daily_giveaway_max_grin" name="daily_giveaway_max_grin" min="0.000000001" step="any" value="5">
-              <div class="helper-text">Keep this far below 60 GRIN (one block reward). If the prize is worth more than a block, a miner could gain by throwing away a block to get a different result.</div>
+              <div class="helper-text">Must be below 60 GRIN (one block reward), and best kept far below it. If a day's total is worth more than a block, a miner could gain by throwing away a block to get a different result.</div>
+              <div id="daily-max-warning" role="status"></div>
             </div>
           </div>
           <div class="form-row">
@@ -264,9 +265,9 @@
           <h4 class="sub-title">Preview (no money moves)</h4>
           <div class="form-row">
             <div class="form-group">
-              <label for="daily-preview-extra">Pretend extra miners</label>
-              <input type="number" id="daily-preview-extra" class="settings-skip" min="0" max="1000" step="1" value="20">
-              <div class="helper-text">Added to yesterday's real qualifying miners, for the preview only. Each does the real miners' average work.</div>
+              <label for="daily-preview-extra">Pretend extra miners (capacity test)</label>
+              <input type="number" id="daily-preview-extra" class="settings-skip" min="0" max="1000" step="1" value="0">
+              <div class="helper-text">Tests how the draw copes with more miners. It does not show real odds: pretend miners win prizes that real miners would have won. Added to yesterday's real qualifying miners, for the preview only, each doing the real miners' average work. The real odds appear above the simulated days.</div>
             </div>
           </div>
           <button type="button" class="btn btn-secondary" data-action="daily-preview">Preview 7 days</button>
@@ -278,7 +279,7 @@
 
           <h4 class="sub-title">Recent giveaway draws</h4>
           <button type="button" class="btn btn-secondary" data-action="daily-refresh">Refresh</button>
-          <div class="helper-text" id="daily-draws" style="margin-top:.75rem;">Loading…</div>
+          <div class="helper-text" id="daily-draws" role="status" aria-live="polite" style="margin-top:.75rem;">Loading…</div>
         </div>
 
         <div class="form-section">
@@ -400,5 +401,6 @@
   <script src="/js/stepup.js"></script>
   <script src="/admin/admin-shell.js"></script>
   <script src="/admin/settings-common.js" data-section="incentives"></script>
+  <script src="/admin/js/settings-incentives.js"></script>
 </body>
 </html>

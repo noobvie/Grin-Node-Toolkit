@@ -21,6 +21,9 @@ const { parseStratumMessage, isCanonicalU64 } = require('./stratum-protocol');
 
 const RECONNECT_DELAY_MS = 5000;
 const SUBMIT_TIMEOUT_MS  = 15000;
+// How long a timed-out submit can still claim a late reply. A pruned node has been seen frozen for
+// about 100 s on compaction, and a block it accepts in that freeze answers long after the timeout.
+const EXPIRED_KEEP_MS    = 10 * 60 * 1000;
 
 // Sentinel swapped in for a string nonce so the quote-stripping replacement targets a value
 // this module injected rather than anything a miner sent (see _serialize / audit §J6-11).
@@ -44,6 +47,10 @@ class NodeStratumClient {
     this.msgId        = 0;
     // Map<msgId, { resolve, timer }> for pending submit responses
     this.pending      = new Map();
+    this.submitTimeoutMs = SUBMIT_TIMEOUT_MS;
+    // Map<msgId, { at, onLateBlock }>: submits that timed out, kept so a late blockfound reaches
+    // the block record instead of being dropped as an unknown id. Oldest first, bounded below.
+    this.expired      = new Map();
     // Cap on concurrent submits awaiting node PoW validation. All miners' shares funnel through
     // this ONE upstream socket, so a node stall would otherwise let in-flight submits pile up for
     // the full SUBMIT_TIMEOUT_MS before timing out. In steady state the node answers in ms and
@@ -114,6 +121,9 @@ class NodeStratumClient {
         resolve({ accepted: false, error: 'Node stratum disconnected' });
       }
       this.pending.clear();
+      // A reply cannot arrive on a new socket. A block accepted just as the link dropped stays
+      // unknown to the pool: nothing on this side can tell it happened.
+      this.expired.clear();
 
       if (!this.stopping) {
         console.log(`[NodeStratumClient] Disconnected — reconnecting in ${RECONNECT_DELAY_MS / 1000}s`);
@@ -164,12 +174,38 @@ class NodeStratumClient {
         blockHash: resultStr.startsWith('blockfound') ? resultStr.split(' - ')[1] || null : null,
         error:     msg.error ? msg.error.message : null
       });
+      return;
+    }
+
+    // A reply with no waiting submit. Only a block matters: the miner has been told the share
+    // failed, but the node has taken the block and the pool must still record it.
+    const resultStr = typeof msg.result === 'string' ? msg.result : '';
+    const late = this.expired.get(msg.id);
+    this.expired.delete(msg.id);
+    if (!resultStr.startsWith('blockfound')) return;
+    const hash = resultStr.split(' - ')[1] || null;
+    if (late) {
+      Promise.resolve(late.onLateBlock(hash))
+        .catch((err) => console.error(`[CRITICAL] Late block ${hash} not recorded: ${err.message}`));
+    } else {
+      this.stratumServer.reportUnmatchedBlock(hash);
     }
   }
 
+  _rememberExpired(id, onLateBlock) {
+    if (!onLateBlock) return;
+    const now = Date.now();
+    for (const [key, entry] of this.expired) {
+      if (now - entry.at < EXPIRED_KEEP_MS && this.expired.size < this.maxPending) break;
+      this.expired.delete(key);
+    }
+    this.expired.set(id, { at: now, onLateBlock });
+  }
+
   // Forward a miner's submit params to the Grin node for PoW validation.
-  // Returns { accepted: bool, blockHash: string|null, error: string|null }
-  async forwardSubmit(params) {
+  // Returns { accepted: bool, blockHash: string|null, error: string|null }. onLateBlock(hash) runs
+  // if the node answers blockfound after the timeout has already reported this submit as failed.
+  async forwardSubmit(params, { onLateBlock } = {}) {
     if (!this.connected || !this.socket) {
       return { accepted: false, blockHash: null, error: 'Not connected to node stratum' };
     }
@@ -188,9 +224,10 @@ class NodeStratumClient {
       const timer = setTimeout(() => {
         if (this.pending.has(id)) {
           this.pending.delete(id);
+          this._rememberExpired(id, onLateBlock);
           resolve({ accepted: false, blockHash: null, error: 'Node stratum submit timeout' });
         }
-      }, SUBMIT_TIMEOUT_MS);
+      }, this.submitTimeoutMs);
 
       this.pending.set(id, { resolve, timer });
       this.send({ id, method: 'submit', params });

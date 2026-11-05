@@ -590,7 +590,57 @@ async function unblockDonor(addr) {
 // the keys it is sent, so this partial form and the Incentives page never clobber each other.
 const FORM_SEL = '#donation-settings .settings-form';
 
+// Same rule as settings-common.js: until a load succeeds these fields hold the page's HTML
+// defaults, and saving them would overwrite the stored settings. Save starts refused.
+let donationSettingsLoaded = false;
+let donationRetrying = false;
+
+function setDonationSettingsLoaded(loaded) {
+  donationSettingsLoaded = loaded;
+  document.querySelector('[data-action="save-donation-settings"]').disabled = !loaded;
+}
+
+// Persistent, unlike flashInto: the refused Save stays refused until a load works. The same box as
+// the settings pages. The button node survives a failed Retry, so keyboard focus does too.
+function showDonationLoadFailure(reason) {
+  let box = document.getElementById('donation-load-failed');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'donation-load-failed';
+    box.className = 'settings-load-failed';
+    box.setAttribute('role', 'alert');
+    const title = document.createElement('strong');
+    title.textContent = 'Settings did not load. This form cannot be saved until they do.';
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'btn btn-secondary';
+    retry.addEventListener('click', retryDonationSettings);
+    box.append(title, retry);
+    const why = document.createElement('p');
+    why.id = 'donation-load-why';
+    why.className = 'settings-load-why';
+    const form = document.querySelector(FORM_SEL);
+    form.prepend(why);
+    form.prepend(box);
+  }
+  document.getElementById('donation-load-why').textContent = 'This form shows defaults, not your stored settings, which are unchanged. (' + reason + ')';
+  const retry = box.querySelector('button');
+  retry.disabled = false;
+  retry.textContent = 'Retry';
+  if (donationRetrying) retry.focus();
+  donationRetrying = false;
+}
+
+function retryDonationSettings(e) {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  btn.textContent = 'Retrying…';
+  donationRetrying = true;
+  loadDonationSettings();
+}
+
 async function loadDonationSettings() {
+  setDonationSettingsLoaded(false);
   try {
     const d = await API.get('/api/admin/settings/incentives');
     if (!d || d.success !== true || !d.data) throw new Error((d && d.error) || 'Could not load settings');
@@ -602,7 +652,17 @@ async function loadDonationSettings() {
       if (el.type === 'checkbox') el.checked = val === true || val === 'true';
       else el.value = val == null ? '' : String(val);
     });
-  } catch (err) { flashInto('settings-msg', err.message, true); }
+    document.getElementById('settings-msg').style.display = 'none';
+    const box = document.getElementById('donation-load-failed');
+    if (box) {
+      box.remove();
+      document.getElementById('donation-load-why').remove();
+    }
+    setDonationSettingsLoaded(true);
+    // Retry was just removed; Save is the next thing a keyboard user wants.
+    if (donationRetrying) document.querySelector('[data-action="save-donation-settings"]').focus();
+    donationRetrying = false;
+  } catch (err) { showDonationLoadFailure(err.message); }
 }
 
 function harvestDonationSettings() {
@@ -617,6 +677,7 @@ function harvestDonationSettings() {
 }
 
 async function saveDonationSettings() {
+  if (!donationSettingsLoaded) return;   // the failure message is already on screen, and stays
   try {
     const res = await adminFetch('/api/admin/settings/incentives', {
       method: 'POST', credentials: 'include',

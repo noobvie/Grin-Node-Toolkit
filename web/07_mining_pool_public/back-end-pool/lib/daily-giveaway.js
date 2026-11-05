@@ -1,5 +1,5 @@
 // Daily giveaway — every UTC day the pool gives a random total, between two operator-set limits,
-// to a random number of miners, between two more limits. Contract: script07_design.md "Daily
+// split into a random number of equal prizes, between two more limits. Contract: script07_design.md "Daily
 // giveaway".
 //
 // Each prize is its own pick from the whole entry list, weighted by work, so a pick's odds are
@@ -8,7 +8,7 @@
 //
 // Rides the lottery's commit-reveal (script07_security_audit_archive.md §I8): commit() freezes the
 // entry list, the rules and the prize pool figure and names a future seed block; settle() runs once
-// that block exists and derives EVERYTHING from its hash — amount, winner count, winners. Given
+// that block exists and derives EVERYTHING from its hash — amount, prize count, winners. Given
 // those frozen inputs the seed alone fixes the outcome, and Math.random() must never enter this
 // path. The frozen inputs live in the pool DB and are not published, so this binds the pool's own
 // code and admin actions; it is not proof an outsider can check.
@@ -18,18 +18,16 @@
 // dust stays in the prize pool.
 const crypto = require('crypto');
 const IncentivesManager = require('./incentives');
+const { GIVEAWAY_GRIN_LIMIT } = require('./pool-settings');
 
 const SECONDS_PER_DAY = 86400;
 const NANO = 1e9;
 const EVENT_NAME = 'Daily giveaway';
 const POT = 'd';
-// The same ceilings pool-settings enforces on save. Past MAX_GRIN a rolled amount stops being an
-// exact integer in nanogrin (seededMod returns a Number), and an Infinity makes seededMod throw, so
-// the draw could never settle.
-const MAX_GRIN = 1000000;
-const MAX_WINNERS = 1000;
+const MAX_WINNERS = 1000; // the ceiling pool-settings enforces on save
 // Preview runs a synchronous scan of the DB that takes shares, so repeat clicks reuse the answer.
 const PREVIEW_CACHE_MS = 60000;
+const PREVIEW_TOP_MINERS = 5;
 
 const flag = (v) => v === true || v === 'true';
 
@@ -65,7 +63,7 @@ class DailyGiveaway {
       min_active_hours: parseInt(s.daily_giveaway_min_active_hours, 10),
     };
     const valid = Number.isFinite(r.min_grin) && Number.isFinite(r.max_grin)
-      && r.min_grin >= 1 / NANO && r.max_grin >= r.min_grin && r.max_grin <= MAX_GRIN
+      && r.min_grin >= 1 / NANO && r.max_grin >= r.min_grin && r.max_grin < GIVEAWAY_GRIN_LIMIT
       && Number.isInteger(r.min_winners) && Number.isInteger(r.max_winners)
       && r.min_winners >= 1 && r.max_winners >= r.min_winners && r.max_winners <= MAX_WINNERS
       && Number.isInteger(r.min_active_hours) && r.min_active_hours >= 1 && r.min_active_hours <= 24;
@@ -317,7 +315,8 @@ class DailyGiveaway {
   // Read-only rehearsal for the admin panel: `days` simulated days over the real eligible miners
   // plus `extraMiners` invented ones, each doing the real miners' average work. Writes nothing, so
   // it can run on the live pool at any time. Uses plan(), the same function that pays real prizes,
-  // on throwaway random seeds.
+  // on throwaway random seeds. top_real is the odds: a share of the tickets the real list alone
+  // would hold, so pretend miners never dilute it.
   preview({ extraMiners = 0, days = 7, now = Date.now() } = {}) {
     const rules = this.rules();
     if (!rules) return { success: false, reason: 'bad_rules' };
@@ -333,6 +332,12 @@ class DailyGiveaway {
     }));
     const entries = this.lottery.buildWeightedTickets(real.concat(pretend), 0);
     const prizePool = this.incentives.prizePoolBalance();
+    const realTickets = this.lottery.buildWeightedTickets(real, 0);
+    const realTotal = realTickets.reduce((sum, e) => sum + e.tickets, 0);
+    const topReal = [...realTickets]
+      .sort((a, b) => b.tickets - a.tickets || (a.address < b.address ? -1 : 1))
+      .slice(0, PREVIEW_TOP_MINERS)
+      .map((e) => ({ address: e.address, work_share: e.tickets / realTotal }));
 
     let left = prizePool;
     const simulated = [];
@@ -353,6 +358,7 @@ class DailyGiveaway {
       enabled: this.enabled(),
       rules,
       real_eligible: real.length,
+      top_real: topReal,
       pretend_miners: pretend.length,
       prize_pool: prizePool,
       days: simulated,

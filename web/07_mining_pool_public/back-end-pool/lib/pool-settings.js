@@ -98,6 +98,11 @@ const NameRule = require('./name-rule');
 const explorers = require('./explorers');
 const { MIN_WITHDRAWAL_FEE } = require('./config');
 
+// One block reward. A giveaway total at or above it makes discarding a found seed block to re-roll
+// the draw worth a miner's while, so neither limit may reach it. Also guards against a typo draining
+// the prize pool in one draw.
+const GIVEAWAY_GRIN_LIMIT = 60;
+
 // Own-property membership tests for the settings schema. `defaults[section]` and
 // `key in defaults[section]` both walk Object.prototype, so `constructor`, `toString`,
 // `valueOf` and `__proto__` passed the section gate and `name`/`length`/`call` passed the
@@ -1373,7 +1378,9 @@ PASS      any-password-you-choose</code>
       };
       const giveawayGrin = (name) => (val) => {
         const n = parseFloat(val);
-        if (!Number.isFinite(n) || n < 1e-9 || n > 1000000) throw new Error(`${name} must be at least 0.000000001 and at most 1000000`);
+        if (!Number.isFinite(n) || n < 1e-9 || n >= GIVEAWAY_GRIN_LIMIT) {
+          throw new Error(`${name} must be at least 0.000000001 and below ${GIVEAWAY_GRIN_LIMIT} GRIN (one block reward)`);
+        }
         return n;
       };
       // Finiteness, not just NaN (audit §J9-4) — this is the only unbounded numeric family in
@@ -1421,7 +1428,6 @@ PASS      any-password-you-choose</code>
         lottery_min_shares: intRange('lottery_min_shares', 0, 1000000),
         lottery_min_active_days: intRange('lottery_min_active_days', 0, 366),
         lottery_max_ticket_share_percent: percent('lottery_max_ticket_share_percent'),
-        // Capped so a rolled amount stays an exact integer in nanogrin (seededMod returns a Number).
         daily_giveaway_min_grin: giveawayGrin('Daily giveaway: minimum per day'),
         daily_giveaway_max_grin: giveawayGrin('Daily giveaway: maximum per day'),
         daily_giveaway_min_winners: intRange('Daily giveaway: minimum prizes', 1, 1000),
@@ -2060,3 +2066,4 @@ PASS      any-password-you-choose</code>
 
 module.exports = PoolSettings;
 module.exports.stratumPauseBanners = stratumPauseBanners;
+module.exports.GIVEAWAY_GRIN_LIMIT = GIVEAWAY_GRIN_LIMIT;

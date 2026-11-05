@@ -15,6 +15,8 @@ const DonorProfiles = require('../lib/donor-profiles');
 const { parseDonateToken } = require('../lib/stratum-protocol');
 const { verifyOwnerProof, auditOwnerProof, normalizeIp, PROOF_SET_MAX } = require('../lib/owner-proof');
 
+const LotteryManager = require('../lib/lottery');
+
 module.exports = function createAccountRoutes(ctx) {
   const {
     config, db, donorNameRule, dormancyManager, hashrateTracker, incentivesManager, minerManager,
@@ -570,10 +572,7 @@ module.exports = function createAccountRoutes(ctx) {
          WHERE grin_address = ? AND created_at > ? AND ${LEDGER_DIRECTION_SQL.out}`
       ).get(addr, now - 30 * 86400).s;
       // From lottery_winners, not balance_log: its raw rows are pruned, and this is a lifetime figure.
-      const prizes = db.prepare(
-        `SELECT COUNT(*) AS count, COALESCE(SUM(amount), 0) AS total_grin
-         FROM lottery_winners WHERE grin_address = ?`
-      ).get(addr);
+      const prizes = LotteryManager.prizeTotals(db, addr);
       res.json({ grin_address: addr, periods: sums, in_30d: in30, out_30d: out30, prizes });
     } catch (err) {
       res.status(500).json({ error: err.message });

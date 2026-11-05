@@ -13,9 +13,9 @@ const WEEK_SECONDS = 7 * SECONDS_PER_DAY;
 // lands there, short enough that the hourly scheduler reveals on its next tick.
 const SEED_DELAY_BLOCKS = 10;
 
-// Weekly + special-occasion lottery. Draws are publicly verifiable: the winner is selected
-// deterministically from a node block hash (seed_hash) captured at draw time, so anyone can
-// recompute the result from the seed + the public share data. Prizes are paid out of the
+// Weekly + special-occasion lottery. The winner is selected deterministically from a node block
+// hash (seed_hash), so it cannot be picked by hand once the entries are frozen. Anyone can look up
+// that block, but entry lists are not published, so outsiders cannot recompute a draw. Prizes are paid out of the
 // prize_pool bucket managed by IncentivesManager.
 class LotteryManager {
   constructor(config, grinNode) {
@@ -75,11 +75,12 @@ class LotteryManager {
   }
 
   // Pot A ticket weights from entries, with an optional whale cap: no single address's tickets
-  // may exceed maxPct% of the total work. Capping (rather than a concave weight) bounds whales
-  // without rewarding address-splitting. maxPct 0/NULL = uncapped. Tickets are rounded to keep
-  // pickWeighted's integer seed math stable. NOTE: this is a single-pass cap against the ORIGINAL
-  // total — a capped whale's EFFECTIVE odds can still edge above maxPct% once other entries shrink
-  // the pool. It meaningfully bounds whales; it is not a hard probabilistic guarantee.
+  // may exceed maxPct% of the total work. maxPct 0/NULL = uncapped. Tickets are rounded to keep
+  // pickWeighted's integer seed math stable.
+  // The cap is one pass against the ORIGINAL total and per ADDRESS, so it limits neither a miner's
+  // odds nor the gain from splitting. Capping shrinks the pool: at a 25% cap, a miner with 90% of
+  // the work still holds 71% of the tickets. And splitting pays: at a 25% cap, half the work split
+  // over 10 addresses takes 66.6% of the prizes. Which is why the daily giveaway has no cap.
   static buildWeightedTickets(entries, maxPct) {
     const total = entries.reduce((s, e) => s + e.work, 0);
     const cap = maxPct > 0 && total > 0 ? total * (maxPct / 100) : Infinity;
@@ -87,6 +88,16 @@ class LotteryManager {
       address: e.address,
       tickets: Math.max(1, Math.round(Math.min(e.work, cap))),
     }));
+  }
+
+  // Lifetime draw wins for one address. A giveaway row can hold several prizes, in ticket_count;
+  // weekly rows use that column for tickets, so each of those is one win.
+  static prizeTotals(db, address) {
+    return db.prepare(`
+      SELECT COALESCE(SUM(CASE WHEN pot = 'd' THEN ticket_count ELSE 1 END), 0) AS count,
+             COALESCE(SUM(amount), 0) AS total_grin
+      FROM lottery_winners WHERE grin_address = ?
+    `).get(address);
   }
 
   lastDrawOfType(type) {
@@ -265,7 +276,7 @@ class LotteryManager {
     }
     if (!header || !header.hash) return null;
 
-    // The giveaway shares this reveal but rolls its own amount and winner count from the hash.
+    // The giveaway shares this reveal but rolls its own amount and prize count from the hash.
     if (draw.draw_type === 'daily') return this.daily.settle(draw, header);
 
     // Read the snapshot back in the committed order — pickWeighted walks the array in order,
@@ -541,7 +552,7 @@ class LotteryManager {
   }
 
   // Public fortune board: paginated winner history (winner + amount + date + seed for audit).
-  // Returns truncated addresses; the seed_hash lets anyone verify the draw was fair.
+  // Returns truncated addresses; the seed_hash lets anyone look up the seed block.
   winnerHistory(limit = 25, offset = 0) {
     const rows = this.db.prepare(`
       SELECT w.grin_address, w.pot, w.ticket_count, w.amount,

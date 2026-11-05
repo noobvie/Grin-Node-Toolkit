@@ -1024,7 +1024,10 @@
     });
 
     // Chrome height is read live: the topbar/rail can wrap or resize on narrow widths.
-    function chromeOffset() { return topbar.offsetHeight + rail.offsetHeight + 14; }
+    function chromeOffset() {
+      var strip = document.querySelector('.settings-load-failed');
+      return topbar.offsetHeight + rail.offsetHeight + (strip ? strip.offsetHeight : 0) + 14;
+    }
 
     function jumpTo(i, push) {
       var y = window.pageYOffset + anchors[i].getBoundingClientRect().top - chromeOffset();

@@ -1185,8 +1185,8 @@ function createSchema() {
       reason    TEXT
     )`,
 
-    // One row per lottery draw. seed_height/seed_hash make the draw publicly verifiable:
-    // anyone can recompute the winners from the node block hash + public share data.
+    // One row per lottery draw. seed_height/seed_hash name the block the winners come from. Anyone
+    // can look that block up, but entry lists are not published, so outsiders cannot recompute a draw.
     `CREATE TABLE IF NOT EXISTS lottery_draws (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       draw_type TEXT NOT NULL,
@@ -1227,12 +1227,12 @@ function createSchema() {
     `CREATE INDEX IF NOT EXISTS idx_lottery_winners_address ON lottery_winners(grin_address, created_at DESC)`,
 
     // Frozen entry set for a committed draw — written at COMMIT time, before the seed block
-    // exists. Two jobs, both required for the draw to be verifiable (script07_security_audit_archive.md §I8):
+    // exists. Two jobs (script07_security_audit_archive.md §I8):
     //   1. the ticket allocation can no longer move between commit and reveal, so nobody can
     //      influence the outcome once the seed is pending;
-    //   2. it is the publishable input — a winner is recomputable from (seed_hash, draw_id,
-    //      these rows in grin_address ASC order) by anyone, which the live hashrate_history
-    //      never allowed (it is per-address work and is deliberately not published).
+    //   2. a winner is recomputable from (seed_hash, draw_id, these rows in grin_address ASC
+    //      order), which the live hashrate_history never allowed. The rows are not published,
+    //      because they are per-address work, so this check is the pool's own.
     // Ordering is by grin_address ASC everywhere it is read; pickWeighted walks the array in
     // order, so a different order would give a different winner from identical inputs.
     `CREATE TABLE IF NOT EXISTS lottery_entries (

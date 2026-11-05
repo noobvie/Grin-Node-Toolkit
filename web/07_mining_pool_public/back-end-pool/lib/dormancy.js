@@ -10,7 +10,7 @@ const PRIZE_POOL = 'prize_pool';
 // an address with NO activity — no accepted share AND no successful payout — for `dormancy_months`
 // (default 24), still holding a balance, is considered abandoned. Its balance is swept into the
 // COMMUNITY PRIZE POOL (the single `prize_pool` bucket funded by fee-cut + donations + top-ups),
-// where it is later given away through the pool's published, verifiable draws. There is no
+// where it is later given away through the pool's draws. There is no
 // per-recipient split here: one debit per abandoned address, ONE credit to the prize pool. That
 // removes every hard question a direct redistribution raises (equal-vs-weighted, Sybil-per-address,
 // dust-spraying tiny balances across hundreds of miners, "no active recipients") — the existing

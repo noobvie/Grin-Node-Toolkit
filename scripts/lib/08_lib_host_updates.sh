@@ -967,7 +967,8 @@ hu_action_enable() {
     echo ""
     echo -e "  Installs the OS security-update service and limits it to the distro's"
     echo -e "  ${BOLD:-}security channel${RESET:-}. The stock unattended-upgrades policy file is not"
-    echo -e "  edited; Disable removes what this writes."
+    echo -e "  edited. Disable turns the schedule off and removes the toolkit's files, so a"
+    echo -e "  host that had updates on before Enable ends with them off."
     _hu_restart_note
     local ns=no
     echo ""

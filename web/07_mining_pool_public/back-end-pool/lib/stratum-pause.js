@@ -377,7 +377,8 @@ class StratumPause {
     this._audit(action, adminId, ip, Object.assign({
       by, source, reason, until,
       settled: mech.settled, settle_ms: mech.settle_ms, inflight_left: mech.inflight_left,
-      blocks_in_flight: mech.blocks_in_flight, sockets_closed: mech.sockets_closed,
+      blocks_in_flight: mech.blocks_in_flight, possible_late_blocks: mech.possible_late_blocks,
+      sockets_closed: mech.sockets_closed,
       listeners_closed: mech.listeners_closed.map((l) => `${l.region}:${l.port}`), persisted,
     }, extra || {}));
     if (!persisted) {

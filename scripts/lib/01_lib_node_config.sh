@@ -431,7 +431,8 @@ ensure_grin_user() {
         # Chown only the specific node directory — other services (grinscan, drop,
         # wallet, etc.) share /opt/grin/ and manage their own ownership (www-data).
         # Never walk up to the grandparent or it silently breaks every other service.
-        chown -R grin:grin "$GRIN_DIR" 2>/dev/null || true
-        info "Ownership set: grin:grin → $GRIN_DIR"
+        # Owner only: the API secrets keep the group the de-rooted pool reads them through.
+        chown -R grin "$GRIN_DIR" 2>/dev/null || true
+        info "Ownership set: grin → $GRIN_DIR"
     fi
 }

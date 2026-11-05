@@ -471,6 +471,7 @@ _pbk_report_stratum_pause() {
 # the secret modes. pool_deroot is the canonical sweep when available.
 _pbk_restore_perms() {
     if declare -F pool_deroot >/dev/null 2>&1; then
+        pw_pin_reset || true
         pool_deroot || true
     fi
     chmod 600 "$POOL_CONF" 2>/dev/null || true

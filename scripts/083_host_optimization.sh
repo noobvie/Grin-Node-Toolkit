@@ -18,7 +18,7 @@
 # (lib/08_lib_host_updates.sh): security channel only, never reboots, library
 # updates never restart services (a patched daemon package may restart its
 # own), the grin node and pool are not packages and are never touched, and its
-# Disable removes only the files it wrote. It changes no firewall or SSH
+# Disable turns the schedule off and removes the toolkit's own files. It changes no firewall or SSH
 # setting. Design → script083_design.md §10.
 #
 # SSH is reported here but never edited here. 085_ssh_hardening.sh owns every

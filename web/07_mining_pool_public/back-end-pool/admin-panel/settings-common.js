@@ -314,11 +314,16 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
           ga_tracking_id: v,
           provider: v ? 'ga4' : (cur.provider || '')
         });
-        await adminFetch('/api/admin/settings/analytics', {
+        // adminFetch resolves on a 4xx or 5xx, so a refused save has to be read from the status.
+        const saved = await adminFetch('/api/admin/settings/analytics', {
           method: 'POST', credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body)
         });
+        if (!saved.ok) {
+          const refusal = await saved.clone().json().catch(() => ({}));
+          throw new Error(refusal.error || ('HTTP ' + saved.status));
+        }
       } catch (e) {
         // Non-fatal: the SEO section is already saved and the GA mirror is a convenience.
         showToast('SEO saved, but the GA4 ID was not copied to Analytics: ' + e.message, 'warn');
@@ -492,12 +497,12 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
     document.getElementById('accent_color')?.addEventListener('change', (e) => updateColorPreview(e.target));
     document.getElementById('pool_fee_percent')?.addEventListener('input', (e) => updateRangeDisplay(e.target));
 
-    function showToast(message, type = 'success', ms = 4000) {
+    function showToast(message, type = 'success') {
       const toast = document.createElement('div');
       toast.className = `toast ${type}`;
       toast.textContent = message;
       document.body.appendChild(toast);
-      setTimeout(() => toast.remove(), ms);
+      setTimeout(() => toast.remove(), 4000);
     }
 
     // ─── Admin TOTP 2FA (wired to /api/admin/2fa/*) ─────────────────────────────
@@ -1114,8 +1119,8 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
       const latest = () => seq === incentiveLoadSeq;
       try {
         const r = await fetch('/api/admin/incentives/prize-pool', { credentials: 'include', signal: AbortSignal.timeout(15000) });
-        if (r.ok && latest()) {
-          const d = await r.json();
+        const d = r.ok && latest() ? await r.json() : null;
+        if (d && latest()) {
           const bal = document.getElementById('prize-pool-balance');
           if (bal) bal.textContent = (d.balance || 0).toFixed(4);
           const led = document.getElementById('prize-pool-ledger');
@@ -1302,13 +1307,19 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
       } catch (e) { showToast(e.message, 'error'); }
     }
 
+    // Loads can overlap, and only the newest may paint the list.
+    let campaignLoadSeq = 0;
+
     async function loadCampaigns() {
       const el = document.getElementById('campaigns-list');
       if (!el) return;
+      const seq = ++campaignLoadSeq;
       try {
-        const r = await fetch('/api/admin/incentives/campaigns', { credentials: 'include' });
+        const r = await fetch('/api/admin/incentives/campaigns', { credentials: 'include', signal: AbortSignal.timeout(15000) });
+        if (seq !== campaignLoadSeq) return;
         if (!r.ok) { el.textContent = 'Could not load campaigns.'; return; }
         const d = await r.json();
+        if (seq !== campaignLoadSeq) return;
         _campaignsCache = d.campaigns || [];
         if (!_campaignsCache.length) { el.textContent = 'No campaigns yet.'; return; }
         const esc = (typeof escapeHtmlSafe === 'function') ? escapeHtmlSafe : (s => s);
@@ -1335,7 +1346,7 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
             ${actions ? '<div style="margin-top:.3rem;display:flex;gap:.4rem;">' + actions + '</div>' : ''}
           </div>`;
         }).join('');
-      } catch (e) { el.textContent = 'Could not load campaigns.'; }
+      } catch (e) { if (seq === campaignLoadSeq) el.textContent = 'Could not load campaigns.'; }
     }
 
     async function topUpPrizePool() {

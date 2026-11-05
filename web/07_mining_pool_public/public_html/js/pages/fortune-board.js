@@ -41,11 +41,10 @@
             });
         }
 
-        // A giveaway winner with several prizes shows a multiple of the prize, so say why. Weekly
-        // rows use ticket_count for tickets, which is not for display.
+        // A giveaway winner with several prizes shows a multiple of the prize, so say why.
         function prizeCount(w) {
-            var n = Number(w.ticket_count);
-            return w.pot === 'd' && n > 1 ? ' <span class="dim">×' + n + ' prizes</span>' : '';
+            var n = Number(w.prizes);
+            return n > 1 ? ' <span class="dim">×' + n + ' prizes</span>' : '';
         }
 
         function render() {

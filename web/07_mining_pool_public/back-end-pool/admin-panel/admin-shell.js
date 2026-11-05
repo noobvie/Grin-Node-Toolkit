@@ -1024,9 +1024,13 @@
     });
 
     // Chrome height is read live: the topbar/rail can wrap or resize on narrow widths.
+    // A strip counts only while it is stuck under the rail: on the donors page it sits in one form
+    // far down, where it covers nothing.
     function chromeOffset() {
+      var chrome = topbar.offsetHeight + rail.offsetHeight;
       var strip = document.querySelector('.settings-load-failed');
-      return topbar.offsetHeight + rail.offsetHeight + (strip ? strip.offsetHeight : 0) + 14;
+      var stuck = strip && strip.getBoundingClientRect().top <= chrome + 1;
+      return chrome + (stuck ? strip.offsetHeight : 0) + 14;
     }
 
     function jumpTo(i, push) {
@@ -1036,6 +1040,13 @@
       // the sticky chrome, and pushState would bury the page in back-button history.
       if (push) { try { history.replaceState(null, '', '#' + heads[i].id); } catch (e) {} }
     }
+
+    // settings.css hangs the sticky failure strip under the rail, whose height varies with width.
+    function syncRailHeight() {
+      document.documentElement.style.setProperty('--rail-h', rail.offsetHeight + 'px');
+    }
+    syncRailHeight();
+    window.addEventListener('resize', syncRailHeight);
 
     chips.forEach(function (a, i) {
       a.addEventListener('click', function (e) {

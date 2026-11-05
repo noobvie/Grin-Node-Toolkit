@@ -129,18 +129,24 @@ class GrinNodeAPI {
     //   3. the live node dir under /opt/grin/node (see _detectNodeDir)
     // Reading by path means there are no copies to keep in sync when the node is rebuilt.
     // The backend is de-rooted (runs as `grinpool`), so it reads the grin-owned secret files
-    // through the `grinsecret` group — 640 root:grinsecret, applied by pool_deroot() and
-    // re-applied by grin_sync_pool_stratum() after a node rebuild.
-    const nodeDir = config.node_dir || this._detectNodeDir();
-    const ownerFile = config.node_api_secret_path || path.join(nodeDir, '.api_secret');
-    const foreignFile = config.node_foreign_api_secret_path || path.join(nodeDir, '.foreign_api_secret');
-    this.secret = this._resolveSecret(config.node_api_secret, ownerFile);
-    this.foreignSecret = this._resolveSecret(config.node_foreign_api_secret, foreignFile);
-    // Where _reloadSecret() looks after a 401. An explicit pool.json value has no file.
-    this._secretFiles = {
-      secret: this._usableValue(config.node_api_secret) ? null : ownerFile,
-      foreignSecret: this._usableValue(config.node_foreign_api_secret) ? null : foreignFile,
+    // through the `grinsecret` group (640), applied by grin_secret_group_grant() on deploy and
+    // by the secret-sync timer after a node rebuild.
+    this._secretSources = {
+      secret: { path: config.node_api_secret_path, file: '.api_secret' },
+      foreignSecret: { path: config.node_foreign_api_secret_path, file: '.foreign_api_secret' },
     };
+    this._fixedNodeDir = config.node_dir || '';
+    this._reloadWarned = new Set();
+    this.secret = this._resolveSecret(config.node_api_secret, this._secretPath('secret'));
+    this.foreignSecret = this._resolveSecret(config.node_foreign_api_secret, this._secretPath('foreignSecret'));
+    // An explicit pool.json value has no file behind it for _reloadSecret() to re-read.
+    this._secretSources.secret.pinned = this._usableValue(config.node_api_secret);
+    this._secretSources.foreignSecret.pinned = this._usableValue(config.node_foreign_api_secret);
+  }
+
+  _secretPath(field) {
+    const src = this._secretSources[field];
+    return src.path || path.join(this._fixedNodeDir || this._detectNodeDir(), src.file);
   }
 
   // Which node dir actually serves this network. Mirrors the fallback branch of
@@ -191,16 +197,25 @@ class GrinNodeAPI {
     return Boolean(value && String(value).trim() && !/^CHANGE_ME/i.test(value));
   }
 
-  // Re-read a secret file after the node refused a call.
-  // The file can be repaired after this process started: a node start strips the grinsecret
-  // group until grin-secret-sync restores it, and a pool booting in that gap holds no secret.
-  // Quiet on failure, because this runs on every refused call while the fault lasts and the
-  // startup warning has already named the file.
+  // Re-read a secret file after the node refused a call. The file can be repaired or rotated
+  // after this process started, and a prune↔full rebuild moves it, so the node dir is resolved
+  // again. A failed read warns once per fault: this runs on every refused call while it lasts,
+  // and a file that broke after startup has no startup warning to go on.
   _reloadSecret(field) {
-    const p = this._secretFiles[field];
-    if (!p) return;
+    if (this._secretSources[field].pinned) return;
+    const p = this._secretPath(field);
     let value;
-    try { value = fs.readFileSync(p, 'utf-8').trim(); } catch (_) { return; }
+    try {
+      value = fs.readFileSync(p, 'utf-8').trim();
+    } catch (err) {
+      if (!this._reloadWarned.has(field)) {
+        this._reloadWarned.add(field);
+        console.error(`[grin-node] the node refused the API secret and ${p} cannot be read: ` +
+          `${err.code || err.message}. Run grin-secret-sync.`);
+      }
+      return;
+    }
+    this._reloadWarned.delete(field);
     if (!value || value === this[field]) return;
     this[field] = value;
     console.log(`[grin-node] reloaded the API secret from ${p} after the node refused the old one.`);
@@ -307,6 +322,7 @@ class GrinNodeAPI {
         height: result.height,
         hash: result.hash,
         nonce: result.nonce,
+        cuckoo_solution: result.cuckoo_solution,
         timestamp: result.timestamp,
         difficulty: result.difficulty,
         total_difficulty: result.total_difficulty

@@ -126,6 +126,18 @@ Gateway boxes carry a completely different footprint: `/opt/grin/conf/grin_gatew
 deploy, but it restarts a service only when files its Node process **loads** changed. A pool
 restart drops every miner's stratum connection, so a static-only change must go live without one.
 
+A deploy also carries what the pool box runs from a generated or installed copy. The systemd unit is
+compared with `_pool_unit_text` and replaced if it differs, which counts as a runtime change; the old
+unit is saved under `/root`, and local unit changes belong in a drop-in. `grin_install_secret_sync`
+refreshes the timer's lib copy and `gne_install` the node event recorder while its timer runs.
+`pool_deroot` applies the secret group, updates older `@reboot` node lines, and runs
+`pw_refresh_scripts`, which keeps the wallet's scripts in root-owned `/opt/grin/lib/pubpool-<net>/` and
+moves a box off the older wallet-dir layout, crontab included. A deploy stops first if `pool.json`
+disagrees with root's path pin (`pw_paths_check`). The wallet listener is never restarted by a deploy: a
+restart could cut across a payout, so new scripts apply at its next start. Not covered: the generated
+node-sync watchdog, which sources the toolkit's lib directly; a change to the script itself needs
+`gnk_watchdog_install`.
+
 | Service | Runtime paths (a change → restart) | Static (never restarts) | Pending marker |
 |---|---|---|---|
 | Pool | `index.js` `lib/` `routes/` `package.json` `package-lock.json` (`POOL_RUNTIME_PATHS`) | `admin-panel/`, `scripts/`, all of `public_html` | `/opt/grin/pubpool/.<net>.restart-pending` |
@@ -5410,7 +5422,12 @@ timeout shortened; a real stall delaying a block reply is not confirmed.
 was thrown away. A pruned node has been seen frozen for about 100 s on compaction. **Fix:** a
 timed-out submit stays in `NodeStratumClient.expired` for 10 minutes, bounded by `max_pending_submits`,
 and a late `blockfound` still records the block; one with no submit left raises `block_record_failed`.
-A block accepted just as the node link drops stays unknown: no reply can arrive on a new socket.
+A submit that dies with the link, or outlives the 10 minutes, goes to `lib/lost-block-check.js`: one
+header read per height, retried for an hour, up to 100,000 held submits. A match raises its own
+`block_record_failed` row for an entry by hand, with the fee in force at submit. It is not credited
+automatically. The rounded header nonce finds the possible submits and `cuckoo_solution` picks the
+exact one. `cuckoo_solution` in the header reply is not yet confirmed on a live node; without it the
+alert lists every possible submit. A pool restart forgets what was held.
 **Lesson:** a timeout decides what to tell the caller, not what happened.
 
 ### One crafted submit dropped the node connection

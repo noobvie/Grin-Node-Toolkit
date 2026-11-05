@@ -2379,7 +2379,7 @@ rebuild wipes the node's own `grin-server.toml`, losing the pool's stratum wirin
 re-applies `enable_stratum_server`, `stratum_server_addr` (from the conf's `node_stratum_port`,
 defaulting to `3416`/`13416`) and `wallet_listener_url` → `:3420`/`:13420`, and does NOT restart
 the node — it prints "RESTART the <net> node to take effect". It also re-applies the de-rooted
-`root:grinsecret 640` mode a rebuild would reset to `600 root:root`. Runbook line: after any node
+`grinsecret` group and 640 mode that a rebuild's new `600` files lack. Runbook line: after any node
 rebuild, `grin-secret-sync` once + restart node + check admin health page.
 
 **b) Provider/IP change of the HUB — make endpoints DNS-based (small helper feature).**

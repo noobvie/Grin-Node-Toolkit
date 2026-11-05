@@ -439,7 +439,7 @@ dg_check_node() {
     (( dup > 1 )) && dg_add CRIT "$area" toolkit "$dup grin processes on one node dir" "$dir" \
         "A root-socket session next to a gtmux one — the LMDB lock error. Stop through the toolkit, then start once."
     # Secret files are excluded: Script 04 sets the foreign secret to
-    # root:<web_user> 640 on purpose, and the pool uses root:grinsecret.
+    # root:<web_user> 640 on purpose, and the pool uses group grinsecret.
     local notgrin
     notgrin=$(find "$dir" -maxdepth 2 ! -user grin ! -name '.api_secret' ! -name '.foreign_api_secret' \
               -print -quit 2>/dev/null || true)

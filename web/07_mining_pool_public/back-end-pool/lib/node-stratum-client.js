@@ -24,6 +24,7 @@ const SUBMIT_TIMEOUT_MS  = 15000;
 // How long a timed-out submit can still claim a late reply. A pruned node has been seen frozen for
 // about 100 s on compaction, and a block it accepts in that freeze answers long after the timeout.
 const EXPIRED_KEEP_MS    = 10 * 60 * 1000;
+const EXPIRED_SWEEP_MS   = 60 * 1000;
 
 // Sentinel swapped in for a string nonce so the quote-stripping replacement targets a value
 // this module injected rather than anything a miner sent (see _serialize / audit §J6-11).
@@ -45,12 +46,16 @@ class NodeStratumClient {
     this.connected    = false;
     this.stopping     = false;
     this.msgId        = 0;
-    // Map<msgId, { resolve, timer }> for pending submit responses
+    // Map<msgId, { resolve, timer, candidate }> for pending submit responses
     this.pending      = new Map();
     this.submitTimeoutMs = SUBMIT_TIMEOUT_MS;
-    // Map<msgId, { at, onLateBlock }>: submits that timed out, kept so a late blockfound reaches
-    // the block record instead of being dropped as an unknown id. Oldest first, bounded below.
+    // Map<msgId, { at, candidate }>: submits that timed out, kept so a late blockfound reaches the
+    // block record instead of being dropped as an unknown id. Oldest first. A candidate is plain
+    // { height, nonce, pow, miner, feePercent }: a stall can leave thousands here, and a closure
+    // would keep each one's socket and session alive.
     this.expired      = new Map();
+    this.expiredSweep = setInterval(() => this._sweepExpired(), EXPIRED_SWEEP_MS);
+    if (this.expiredSweep.unref) this.expiredSweep.unref();
     // Cap on concurrent submits awaiting node PoW validation. All miners' shares funnel through
     // this ONE upstream socket, so a node stall would otherwise let in-flight submits pile up for
     // the full SUBMIT_TIMEOUT_MS before timing out. In steady state the node answers in ms and
@@ -111,25 +116,36 @@ class NodeStratumClient {
       console.error(`[NodeStratumClient] Socket error: ${err.message}`);
     });
 
-    this.socket.on('close', () => {
-      const wasConnected = this.connected;
-      this.connected = false;
-      if (wasConnected && !this.stopping) this._emitLink(false);
-      // Cancel all pending submits so callers don't hang
-      for (const [id, { resolve, timer }] of this.pending) {
-        clearTimeout(timer);
-        resolve({ accepted: false, error: 'Node stratum disconnected' });
-      }
-      this.pending.clear();
-      // A reply cannot arrive on a new socket. A block accepted just as the link dropped stays
-      // unknown to the pool: nothing on this side can tell it happened.
-      this.expired.clear();
+    this.socket.on('close', () => this._linkClosed());
+  }
 
-      if (!this.stopping) {
-        console.log(`[NodeStratumClient] Disconnected — reconnecting in ${RECONNECT_DELAY_MS / 1000}s`);
-        setTimeout(() => this.connect(), RECONNECT_DELAY_MS);
-      }
-    });
+  _linkClosed() {
+    const wasConnected = this.connected;
+    this.connected = false;
+    if (wasConnected && !this.stopping) this._emitLink(false);
+    // A reply cannot arrive on a new socket, so every submit still open is asked of the chain: the
+    // node may have taken a block just as the link dropped.
+    const unanswered = [];
+    // Cancel all pending submits so callers don't hang
+    for (const [, { resolve, timer, candidate }] of this.pending) {
+      clearTimeout(timer);
+      unanswered.push(candidate);
+      resolve({ accepted: false, error: 'Node stratum disconnected' });
+    }
+    this.pending.clear();
+    for (const { candidate } of this.expired.values()) unanswered.push(candidate);
+    this.expired.clear();
+    this._askChain(unanswered);
+
+    if (!this.stopping) {
+      console.log(`[NodeStratumClient] Disconnected — reconnecting in ${RECONNECT_DELAY_MS / 1000}s`);
+      setTimeout(() => this.connect(), RECONNECT_DELAY_MS);
+    }
+  }
+
+  _askChain(candidates) {
+    const known = candidates.filter(Boolean);
+    if (known.length) this.stratumServer.checkLostCandidates(known);
   }
 
   sendLogin() {
@@ -185,27 +201,38 @@ class NodeStratumClient {
     if (!resultStr.startsWith('blockfound')) return;
     const hash = resultStr.split(' - ')[1] || null;
     if (late) {
-      Promise.resolve(late.onLateBlock(hash))
+      Promise.resolve(this.stratumServer.recordLateBlock(late.candidate, hash))
         .catch((err) => console.error(`[CRITICAL] Late block ${hash} not recorded: ${err.message}`));
     } else {
       this.stratumServer.reportUnmatchedBlock(hash);
     }
   }
 
-  _rememberExpired(id, onLateBlock) {
-    if (!onLateBlock) return;
+  _rememberExpired(id, candidate) {
+    if (!candidate) return;
     const now = Date.now();
+    this._sweepExpired(now, 1);
+    this.expired.set(id, { at: now, candidate });
+  }
+
+  // Past the window, or past the cap, a submit stops waiting for its reply and asks the chain.
+  // room is how many are about to be added: the timer's sweep adds none, so a full map is not
+  // trimmed while a late reply can still arrive.
+  _sweepExpired(now = Date.now(), room = 0) {
+    const aged = [];
     for (const [key, entry] of this.expired) {
-      if (now - entry.at < EXPIRED_KEEP_MS && this.expired.size < this.maxPending) break;
+      if (now - entry.at < EXPIRED_KEEP_MS && this.expired.size + room <= this.maxPending) break;
       this.expired.delete(key);
+      aged.push(entry.candidate);
     }
-    this.expired.set(id, { at: now, onLateBlock });
+    this._askChain(aged);
   }
 
   // Forward a miner's submit params to the Grin node for PoW validation.
-  // Returns { accepted: bool, blockHash: string|null, error: string|null }. onLateBlock(hash) runs
-  // if the node answers blockfound after the timeout has already reported this submit as failed.
-  async forwardSubmit(params, { onLateBlock } = {}) {
+  // Returns { accepted: bool, blockHash: string|null, error: string|null }. candidate is what the
+  // pool needs to record or report this submit if the node takes it as a block after the pool
+  // has already reported it as failed.
+  async forwardSubmit(params, { candidate } = {}) {
     if (!this.connected || !this.socket) {
       return { accepted: false, blockHash: null, error: 'Not connected to node stratum' };
     }
@@ -224,12 +251,12 @@ class NodeStratumClient {
       const timer = setTimeout(() => {
         if (this.pending.has(id)) {
           this.pending.delete(id);
-          this._rememberExpired(id, onLateBlock);
+          this._rememberExpired(id, candidate);
           resolve({ accepted: false, blockHash: null, error: 'Node stratum submit timeout' });
         }
       }, this.submitTimeoutMs);
 
-      this.pending.set(id, { resolve, timer });
+      this.pending.set(id, { resolve, timer, candidate });
       this.send({ id, method: 'submit', params });
     });
   }
@@ -282,6 +309,7 @@ class NodeStratumClient {
 
   stop() {
     this.stopping = true;
+    clearInterval(this.expiredSweep);
     if (this.socket) {
       this.socket.removeAllListeners('close');
       this.socket.destroy();

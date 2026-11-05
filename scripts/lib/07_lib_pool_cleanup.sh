@@ -232,6 +232,7 @@ pool_cleanup() {
         pw_watchdog_remove 2>/dev/null || true
         pw_autostart_disable 2>/dev/null || true
         success "Cron + logrotate + wrapper + gwctl helper/sudoers removed; wallet listeners stopped, watchdog + autostart removed."
+        rm -rf "$(pw_script_dir)" || warn "Could not remove $(pw_script_dir)."
         info "Wallet seed dir ($(pw_wallet_dir)) kept — it holds the coinbase funds."
         log "Cleanup: removed $cron_backup, $cron_vacuum, $backup_wrapper, $logrotate_conf, $POOL_ADMIN_RESET_BIN, gwctl helper/sudoers + wallet listeners/watchdog/autostart"
     fi

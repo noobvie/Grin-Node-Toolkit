@@ -956,3 +956,17 @@ a.btn-icon, a.btn-icon:hover { text-decoration: none; }
   .admin-main > main { padding: 1rem 1rem 2.5rem; }
   .admin-stratum-strip { padding: .55rem 1rem; }
 }
+
+/* Phones: below 16px iOS zooms the page when a field takes focus, and a finger needs 44px. */
+@media (max-width: 768px) {
+  body input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]),
+  body select,
+  body textarea { font-size: 16px; }
+  .btn, .admin-refresh, .admin-burger { min-height: 44px; }
+  .admin-burger { min-width: 44px; }
+  input[type=checkbox], input[type=radio] { width: 20px; height: 20px; }
+}
+@media (max-width: 400px) {
+  .admin-topbar { gap: .5rem; padding: 0 .75rem; }
+  .admin-user .nav-username { display: none; }
+}

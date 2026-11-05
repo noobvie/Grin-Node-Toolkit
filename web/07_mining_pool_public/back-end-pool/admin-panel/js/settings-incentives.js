@@ -130,7 +130,7 @@ async function previewDailyGiveaway() {
   const extra = document.getElementById('daily-preview-extra').value || 0;
   out.textContent = 'Working…';
   try {
-    const r = await fetch('/api/admin/incentives/daily-giveaway/preview?extra_miners=' + encodeURIComponent(extra), { credentials: 'include' });
+    const r = await fetch('/api/admin/incentives/daily-giveaway/preview?extra_miners=' + encodeURIComponent(extra), { credentials: 'include', signal: AbortSignal.timeout(15000) });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || 'Preview failed');
     if (!d.success) { out.textContent = 'Check the limits above and press Save first.'; return; }

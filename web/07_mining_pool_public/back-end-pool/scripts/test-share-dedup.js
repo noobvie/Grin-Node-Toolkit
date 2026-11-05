@@ -260,7 +260,12 @@ function minerManager() {
   await sleep(5);
   ok('an unmatched plain reply is ignored', alerts.length === alertsBefore + 1);
   client.maxPending = 2;
-  for (let i = 0; i < 5; i++) client._rememberExpired(1000 + i, () => {});
+  const handedOver = [];
+  const realCheck = server.checkLostCandidates;
+  server.checkLostCandidates = (list) => handedOver.push(...list);
+  for (let i = 0; i < 5; i++) client._rememberExpired(1000 + i, { height: 1, nonce: String(i) });
+  server.checkLostCandidates = realCheck;
+  ok('evicted submits go to the chain check', handedOver.length === 3 && handedOver[0].nonce === '0');
   ok('kept submits stay bounded, oldest out first', client.expired.size === 2 && client.expired.has(1004), [...client.expired.keys()].join());
   client.maxPending = 20000;
   client.expired.clear();

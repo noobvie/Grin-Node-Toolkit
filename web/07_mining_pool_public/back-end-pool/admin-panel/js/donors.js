@@ -642,7 +642,11 @@ function retryDonationSettings(e) {
 async function loadDonationSettings() {
   setDonationSettingsLoaded(false);
   try {
-    const d = await API.get('/api/admin/settings/incentives');
+    // Save stays disabled until this answers, so a stalled reply must end in the failure banner.
+    const d = await Promise.race([
+      API.get('/api/admin/settings/incentives'),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('The server took too long to answer')), 15000)),
+    ]);
     if (!d || d.success !== true || !d.data) throw new Error((d && d.error) || 'Could not load settings');
     const v = d.data;
     document.querySelectorAll(FORM_SEL + ' input, ' + FORM_SEL + ' select, ' + FORM_SEL + ' textarea').forEach(el => {

@@ -23,7 +23,7 @@ The launcher enforces:
 2. **Set `HOME="$GRIN_DIR"`** (the node dir). grin 5.4.0 creates `$HOME/.grin/<chain>/` even
    when it loads the cwd `grin-server.toml`. The `grin` user's default home `/opt/grin` is
    `root:root`/unwritable → grin panics `Error loading config file: Permission denied`.
-3. **`chown -R grin:grin "$GRIN_DIR"` immediately before launch** — reclaims root-owned
+3. **`chown -R grin "$GRIN_DIR"` (owner only, see `grin_node_api.md`) immediately before launch** — reclaims root-owned
    leftovers (idempotent, prevents the EACCES in #1).
 4. **One tmux server: grin's socket ("gtmux").** tmux is invoked *inside* `su grin`, so the
    tmux SERVER runs on grin's per-user socket (`/tmp/tmux-<uid>/default`) — view via the

@@ -244,12 +244,17 @@
       setBusy(true, 'Pausing — listeners closed, waiting for in-flight shares to settle (up to ~35 s)…');
       try {
         var d = await call('POST', '/api/admin/stratum/pause', { reason: v.reason, duration_min: v.duration });
-        var t = d.settled
+        var mayStillLand = d.possible_late_blocks > 0;
+        var t = d.settled && !mayStillLand
           ? 'Paused · settled — safe to proceed. '
-          : 'Paused, but NOT settled: ' + d.inflight_left + ' submit(s) still in flight (' + d.blocks_in_flight +
+          : d.settled ? 'Paused · settled, but wait before a hub migration. ' : 'Paused, but NOT settled: ' + d.inflight_left + ' submit(s) still in flight (' + d.blocks_in_flight +
             ' block candidate(s)). They are still recorded when they finish — wait for "Settled" above before you proceed. ';
+        if (mayStillLand) {
+          t += d.possible_late_blocks + ' lost submit(s) or height(s) could still turn out to be a block. A pool ' +
+            'restart forgets them, so before a hub migration keep the pool running for 15 minutes with the node healthy. ';
+        }
         t += d.sockets_closed + ' connection(s) dropped, ' + (d.listeners_closed || []).length + ' listener(s) closed.';
-        showMsg(t + persistNote(d), !d.settled || d.persisted === false);
+        showMsg(t + persistNote(d), !d.settled || mayStillLand || d.persisted === false);
       } catch (e) {
         showMsg('Not paused: ' + e.message, true);
       } finally {

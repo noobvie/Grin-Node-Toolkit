@@ -12,10 +12,12 @@
 //       an unprovable network must never turn a dead node amber;
 //   [3] the /proc scan against a fake proc tree, and downState() on every branch — a 401
 //       (bad secret) must stay 'offline', never 'busy';
-//   [4] the route and the lamp actually use it.
+//   [4] the route and the lamp actually use it;
+//   [5] a secret repaired, rotated or moved after startup is picked up on the next 401.
 //
-// In-process only: the two listeners bind 127.0.0.1 on an ephemeral port and are closed
-// before exit; the fake /proc lives in os.tmpdir() and is removed. Nothing is left running.
+// In-process only: the listeners bind 127.0.0.1 on an ephemeral port and are closed before
+// exit; the fake /proc and the temp secret dir live in os.tmpdir() and are removed. Nothing is
+// left running.
 // Run: node scripts/test-node-state.js
 const fs = require('fs');
 const os = require('os');
@@ -183,8 +185,14 @@ const api = (url, network = 'mainnet') => new GrinNodeAPI({
     ok('a pool started without its secret holds none', node.secret === '');
 
     calls = 0;
+    const warnings = [];
+    console.error = (line) => warnings.push(line);
     const refused = await node.getStatus();
-    ok('still unreadable → auth fault, no retry', refused.transport === 'auth' && calls === 1);
+    await node.getStatus();
+    console.error = realWarn;
+    ok('still unreadable → auth fault, no retry', refused.transport === 'auth' && calls === 2);
+    ok('a failed re-read warns once, not on every call',
+      warnings.length === 1 && warnings[0].includes(ownerFile));
 
     fs.writeFileSync(ownerFile, 'right-secret\n');
     fs.writeFileSync(foreignFile, 'right-secret\n');
@@ -212,6 +220,18 @@ const api = (url, network = 'mainnet') => new GrinNodeAPI({
     const both = await Promise.all([racing.getStatus(), racing.getStatus()]);
     console.log = realLog;
     ok('overlapping refused calls both recover', both.every((s) => s.ok === true));
+
+    const movedDir = path.join(dir, 'moved');
+    fs.mkdirSync(movedDir);
+    fs.writeFileSync(path.join(movedDir, '.api_secret'), 'right-secret');
+    console.error = () => {};
+    const moving = new GrinNodeAPI({ node_api_url: url, network: 'mainnet' });
+    console.error = realWarn;
+    moving._detectNodeDir = () => movedDir;   // the node came up in the other dir
+    console.log = () => {};
+    const followed = await moving.getStatus();
+    console.log = realLog;
+    ok('a secret that moved to the other node dir is found', followed.ok === true);
 
     fs.writeFileSync(ownerFile, 'wrong-secret');
     fs.writeFileSync(foreignFile, 'wrong-secret');

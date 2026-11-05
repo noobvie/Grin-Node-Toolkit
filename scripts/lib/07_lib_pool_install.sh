@@ -75,18 +75,14 @@ pool_deroot() {
     touch "$POOL_LOG" 2>/dev/null || true
     chown grinpool:grinpool "$POOL_LOG" 2>/dev/null || true
 
-    # Node secrets → group-read (640 root:grinsecret), never world-read. A node
-    # rebuild regenerates them 600 root-only; grin_sync_pool_stratum (secret
-    # self-heal chain) re-applies this, so it heals without operator action.
-    local ndir sf
-    ndir=$(grin_live_node_dir "$POOL_NET" 2>/dev/null || true)
-    if [[ -n "$ndir" ]]; then
-        for sf in "$ndir/.api_secret" "$ndir/.foreign_api_secret"; do
-            [[ -f "$sf" ]] || continue
-            chgrp grinsecret "$sf" 2>/dev/null || true
-            chmod 640 "$sf" 2>/dev/null || true
-        done
-    fi
+    # Node secrets → group-read (640, grinsecret), never world-read. The secret-sync
+    # timer repeats this, which covers the 600 files a node rebuild writes.
+    grin_secret_group_grant
+    # An @reboot line from before the owner-only chown would strip that group at every boot.
+    gnc_autostart_heal_owner_chown \
+        || warn "An @reboot node line still resets the secrets' group — re-enable node autostart."
+    # Here rather than in Deploy alone, so Install and a restore move a box off the old layout too.
+    pw_refresh_scripts || warn "The wallet's generated scripts were not refreshed — see the line above."
 
     # Scoped sudo: grin-gateway-ctl is root-owned 0755 (root-writable only), so
     # this cannot be parlayed into arbitrary root by the grinpool user.
@@ -102,6 +98,61 @@ EOF
         warn "sudoers validation failed — removed grin-pool-gwctl entry (panel gateway pairing disabled)."
     fi
     success "grinpool service user ready — ownership swept, node secrets group-read, scoped sudo installed."
+}
+
+# The pool's systemd unit, as text: 1) Install writes it, and 9) Deploy new code compares it with
+# the installed one, so a unit change reaches every box on the next deploy.
+_pool_unit_text() {
+    # The installed path is kept while it works: a deploy from a shell with another PATH must not
+    # read as a unit change and restart the pool.
+    local node_bin
+    node_bin=$(sed -n 's/^ExecStart=\([^ ]*\) .*/\1/p' "/etc/systemd/system/$POOL_SERVICE.service" 2>/dev/null)
+    [[ -x "$node_bin" ]] || node_bin=$(command -v node 2>/dev/null || echo /usr/bin/node)
+    local wallet_rw; wallet_rw=$(pw_wallet_dir 2>/dev/null || echo "$POOL_WALLET_DIR")
+    # User=grinpool (§13.9): the backend parses untrusted input from the public
+    # internet on TWO surfaces (HTTP API + raw stratum TCP) atop a large npm tree —
+    # root here turned any RCE into hub-WG-key + node-secret + LE-key compromise.
+    # ReadWritePaths entries are '-'-prefixed (ignore-if-missing) because the wallet
+    # dir may not exist until step 5. Do NOT add NoNewPrivileges — it breaks the
+    # scoped `sudo grin-gateway-ctl` the panel pairing path uses.
+    #
+    # ⚠ /etc/wireguard is in ReadWritePaths for the SAME reason, and it is not
+    # optional. ProtectSystem=strict builds a MOUNT NAMESPACE, and a namespace is
+    # inherited by every child — including one that becomes root through setuid
+    # sudo. Gaining root does not get you out of it. Without this entry the helper
+    # runs as root and still cannot append a [Peer], so `add-peer`, `remove-peer`
+    # and `init-server` all fail from the panel while `list`/`status` (reads) keep
+    # working — the page looks healthy right up to the moment you save (§13.12p).
+    # pool_ensure_wg_prereqs() (entry script) creates the directory BEFORE this unit starts,
+    # because ReadWritePaths is bound at service start: a directory created later
+    # is not writable inside the already-running service's namespace.
+    cat << EOF
+[Unit]
+Description=Grin Pool Manager (GRINIUM — ${POOL_NET_LABEL})
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=grinpool
+WorkingDirectory=$POOL_APP_DIR
+Environment="GRIN_POOL_CONF=$POOL_CONF"
+Environment="NODE_ENV=production"
+Environment="HOST=127.0.0.1"
+Environment="PORT=$POOL_PORT"
+ExecStart=$node_bin $POOL_APP_DIR/index.js
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65535
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictSUIDSGID=yes
+ReadWritePaths=-$POOL_APP_DIR -$(dirname "$POOL_CONF") -$wallet_rw -$LOG_DIR -/etc/wireguard
+
+[Install]
+WantedBy=multi-user.target
+EOF
 }
 
 pool_install() {
@@ -198,52 +249,10 @@ pool_install() {
     # inside it lands on a user that exists.
     pool_ensure_served_dirs || true
 
-    local node_bin; node_bin=$(command -v node 2>/dev/null || echo /usr/bin/node)
-    local wallet_rw; wallet_rw=$(pw_wallet_dir 2>/dev/null || echo "$POOL_WALLET_DIR")
-    # User=grinpool (§13.9): the backend parses untrusted input from the public
-    # internet on TWO surfaces (HTTP API + raw stratum TCP) atop a large npm tree —
-    # root here turned any RCE into hub-WG-key + node-secret + LE-key compromise.
-    # ReadWritePaths entries are '-'-prefixed (ignore-if-missing) because the wallet
-    # dir may not exist until step 5. Do NOT add NoNewPrivileges — it breaks the
-    # scoped `sudo grin-gateway-ctl` the panel pairing path uses.
-    #
-    # ⚠ /etc/wireguard is in ReadWritePaths for the SAME reason, and it is not
-    # optional. ProtectSystem=strict builds a MOUNT NAMESPACE, and a namespace is
-    # inherited by every child — including one that becomes root through setuid
-    # sudo. Gaining root does not get you out of it. Without this entry the helper
-    # runs as root and still cannot append a [Peer], so `add-peer`, `remove-peer`
-    # and `init-server` all fail from the panel while `list`/`status` (reads) keep
-    # working — the page looks healthy right up to the moment you save (§13.12p).
-    # pool_ensure_wg_prereqs() (entry script) creates the directory BEFORE this unit starts,
-    # because ReadWritePaths is bound at service start: a directory created later
-    # is not writable inside the already-running service's namespace.
-    cat > "/etc/systemd/system/$POOL_SERVICE.service" << EOF || { error "Could not write /etc/systemd/system/$POOL_SERVICE.service"; return 1; }
-[Unit]
-Description=Grin Pool Manager (GRINIUM — ${POOL_NET_LABEL})
-After=network.target
-Wants=network.target
-
-[Service]
-Type=simple
-User=grinpool
-WorkingDirectory=$POOL_APP_DIR
-Environment="GRIN_POOL_CONF=$POOL_CONF"
-Environment="NODE_ENV=production"
-Environment="HOST=127.0.0.1"
-Environment="PORT=$POOL_PORT"
-ExecStart=$node_bin $POOL_APP_DIR/index.js
-Restart=on-failure
-RestartSec=5
-LimitNOFILE=65535
-ProtectSystem=strict
-ProtectHome=yes
-PrivateTmp=yes
-RestrictSUIDSGID=yes
-ReadWritePaths=-$POOL_APP_DIR -$(dirname "$POOL_CONF") -$wallet_rw -$LOG_DIR -/etc/wireguard
-
-[Install]
-WantedBy=multi-user.target
-EOF
+    # Into a variable first: the text reads the installed unit, and > would empty it.
+    local unit_text; unit_text=$(_pool_unit_text)
+    printf '%s\n' "$unit_text" > "/etc/systemd/system/$POOL_SERVICE.service" \
+        || { error "Could not write /etc/systemd/system/$POOL_SERVICE.service"; return 1; }
     systemctl daemon-reload
     systemctl enable "$POOL_SERVICE" 2>/dev/null || true
     success "Systemd service $POOL_SERVICE installed (runs as grinpool, hardened unit)."
@@ -584,6 +593,7 @@ pool_deploy_code() {
         error "Pool not installed yet ($POOL_APP_DIR missing) — run 1) Install first."
         return 1
     fi
+    pw_paths_check || { error "Nothing was deployed."; return 1; }
 
     # Did package.json change? Capture the OLD (deployed) hash before the rsync
     # overwrites it, compare against the source. Only then do we re-run npm —
@@ -668,34 +678,52 @@ pool_deploy_code() {
 
     # Upgrade-path de-root (§13.9): rsync ran as root, so re-sweep ownership and
     # regenerate the pairing helper — idempotent no-ops on an already-migrated box.
-    # A pre-de-root install also needs 1) Install re-run once for the hardened unit.
     pool_gwctl_install || true
     pool_ensure_wg_prereqs
     # pool_deroot may add grinpool to a group (grinsecret, for the node secrets); a running
     # process gets new groups only from a restart, so a change there counts as runtime.
     local groups_before groups_after
     groups_before=$(id -G grinpool 2>/dev/null || true)
-    pool_deroot || warn "De-root sweep failed — the service may not start as grinpool."
+    local deroot_ok=1
+    pool_deroot || { deroot_ok=0; warn "De-root sweep failed — the service may not start as grinpool."; }
     groups_after=$(id -G grinpool 2>/dev/null || true)
     if [[ "$groups_before" != "$groups_after" ]]; then
         rt_changed=1
         _pool_restart_mark_set "$POOL_RESTART_MARK" "$POOL_SERVICE"
     fi
-    if grep -q '^User=root' "/etc/systemd/system/$POOL_SERVICE.service" 2>/dev/null; then
-        warn "Service unit still runs as root — re-run 1) Install once to apply the hardened grinpool unit."
+    # The grin-secret-sync timer runs its own copy of the lib in /opt/grin/lib, which a
+    # toolkit update leaves alone, so a fix to that lib would otherwise never reach the timer.
+    if [[ "$(systemctl is-enabled grin-secret-sync.timer 2>/dev/null)" == disabled ]]; then
+        info "grin-secret-sync.timer is disabled, so it was left as it is."
+    else
+        grin_install_secret_sync || warn "The secret-sync timer was not refreshed — see the line above."
     fi
-    # An update does NOT rewrite the unit, so a box installed before §13.12p keeps a
-    # ReadWritePaths without /etc/wireguard. Under ProtectSystem=strict that makes
-    # every panel-side WireGuard WRITE fail while the reads keep working — the page
-    # looks healthy and only the save breaks. Cheap to detect, expensive to debug.
-    local _unit="/etc/systemd/system/$POOL_SERVICE.service"
-    if [[ -f "$_unit" ]] && grep -q '^ProtectSystem=strict' "$_unit" 2>/dev/null &&
-       ! grep -q '^ReadWritePaths=.*/etc/wireguard' "$_unit" 2>/dev/null; then
-        warn "This box's service unit cannot write /etc/wireguard."
-        echo -e "  ${DIM}Gateway pairing and multi-region setup FROM THE ADMIN PANEL will fail${RESET}"
-        echo -e "  ${DIM}(the page's status columns will still look fine — only writes break).${RESET}"
-        echo -e "  ${DIM}Fix: re-run 1) Install once to apply the updated unit. The pool menu${RESET}"
-        echo -e "  ${DIM}W) Multi-region works either way — it runs as root outside the service.${RESET}"
+    # A deploy also carries what the pool box runs from a generated or installed copy: the unit and
+    # the node event recorder here, the wallet's scripts in pool_deroot above. The listener is left
+    # running, because a restart could cut across a payout. Local unit changes belong in a drop-in,
+    # so a replaced unit is saved rather than lost.
+    local unit_file="/etc/systemd/system/$POOL_SERVICE.service" unit_new unit_changed=0
+    local unit_backup="/root/$POOL_SERVICE.service.before-deploy.$(date +%Y%m%d_%H%M%S)"
+    unit_new=$(_pool_unit_text)
+    if [[ "$deroot_ok" != 1 ]]; then
+        warn "The service unit was left as it is, because it runs as grinpool. Fix the error above and deploy again."
+    elif [[ -n "$unit_new" && "$unit_new" != "$(cat "$unit_file" 2>/dev/null)" ]]; then
+        if cp -p "$unit_file" "$unit_backup" && printf '%s\n' "$unit_new" > "$unit_file.new" \
+            && mv -f "$unit_file.new" "$unit_file" && systemctl daemon-reload; then
+            info "Service unit updated. The old one is at $unit_backup"
+            unit_changed=1
+            rt_changed=1
+            _pool_restart_mark_set "$POOL_RESTART_MARK" "$POOL_SERVICE"
+        else
+            rm -f "$unit_file.new" 2>/dev/null || true
+            warn "Could not update $unit_file — the service keeps its old unit, so a hardening or"
+            warn "/etc/wireguard change in the new one does not apply. Deploy again once this is fixed."
+        fi
+    fi
+    # Only while running: gne_install turns the timer on, and an operator may have stopped it.
+    if systemctl is-enabled --quiet grin-node-events.timer 2>/dev/null \
+        && systemctl is-active --quiet grin-node-events.timer 2>/dev/null; then
+        gne_install || warn "The node event recorder was not refreshed — see the line above."
     fi
 
     # Refresh the break-glass recovery wrapper — the rsync above may have replaced
@@ -715,6 +743,9 @@ pool_deploy_code() {
                 if [[ "$groups_before" != "$groups_after" ]]; then
                     echo -e "      ${DIM}grinpool's group membership (new groups load only on restart)${RESET}"
                 fi
+                if [[ "$unit_changed" == 1 ]]; then
+                    echo -e "      ${DIM}the service unit${RESET}"
+                fi
             else
                 info "Pool runtime unchanged this run, but an earlier deploy is still not loaded"
                 echo -e "  ${DIM}(marker from $(_pool_restart_mark_age "$POOL_RESTART_MARK")).${RESET}"
@@ -726,6 +757,9 @@ pool_deploy_code() {
             else
                 _pool_restart_mark_set "$POOL_RESTART_MARK" "$POOL_SERVICE"
                 error "Restart failed — check: journalctl -u $POOL_SERVICE -n 50"
+                if [[ "$unit_changed" == 1 ]]; then
+                    error "The service unit changed in this deploy. The old one is at $unit_backup"
+                fi
                 return 1
             fi
             ;;

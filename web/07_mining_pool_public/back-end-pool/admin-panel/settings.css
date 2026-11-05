@@ -282,7 +282,7 @@
        can be a long way down the page. Its detail is a separate block that scrolls away. */
     .settings-load-failed {
       position: sticky;
-      top: calc(var(--topbar-h) + 58px);
+      top: calc(var(--topbar-h) + var(--rail-h, 58px));
       z-index: 130;
       display: flex;
       flex-wrap: wrap;
@@ -308,7 +308,7 @@
     }
     /* Tab must not land a field behind the strip. */
     html:has(.settings-load-failed) {
-      scroll-padding-top: calc(var(--topbar-h) + 58px + 6rem);
+      scroll-padding-top: calc(var(--topbar-h) + var(--rail-h, 58px) + 6rem);
     }
 
     .toast {

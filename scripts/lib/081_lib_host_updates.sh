@@ -355,7 +355,7 @@ _mdh_enable() {
     local ns=no script
     echo ""
     echo -e "  Installs each server's OS security-update service and limits it to the"
-    echo -e "  distro's ${BOLD}security channel${RESET}. Disable removes what this writes."
+    echo -e "  distro's ${BOLD}security channel${RESET}. Disable turns the schedule off and removes what this writes."
     if declare -F _hu_restart_note >/dev/null; then _hu_restart_note; fi
     echo ""
     echo -e "  ${BOLD}NodeSource (Node.js) updates — asked once for every selected server${RESET}"

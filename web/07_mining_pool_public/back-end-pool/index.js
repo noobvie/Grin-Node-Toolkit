@@ -370,6 +370,7 @@ async function initializePool() {
     });
 
     blockMonitor = new BlockMonitor(config);
+    stratumServer.setChainReader(blockMonitor.grinNode);
     blockMonitor.start();
 
     // Node availability (design §20): the pool's own 30 s node probe + the node box's recorder
@@ -683,7 +684,8 @@ async function initializePool() {
       stratumServer,
       withdrawalScheduler,
       alertDelivery,
-      nodeAvailability
+      nodeAvailability,
+      lotteryManager
     }, db);
     alertMonitor.start();
     console.log(`[${new Date().toISOString()}] Alert monitor started`);
@@ -731,6 +733,12 @@ async function initializePool() {
 
 process.on('SIGINT', () => {
   console.log(`\n[${new Date().toISOString()}] Shutting down gracefully...`);
+  process.exit(0);
+});
+
+// systemd stops and restarts with SIGTERM. stop() logs any lost submits being forgotten.
+process.on('SIGTERM', () => {
+  if (stratumServer) stratumServer.stop();
   process.exit(0);
 });
 

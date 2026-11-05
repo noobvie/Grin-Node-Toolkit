@@ -164,7 +164,7 @@ class LotteryManager {
     const periodStart = opts.periodStart || (nowSec - WEEK_SECONDS);
 
     // Commit to a seed block that does not exist yet: tip + SEED_DELAY_BLOCKS. Without a node
-    // we cannot commit to anything verifiable → abort before touching the DB.
+    // we cannot commit to a seed → abort before touching the DB.
     let tip;
     try {
       tip = await this.grinNode.getTip();
@@ -570,7 +570,9 @@ class LotteryManager {
         address: trunc(r.grin_address),
         event: r.event_name || (r.draw_type === 'special' ? 'Special' : 'Weekly'),
         pot: r.pot,
-        ticket_count: r.ticket_count,
+        // A giveaway row's count is prizes. A weekly row's is the winner's tickets, which come from
+        // their work and are not published.
+        prizes: r.pot === 'd' ? r.ticket_count : undefined,
         amount: r.amount,
         drawn_at: r.drawn_at,
         seed_height: r.seed_height,

@@ -23,6 +23,7 @@ const {
   createStatusResponse,
   shareCreditDifficulty
 } = require('./stratum-protocol');
+const LostBlockCheck = require('./lost-block-check');
 const ShareValidator = require('./shares');
 const MinerManager = require('./miners');
 // Shared with the public feeds so the journal masks addresses the same way they do —
@@ -206,6 +207,10 @@ class StratumServer {
     this.jobIdMap = new Map();
     // Set by index.js after both are constructed
     this.nodeStratumClient = null;
+    this.lostBlocks = null;
+    // Node-accepted shares the pool failed to store (not duplicates). lib/alert-monitor.js watches
+    // this: the session counters do not move for them, so miner stats look healthy meanwhile.
+    this.unrecordedShares = 0;
     // Set by index.js (setBlockManager) so found blocks are credited to the local DB.
     this.blockManager = null;
     // Host the PUBLIC listener binds. Production is all interfaces; the tests set 127.0.0.1
@@ -227,6 +232,15 @@ class StratumServer {
   // Wire the upstream node stratum client so submits can be forwarded for PoW validation.
   setNodeStratumClient(client) {
     this.nodeStratumClient = client;
+  }
+
+  // The node API, for asking the chain about submits whose reply was lost (lib/lost-block-check.js).
+  setChainReader(grinNode) {
+    this.lostBlocks = new LostBlockCheck({
+      getHeader: (height) => grinNode.getHeader(height),
+      onFound: (candidates, header) => this._reportLostBlock(candidates, header),
+      onGaveUp: (heights, why, dropped) => this._reportCheckGaveUp(heights, why, dropped),
+    });
   }
 
   // Wire the block manager so found blocks are recorded locally.
@@ -469,6 +483,7 @@ class StratumServer {
     let blocksInFlight = 0;
     for (const e of this.inflight) if (e.isBlock) blocksInFlight++;
     const inflightLeft = this.inflight.size;
+    const possibleLateBlocks = this._possibleLateBlocks();
 
     let socketsClosed = 0;
     for (const socket of [...this.sockets.keys()]) {
@@ -494,6 +509,7 @@ class StratumServer {
       settle_ms: settleMs_,
       inflight_left: inflightLeft,
       blocks_in_flight: blocksInFlight,
+      possible_late_blocks: possibleLateBlocks,
       sockets_closed: socketsClosed,
       listeners_closed: closed,
     };
@@ -936,13 +952,95 @@ class StratumServer {
   // The node reported a block for a submit the pool no longer holds, so its height, nonce and finder
   // are gone. The hash is enough for the operator to find it on chain and enter it by hand.
   reportUnmatchedBlock(hash) {
+    // The chain check may already have reported this one, with more detail.
+    if (this.lostBlocks && this.lostBlocks.reported.has(hash)) return;
     const message = `The node reported block ${hash} for a submit the pool no longer holds, so it was ` +
       'NOT recorded. Its reward will not be distributed until it is entered by hand.';
     console.error(`[CRITICAL] BLOCK NOT RECORDED: ${message}`);
-    if (this.alertMonitor && typeof this.alertMonitor.triggerAlert === 'function') {
-      Promise.resolve(this.alertMonitor.triggerAlert('block_record_failed', { level: 'critical', message, data: { hash } }))
-        .catch((e) => console.error(`[CRITICAL] and the alert failed too: ${e.message}`));
+    this._alert('block_record_failed', 'critical', message, { hash });
+  }
+
+  // Fire-and-forget: a miner's submit response must not wait on a webhook. Every one of these names
+  // its own block, so each gets its own row rather than folding into an active alert of that type.
+  _alert(type, level, message, data) {
+    if (!this.alertMonitor || typeof this.alertMonitor.triggerAlert !== 'function') return;
+    Promise.resolve(this.alertMonitor.triggerAlert(type, { level, message, data, separate: true }))
+      .catch((e) => console.error(`[CRITICAL] and the alert failed too: ${e.message}`));
+  }
+
+  // For a report whose loss cannot be recovered: throws unless the alert row was stored, so the
+  // chain check keeps the height and tries again. Also covers a boot with no alert monitor yet.
+  async _alertStored(type, level, message, data) {
+    if (!this.alertMonitor || typeof this.alertMonitor.triggerAlert !== 'function') {
+      throw new Error('the alert monitor is not running yet');
     }
+    const stored = await this.alertMonitor.triggerAlert(type, { level, message, data, separate: true });
+    if (stored === false) throw new Error('the alert was not stored');
+  }
+
+  // A timed-out submit whose blockfound arrived late.
+  recordLateBlock(candidate, hash) {
+    return this._recordFoundBlock(candidate.height, hash, candidate.nonce, candidate.miner, candidate.feePercent);
+  }
+
+  checkLostCandidates(candidates) {
+    if (this.lostBlocks) {
+      this.lostBlocks.add(candidates);
+    } else {
+      console.warn(`[stratum] ${candidates.length} unanswered submit(s) not checked: no chain reader wired`);
+    }
+  }
+
+  // The chain holds a block with a nonce this pool submitted, and the node's reply never arrived.
+  // Reported rather than credited, and the alert asks for the coinbase to be confirmed: a nonce and
+  // proof are public once a block is out, so a miner on a stalled job could have submitted a
+  // stranger's block. A repeat of a submit that WAS recorded lands here too, so that case is skipped.
+  async _reportLostBlock(candidates, header) {
+    const { height } = candidates[0];
+    const recorded = this.blockManager ? await this.blockManager.getBlockByHeight(height) : null;
+    if (recorded && recorded.hash === header.hash) return;
+    const single = candidates.length === 1 ? candidates[0] : null;
+    const finder = single
+      ? `Found by ${maskAddress(single.miner)}.`
+      : `${candidates.length} held submits could be it: the log lists them all, so match the exact nonce on chain.`;
+    const message = `Block ${height} (${header.hash}) is on chain with a nonce this pool submitted, but ` +
+      `the node's reply was lost, so it was NOT recorded. First confirm the pool wallet holds this ` +
+      `block's coinbase. If it does, the reward will not be distributed until it is entered by hand. ${finder}`;
+    console.error(`[CRITICAL] BLOCK NOT RECORDED: ${message}`);
+    for (const c of candidates) {
+      console.error(`[CRITICAL] held submit at ${height}: nonce=${c.nonce} miner=${maskAddress(c.miner)} fee=${c.feePercent}`);
+    }
+    await this._alertStored('block_record_failed', 'critical', message, {
+      height, hash: header.hash, reward: GRIN_BLOCK_REWARD,
+      nonce: single ? String(single.nonce) : null,
+      found_by: single ? single.miner : null,
+      fee_percent: single ? single.feePercent : null,
+      candidates: candidates.slice(0, 200).map((c) => ({ nonce: String(c.nonce), found_by: c.miner, fee_percent: c.feePercent })),
+    });
+  }
+
+  // One alert per run, however many heights it covers.
+  async _reportCheckGaveUp(heights, why, dropped = 0) {
+    const monitor = this.alertMonitor;
+    if (monitor && monitor.enabledAlerts && monitor.enabledAlerts.block_check_incomplete === false) return;
+    const list = heights.slice(0, 20).map((h) => h.height).join(', ') + (heights.length > 20 ? ', …' : '');
+    const submits = heights.reduce((sum, h) => sum + h.submits, 0);
+    const parts = [];
+    if (submits) {
+      parts.push(`${submits} submit(s) lost their reply and the chain could not be checked for them ` +
+        `(${why}). Compare the blocks at these heights with the pool's blocks by hand: ${list}.`);
+    }
+    if (dropped) parts.push(`${dropped} more submit(s) were not held at all, because the check was full.`);
+    const message = parts.join(' ');
+    console.error(`[stratum] ${message}`);
+    await this._alertStored('block_check_incomplete', 'warning', message, { heights: heights.slice(0, 20), submits, dropped });
+  }
+
+  // What can still turn into a block after pause has settled: timed-out submits with a late reply
+  // still possible, plus the heights waiting on the chain check.
+  _possibleLateBlocks() {
+    const client = this.nodeStratumClient;
+    return (client && client.expired ? client.expired.size : 0) + (this.lostBlocks ? this.lostBlocks.size : 0);
   }
 
   // Record a block the node has accepted. Never throws: every failure ends in a CRITICAL log and an
@@ -976,21 +1074,12 @@ class StratumServer {
           `block but the pool database did not store it, so its reward will never mature, ` +
           `distribute or reconcile. RECORD THESE VALUES: they are the only copy outside the chain.`
         );
-        // Fire-and-forget: the miner's submit response must not wait on a webhook. The
-        // alert carries every field needed to re-enter the block by hand.
-        if (this.alertMonitor && typeof this.alertMonitor.triggerAlert === 'function') {
-          Promise.resolve(this.alertMonitor.triggerAlert('block_record_failed', {
-            level: 'critical',
-            message:
-              `Block ${height} (${hash}) was accepted by the node but could NOT be ` +
-              `written to pool.db: ${reason}. Its reward will never be distributed until it is ` +
-              `re-entered by hand. Found by ${miner}.`,
-            data: {
-              height, hash: hash, nonce: String(nonce),
-              found_by: miner, reward: GRIN_BLOCK_REWARD, error: reason,
-            },
-          })).catch((e) => console.error(`[CRITICAL] and the alert failed too: ${e.message}`));
-        }
+        // The alert carries every field needed to re-enter the block by hand.
+        this._alert('block_record_failed', 'critical',
+          `Block ${height} (${hash}) was accepted by the node but could NOT be ` +
+          `written to pool.db: ${reason}. Its reward will never be distributed until it is ` +
+          `re-entered by hand. Found by ${miner}.`,
+          { height, hash, nonce: String(nonce), found_by: miner, reward: GRIN_BLOCK_REWARD, error: reason });
       }
     }
   }
@@ -1117,7 +1206,7 @@ class StratumServer {
         nodeResult = await this.nodeStratumClient.forwardSubmit({
           edge_bits, height, job_id: nodeJobId, nonce, pow
         }, {
-          onLateBlock: (hash) => this._recordFoundBlock(height, hash, nonce, session.grinAddress, feePercentAtSubmit),
+          candidate: { height, nonce, pow, miner: session.grinAddress, feePercent: feePercentAtSubmit },
         });
         if (!nodeResult.accepted) {
           this._stat(sessionId, 'rejected');
@@ -1146,6 +1235,8 @@ class StratumServer {
         // so it is recorded whatever became of the share.
         this._warnThrottled(session, 'unrecorded',
           (n) => `[${new Date().toISOString()}] Share not recorded: ${result.error}` + (n ? ` [+${n} suppressed]` : ''));
+        const duplicate = /UNIQUE/i.test(result.error || '');
+        if (!duplicate) this.unrecordedShares += 1;
         if (nodeResult.blockHash) {
           inflightEntry.isBlock = true;
           await this._recordFoundBlock(height, nodeResult.blockHash, nonce, session.grinAddress, feePercentAtSubmit);
@@ -1154,7 +1245,7 @@ class StratumServer {
         }
         // A repeat counts towards the reject ceiling, because each one costs the node a check. A
         // database fault is the pool's, and must not walk an honest rig towards a disconnect.
-        if (/UNIQUE/i.test(result.error || '')) {
+        if (duplicate) {
           this._stat(sessionId, 'rejected');
           if (this._rejectCeilingHit(socket, session)) return;
           socket.write(JSON.stringify(createSubmitResponse(id, false, null, 'Duplicate share')) + '\n');
@@ -1319,6 +1410,9 @@ class StratumServer {
     // the same process is refused as already-bound by the idempotency check (audit §J6-12).
     this._closeAllListeners();
     if (this._pruneTimer) { clearInterval(this._pruneTimer); this._pruneTimer = null; }
+    if (this.lostBlocks) this.lostBlocks.stop();
+    const held = this._possibleLateBlocks();
+    if (held) console.warn(`[stratum] stopping with ${held} lost submit(s) or height(s) unchecked: they are forgotten`);
   }
 
   getStats() {

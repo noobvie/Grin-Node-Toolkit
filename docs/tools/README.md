@@ -11,6 +11,9 @@ server.
 | [check_comments.js](check_comments.js) | Code → doc twin: `scan` flags plan tags, diary dates, dead paths/`§` pointers, stale terms, commented-out code in comments; `diffgate` fails if a change touched anything but comments; `--map` rewrites `§` pointers from a section map |
 | [comment_stale_terms.txt](comment_stale_terms.txt) | Stale-term CANDIDATES for `scan` (`regex => reason`) — confirm in code before acting |
 | [comment_allowlist.txt](comment_allowlist.txt) | Confirmed-legitimate `scan` hits, `file-glob:regex CLASS reason` (reason mandatory) |
+| [check_autostart_heal.sh](check_autostart_heal.sh) | Test of `gnc_autostart_heal_owner_chown` against a stubbed crontab: both old `@reboot` shapes, lines it must leave alone, backup, no-op re-run |
+| [check_pool_paths.sh](check_pool_paths.sh) | Test of `_pw_safe_path`: what a grinpool-owned `pool.json` must never get root to act on |
+| [check_wallet_scripts.sh](check_wallet_scripts.sh) | Test of `pw_refresh_scripts` against the real lib on a temp box in the older layout: scripts moved, crontab followed by tag, a failed write changes nothing |
 | [check_prompt_back.sh](check_prompt_back.sh) | Code check: every interactive `read` prompt in Script 01 handles `0` (back / no) |
 
 ---

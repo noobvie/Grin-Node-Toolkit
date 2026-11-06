@@ -189,7 +189,8 @@ addresses are rejected at the door).
   wallet dir, so `grin_drop_<net>.conf` is still consulted for that one case.
 - **Zero matches prints what is missing**, names the exact requirement, states
   that a `grin-wallet listen` wallet can never qualify (no Owner API ⇒ no send),
-  and points at hub 05 → CMD Wallet Quick Setup → Listener mode `owner_api`.
+  and points at hub 05 → CMD Wallet Quick Setup → a network → Add or Configure →
+  Listener mode `owner_api`.
 - Scan root is `TRP_WALLET_SCAN_ROOT` (default `/opt/grin`) purely so the
   matcher can be exercised against a fixture tree off-box.
 

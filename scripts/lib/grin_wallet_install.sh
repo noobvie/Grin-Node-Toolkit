@@ -772,7 +772,7 @@ gwi_update_screen() {
                 else
                     info "The binary in place now is snapshotted first, so this stays undoable."
                 fi
-                echo -ne "  Type the tag '$latest' to confirm: "
+                echo -ne "  Type the tag '$latest' to confirm (0 cancel): "
                 local typed; read -r typed || true
                 if [[ "$typed" != "$latest" ]]; then
                     info "Cancelled — nothing was changed."; _gwi_pause; continue
@@ -783,7 +783,7 @@ gwi_update_screen() {
                 _gwi_pause ;;
             3)  if [[ -z "$prev" ]]; then warn "No rollback target."; sleep 1; continue; fi
                 echo ""
-                echo -ne "  Roll back to $prev? [y/N]: "
+                echo -ne "  Roll back to $prev? [y/N/0 cancel]: "
                 local ryn; read -r ryn || true
                 if [[ "${ryn,,}" == "y" ]]; then
                     if gwi_rollback "$dest" "$prev"; then

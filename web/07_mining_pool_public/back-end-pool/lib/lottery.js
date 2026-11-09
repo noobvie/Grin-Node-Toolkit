@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { getDb } = require('./db');
 const IncentivesManager = require('./incentives');
+const DailyGiveaway = require('./daily-giveaway');
 
 const flag = (v) => v === true || v === 'true';
 const SECONDS_PER_DAY = 86400;
@@ -12,9 +13,9 @@ const WEEK_SECONDS = 7 * SECONDS_PER_DAY;
 // lands there, short enough that the hourly scheduler reveals on its next tick.
 const SEED_DELAY_BLOCKS = 10;
 
-// Weekly + special-occasion lottery. Draws are publicly verifiable: the winner is selected
-// deterministically from a node block hash (seed_hash) captured at draw time, so anyone can
-// recompute the result from the seed + the public share data. Prizes are paid out of the
+// Weekly + special-occasion lottery. The winner is selected deterministically from a node block
+// hash (seed_hash), so it cannot be picked by hand once the entries are frozen. Anyone can look up
+// that block, but entry lists are not published, so outsiders cannot recompute a draw. Prizes are paid out of the
 // prize_pool bucket managed by IncentivesManager.
 class LotteryManager {
   constructor(config, grinNode) {
@@ -22,6 +23,7 @@ class LotteryManager {
     this.db = getDb();
     this.grinNode = grinNode;
     this.incentives = new IncentivesManager(config);
+    this.daily = new DailyGiveaway(this.db, this.incentives, grinNode, LotteryManager, SEED_DELAY_BLOCKS);
   }
 
   settingsView() {
@@ -73,11 +75,12 @@ class LotteryManager {
   }
 
   // Pot A ticket weights from entries, with an optional whale cap: no single address's tickets
-  // may exceed maxPct% of the total work. Capping (rather than a concave weight) bounds whales
-  // without rewarding address-splitting. maxPct 0/NULL = uncapped. Tickets are rounded to keep
-  // pickWeighted's integer seed math stable. NOTE: this is a single-pass cap against the ORIGINAL
-  // total — a capped whale's EFFECTIVE odds can still edge above maxPct% once other entries shrink
-  // the pool. It meaningfully bounds whales; it is not a hard probabilistic guarantee.
+  // may exceed maxPct% of the total work. maxPct 0/NULL = uncapped. Tickets are rounded to keep
+  // pickWeighted's integer seed math stable.
+  // The cap is one pass against the ORIGINAL total and per ADDRESS, so it limits neither a miner's
+  // odds nor the gain from splitting. Capping shrinks the pool: at a 25% cap, a miner with 90% of
+  // the work still holds 71% of the tickets. And splitting pays: at a 25% cap, half the work split
+  // over 10 addresses takes 66.6% of the prizes. Which is why the daily giveaway has no cap.
   static buildWeightedTickets(entries, maxPct) {
     const total = entries.reduce((s, e) => s + e.work, 0);
     const cap = maxPct > 0 && total > 0 ? total * (maxPct / 100) : Infinity;
@@ -85,6 +88,16 @@ class LotteryManager {
       address: e.address,
       tickets: Math.max(1, Math.round(Math.min(e.work, cap))),
     }));
+  }
+
+  // Lifetime draw wins for one address. A giveaway row can hold several prizes, in ticket_count;
+  // weekly rows use that column for tickets, so each of those is one win.
+  static prizeTotals(db, address) {
+    return db.prepare(`
+      SELECT COALESCE(SUM(CASE WHEN pot = 'd' THEN ticket_count ELSE 1 END), 0) AS count,
+             COALESCE(SUM(amount), 0) AS total_grin
+      FROM lottery_winners WHERE grin_address = ?
+    `).get(address);
   }
 
   lastDrawOfType(type) {
@@ -151,7 +164,7 @@ class LotteryManager {
     const periodStart = opts.periodStart || (nowSec - WEEK_SECONDS);
 
     // Commit to a seed block that does not exist yet: tip + SEED_DELAY_BLOCKS. Without a node
-    // we cannot commit to anything verifiable → abort before touching the DB.
+    // we cannot commit to a seed → abort before touching the DB.
     let tip;
     try {
       tip = await this.grinNode.getTip();
@@ -263,6 +276,9 @@ class LotteryManager {
     }
     if (!header || !header.hash) return null;
 
+    // The giveaway shares this reveal but rolls its own amount and prize count from the hash.
+    if (draw.draw_type === 'daily') return this.daily.settle(draw, header);
+
     // Read the snapshot back in the committed order — pickWeighted walks the array in order,
     // so this ORDER BY is part of the algorithm, not a cosmetic detail.
     const rows = this.db.prepare(
@@ -359,9 +375,17 @@ class LotteryManager {
     return out;
   }
 
-  // Run every due weekly/special draw — called by the hourly scheduler job in index.js.
+  // Run the daily giveaway commit, then every due weekly/special draw — called by the hourly
+  // scheduler job in index.js.
   async runDueDraws() {
     const out = [];
+    // First and on its own: a weekly draw that keeps throwing must not cost a giveaway day.
+    try {
+      const daily = await this.daily.runDue();
+      if (daily) out.push(daily);
+    } catch (err) {
+      console.error(`[Daily giveaway] scheduler tick failed: ${err.message}`);
+    }
     for (const d of this.dueDraws()) {
       out.push(await this.runDraw(d.type, { eventName: d.event_name, potGrinOverride: d.pot_grin || 0 }));
     }
@@ -518,14 +542,17 @@ class LotteryManager {
   }
 
   // Recent draws + their winners, for the admin panel and public payload.
-  recentDraws(limit = 10) {
-    const draws = this.db.prepare('SELECT * FROM lottery_draws ORDER BY created_at DESC LIMIT ?').all(limit);
+  // paidOnly skips draws with no winners, which would otherwise take the slots of ones that paid.
+  recentDraws(limit = 10, { paidOnly = false } = {}) {
+    const draws = this.db.prepare(
+      `SELECT * FROM lottery_draws ${paidOnly ? "WHERE status = 'paid'" : ''} ORDER BY created_at DESC LIMIT ?`
+    ).all(limit);
     const winStmt = this.db.prepare('SELECT grin_address, pot, ticket_count, amount FROM lottery_winners WHERE draw_id = ?');
     return draws.map((d) => ({ ...d, winners: winStmt.all(d.id) }));
   }
 
   // Public fortune board: paginated winner history (winner + amount + date + seed for audit).
-  // Returns truncated addresses; the seed_hash lets anyone verify the draw was fair.
+  // Returns truncated addresses; the seed_hash lets anyone look up the seed block.
   winnerHistory(limit = 25, offset = 0) {
     const rows = this.db.prepare(`
       SELECT w.grin_address, w.pot, w.ticket_count, w.amount,
@@ -543,7 +570,9 @@ class LotteryManager {
         address: trunc(r.grin_address),
         event: r.event_name || (r.draw_type === 'special' ? 'Special' : 'Weekly'),
         pot: r.pot,
-        ticket_count: r.ticket_count,
+        // A giveaway row's count is prizes. A weekly row's is the winner's tickets, which come from
+        // their work and are not published.
+        prizes: r.pot === 'd' ? r.ticket_count : undefined,
         amount: r.amount,
         drawn_at: r.drawn_at,
         seed_height: r.seed_height,
@@ -555,7 +584,8 @@ class LotteryManager {
   // Aggregate winner stats for the public fortune-board charts + headline tiles. Server-side
   // so the figures cover ALL history (the paginated winnerHistory only reflects loaded pages).
   //   total_prizes_grin / total_winners / unique_winners / total_draws — headline placard
-  //   by_pot   — Pot A (share-weighted) vs Pot B (equal-chance) GRIN + winner counts (doughnut)
+  //   by_pot   — Pot A (share-weighted), Pot B (equal-chance) and d (daily giveaway) GRIN +
+  //              winner counts (doughnut)
   //   monthly  — GRIN paid + winner count per calendar month, UTC (bar chart), oldest→newest
   stats() {
     const totals = this.db.prepare(`
@@ -564,7 +594,9 @@ class LotteryManager {
              COALESCE(SUM(amount), 0) AS total_grin
       FROM lottery_winners
     `).get();
-    const totalDraws = this.db.prepare('SELECT COUNT(*) AS c FROM lottery_draws').get().c;
+    // Only draws that reached a result: not one still waiting for its seed block, and not a
+    // giveaway day nobody qualified for.
+    const totalDraws = this.db.prepare("SELECT COUNT(*) AS c FROM lottery_draws WHERE status IN ('paid', 'drawn')").get().c;
     const byPot = this.db.prepare(`
       SELECT pot, COUNT(*) AS count, COALESCE(SUM(amount), 0) AS amount
       FROM lottery_winners GROUP BY pot
@@ -600,6 +632,7 @@ class LotteryManager {
       by_pot: byPot.map((r) => ({ pot: r.pot, count: r.count, amount: r.amount })),
       by_event: byEvent.map((r) => ({ event: r.event, count: r.count, amount: r.amount })),
       monthly: monthly.map((r) => ({ month: r.month, ts: r.ts, count: r.count, amount: r.amount })),
+      daily_giveaway: this.daily.publicRules(),
     };
   }
 

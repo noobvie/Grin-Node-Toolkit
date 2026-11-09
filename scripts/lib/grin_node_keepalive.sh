@@ -101,6 +101,7 @@ gnk_autostart_enable() {
     # conf-resolved dir + canonical (underscore) session name.
     # Runs as the grin user via su (same contract as Script 01 / gnc_start_node_tmux):
     #  - chown first reclaims any root-owned leftovers from an earlier root-run start.
+    #    Owner only, so the API secrets keep the group the de-rooted pool reads them through.
     #  - HOME=$dir gives grin a writable home (it creates .grin/<chain> even with a cwd
     #    config); without it grin EACCES-panics on the root-owned /opt/grin/.grin.
     #  - SHELL=/bin/bash is mandatory for cron-launched tmux (cron sets SHELL=/bin/sh).
@@ -108,7 +109,7 @@ gnk_autostart_enable() {
     #    exit-code capture + a `read` tail, so a crash after a reboot keeps its panic.
     local run_cmd
     run_cmd=$(_gnc_node_run_cmd "$dir" "$binary" cron)
-    line="@reboot sleep $delay && chown -R grin:grin '$dir' 2>/dev/null; su -s /bin/bash grin -c \"cd '$dir' && env HOME='$dir' SHELL=/bin/bash tmux new-session -d -s $sess '$run_cmd'\" $tag"
+    line="@reboot sleep $delay && chown -R grin '$dir' 2>/dev/null; su -s /bin/bash grin -c \"cd '$dir' && env HOME='$dir' SHELL=/bin/bash tmux new-session -d -s $sess '$run_cmd'\" $tag"
 
     cron=$(crontab -l 2>/dev/null || true)
     if echo "$cron" | grep -qF "$tag"; then

@@ -54,8 +54,16 @@ LEGACY_DROPIN="$DROPIN_DIR/99-grin-hardening.conf"
 DISABLED_MARK="#GRIN-DISABLED# "
 AUTH_KEYS="/root/.ssh/authorized_keys"
 POLICY_CONF="$CONF_DIR/ssh_hardening_policy.conf"
+POLICY_STASH="$CONF_DIR/ssh_hardening_policy.stash"
+# Dead-man timer. The marker file is what "a change awaits confirmation" means;
+# everything else serves it (see the "Dead-man safety timer" section).
+AUTOREVERT_STATE="$CONF_DIR/ssh_autorevert.pending"
+AUTOREVERT_POLICY_PREV="$CONF_DIR/ssh_autorevert.policy_prev"
 AUTOREVERT_PID="$CONF_DIR/ssh_autorevert.pid"
 AUTOREVERT_SH="$CONF_DIR/ssh_autorevert.sh"
+AUTOREVERT_LOCK="$CONF_DIR/ssh_autorevert.lock"
+AUTOREVERT_UNIT="grin-ssh-autorevert.service"
+AUTOREVERT_UNIT_FILE="/etc/systemd/system/$AUTOREVERT_UNIT"
 MARK_BEGIN="# >>> grin-toolkit ssh hardening >>>"
 MARK_END="# <<< grin-toolkit ssh hardening <<<"
 mkdir -p "$LOG_DIR" "$CONF_DIR" "$BACKUP_DIR"
@@ -184,15 +192,44 @@ _ssh_policy_get() {
 }
 _ssh_policy_set() {
     local user="$1" rootlogin="$2"
-    cat > "$POLICY_CONF" <<EOF
+    cat > "$POLICY_CONF" <<EOF || { error "Cannot write $POLICY_CONF"; return 1; }
 # Managed by Grin Node Toolkit (085_ssh_hardening.sh).
 # Consumed by _ssh_apply_hardening to build the sshd drop-in. Editing this file
 # changes nothing until hardening is re-applied.
 ADMIN_USER=$user
 ROOT_LOGIN=$rootlogin
 EOF
-    chmod 600 "$POLICY_CONF"
+    chmod 600 "$POLICY_CONF" || { error "Cannot chmod $POLICY_CONF"; return 1; }
     log "Policy set: ADMIN_USER=$user ROOT_LOGIN=$rootlogin"
+}
+
+# The guided setup replaces the policy only for a change that ends up applied.
+# It stashes the current file first; a run that does not end applied puts it
+# back (unstash), and a run armed with a safety timer hands the stash to the
+# timer so the undo restores it too. No stash file = there was no policy.
+_ssh_policy_stash() {
+    rm -f "$POLICY_STASH" || { error "Cannot remove $POLICY_STASH"; return 1; }
+    if [[ -f "$POLICY_CONF" ]]; then
+        cp -a "$POLICY_CONF" "$POLICY_STASH" || { error "Cannot stash $POLICY_CONF"; return 1; }
+    fi
+    return 0
+}
+# Every saved policy copy uses "absent = there was no policy", so handing one
+# on is the same move everywhere: src replaces dest, or dest goes when src is
+# absent. Used for stash → policy, stash → timer, and timer → stash/policy.
+_ssh_policy_move() {
+    local src="$1" dest="$2"
+    if [[ -f "$src" ]]; then
+        mv -f "$src" "$dest" || { error "Cannot move $src to $dest"; return 1; }
+    else
+        rm -f "$dest" || { error "Cannot remove $dest"; return 1; }
+    fi
+    return 0
+}
+_ssh_policy_unstash() {
+    _ssh_policy_move "$POLICY_STASH" "$POLICY_CONF" || return 1
+    log "Policy restored to its state before this run"
+    return 0
 }
 
 # =============================================================================
@@ -949,42 +986,444 @@ _ssh_revert_hardening() {
 # =============================================================================
 # Dead-man safety timer
 # =============================================================================
-_ssh_autorevert_active() {
-    [[ -f "$AUTOREVERT_PID" ]] && kill -0 "$(cat "$AUTOREVERT_PID" 2>/dev/null)" 2>/dev/null
+# An armed timer is two independent safety nets around ONE persistent marker,
+# $AUTOREVERT_STATE:
+#   · a countdown — a transient systemd timer (systemd-run), or a nohup sleep
+#     on a host without systemd — that runs $AUTOREVERT_SH when it expires;
+#   · a boot guard — the persistent $AUTOREVERT_UNIT, which runs the same
+#     script at boot while the marker exists.
+# A countdown of either kind dies with a reboot; the boot guard is what makes a
+# reboot inside the window safe. A reboot before the operator confirmed counts
+# as "not confirmed", so the change is undone at boot whatever the deadline.
+# The script does nothing once the marker is gone, so confirming (option 5)
+# only has to delete the marker to disarm both nets; stopping the timer and
+# disabling the guard is tidying up.
+#
+# Life of one change:
+#   supersede  take over an earlier unconfirmed change (see below)
+#   arm        script + marker + boot guard, BEFORE sshd is touched, so a
+#              reboot at any point after the apply starts is covered
+#   (apply + verify; a session that dies here starts the countdown on exit)
+#   start      the countdown, once the change is verified; it carries the
+#              marker's ID, so a stale countdown cannot act on a newer arming
+#   cancel     confirmed: delete the marker            (option 5)
+#   abort      failed before start: put the policy back and delete the marker
+#
+# A guided-setup run sets POLICY_RESTORE=1 and hands the undo the policy file
+# it replaced ($AUTOREVERT_POLICY_PREV; absent = there was none). An earlier
+# change that is still unconfirmed is never just cancelled by a new run: its
+# saved policy is carried into the new run, because undoing the new change
+# removes the earlier one too and must restore the policy from before BOTH.
+#
+# The undo script and every disarm path share a flock on $AUTOREVERT_LOCK, so a
+# cancel can never report success for an undo that was already running. Hosts
+# without flock skip the lock.
+# =============================================================================
+_SSH_SUPERSEDED="none"      # none | plain | policy — set by _ssh_autorevert_supersede
+_SSH_ARMED_THIS_RUN=0       # 1 once this run's _ssh_autorevert_arm succeeded
+
+_ssh_have_systemd() {
+    command -v systemctl >/dev/null 2>&1 && command -v systemd-run >/dev/null 2>&1 \
+        && [[ -d /run/systemd/system ]]
 }
 
-_ssh_schedule_autorevert() {
-    local mins="$1"
-    # Standalone by design: this must undo the change with no help from the
-    # toolkit, so it repeats the removal inline rather than sourcing anything.
-    # It has to undo ALL THREE parts of an apply — our drop-in, the in-place
-    # marked block, and any directive we parked in another file — or the
-    # "passwords come back on their own" promise is false.
-    cat > "$AUTOREVERT_SH" <<EOF
+_ssh_autorevert_state_get() {
+    [[ -r "$AUTOREVERT_STATE" ]] || return 1
+    sed -n "s/^$1=//p" "$AUTOREVERT_STATE" 2>/dev/null | head -1
+}
+
+# A change is waiting for confirmation (whether or not its countdown still runs).
+_ssh_autorevert_pending() {
+    [[ -f "$AUTOREVERT_STATE" ]]
+}
+
+# The countdown is really running. The pid file alone also covers a timer
+# armed by an older toolkit, which wrote no marker.
+_ssh_autorevert_active() {
+    local unit pid
+    unit="$(_ssh_autorevert_state_get UNIT || true)"
+    if [[ -n "$unit" ]] && command -v systemctl >/dev/null 2>&1 \
+        && systemctl is-active --quiet "$unit.timer" 2>/dev/null; then
+        return 0
+    fi
+    pid="$(cat "$AUTOREVERT_PID" 2>/dev/null || true)"
+    [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+# Is the boot guard installed and enabled?
+_ssh_autorevert_boot_guarded() {
+    command -v systemctl >/dev/null 2>&1 \
+        && systemctl is-enabled --quiet "$AUTOREVERT_UNIT" 2>/dev/null
+}
+
+# Hold the shared lock on fd 8. Returns 1 only when the lock is busy for a
+# minute (an undo that does not finish); no flock = no lock, return 0.
+# Release with _ssh_autorevert_unlock before starting any long-lived process,
+# which would inherit fd 8 and keep the lock held.
+_ssh_autorevert_lock() {
+    command -v flock >/dev/null 2>&1 || return 0
+    exec 8>"$AUTOREVERT_LOCK" || return 0
+    if ! flock -w 60 8; then
+        exec 8>&-
+        error "The safety-timer lock is busy (an undo may be running) — try again in a minute."
+        return 1
+    fi
+    return 0
+}
+_ssh_autorevert_unlock() {
+    command -v flock >/dev/null 2>&1 || return 0
+    exec 8>&-
+    return 0
+}
+
+# Write the standalone undo script. Standalone by design: it must undo the
+# change with no help from the toolkit, so it repeats the removal inline rather
+# than sourcing anything. It undoes ALL THREE parts of an apply — our drop-in,
+# the in-place marked block, and any directive we parked in another file — or
+# the "passwords come back on their own" promise is false. Written to a temp
+# file and renamed: a countdown armed by an older toolkit may still be reading
+# the old file, and bash reads a script as it runs.
+# At boot it runs before basic.target (see _ssh_install_boot_guard), so it uses
+# only coreutils/sed/grep/flock/systemctl. The unit is ordered after the journal
+# socket, and the message also goes to stdout in case logger fails.
+_ssh_write_autorevert_script() {
+    local tmp="$AUTOREVERT_SH.tmp.$$"
+    cat > "$tmp" <<EOF || { error "Cannot write $tmp"; rm -f "$tmp"; return 1; }
 #!/bin/bash
-sleep $((mins * 60))
+# Grin Node Toolkit (085_ssh_hardening.sh) — SSH hardening auto-undo.
+# Run as "\$0 <ID>" by the countdown timer, or "\$0 boot" by $AUTOREVERT_UNIT.
+# It acts only while $AUTOREVERT_STATE exists: confirming deletes that file, so a
+# confirmed change is never undone.
+STATE="$AUTOREVERT_STATE"
+ARG="\${1:-}"
+# Held for the whole run, so the toolkit's cancel waits for an undo in progress
+# and then sees the marker gone. Without flock the undo runs unlocked.
+if command -v flock >/dev/null 2>&1 && exec 9>"$AUTOREVERT_LOCK"; then
+    flock -w 120 9
+fi
+[ -f "\$STATE" ] || exit 0
+# A countdown acts only on the arming it was started for: one from an earlier
+# arming that wakes late must not undo (or take the policy of) a newer change.
+# Any boot before confirmation undoes whatever is armed.
+ID="\$(sed -n 's/^ID=//p' "\$STATE" | head -1)"
+if [ "\$ARG" != "boot" ] && { [ -z "\$ID" ] || [ "\$ARG" != "\$ID" ]; }; then
+    exit 0
+fi
+UNIT="\$(sed -n 's/^UNIT=//p' "\$STATE" | head -1)"
 rm -f "$HARDENING_DROPIN" "$LEGACY_DROPIN" 2>/dev/null
 sed -i "/$MARK_BEGIN/,/$MARK_END/d" "$SSHD_CONFIG" 2>/dev/null
 for f in "$SSHD_CONFIG" "$DROPIN_DIR"/*.conf; do
     [ -f "\$f" ] || continue
     sed -i "s|^${DISABLED_MARK}||" "\$f" 2>/dev/null
 done
-if sshd -t 2>/dev/null; then
-    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || service ssh reload 2>/dev/null || service sshd reload 2>/dev/null
+# A guided-setup run puts back the policy it replaced, so option 4 cannot
+# re-apply the policy this undo just took away.
+if grep -qx 'POLICY_RESTORE=1' "\$STATE"; then
+    if [ -f "$AUTOREVERT_POLICY_PREV" ]; then
+        mv -f "$AUTOREVERT_POLICY_PREV" "$POLICY_CONF" 2>/dev/null
+    else
+        rm -f "$POLICY_CONF" 2>/dev/null
+    fi
 fi
-rm -f "$AUTOREVERT_PID" "$AUTOREVERT_SH" 2>/dev/null
+rm -f "$AUTOREVERT_POLICY_PREV" 2>/dev/null
+# Only a RUNNING daemon is validated and reloaded. At boot this runs before
+# sshd starts (and before /run/sshd exists, which makes \`sshd -t\` fail on
+# Debian/Ubuntu); sshd then simply starts from the restored files.
+running=""
+if command -v systemctl >/dev/null 2>&1; then
+    for u in ssh sshd; do
+        if systemctl is-active --quiet "\$u" 2>/dev/null; then running="\$u"; break; fi
+    done
+elif pgrep -x sshd >/dev/null 2>&1; then
+    running="service"
+fi
+if [ -z "\$running" ]; then
+    msg="unconfirmed SSH hardening undone: sshd starts with password login restored"
+elif sshd -t 2>/dev/null; then
+    if [ "\$running" = "service" ]; then
+        service ssh reload 2>/dev/null || service sshd reload 2>/dev/null
+    else
+        systemctl reload "\$running" 2>/dev/null
+    fi
+    msg="unconfirmed SSH hardening undone: password login restored"
+else
+    msg="unconfirmed SSH hardening undone, but sshd -t FAILS: fix the sshd config from the provider console"
+fi
+rm -f "\$STATE" "$AUTOREVERT_PID" 2>/dev/null
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl disable --no-reload "$AUTOREVERT_UNIT" >/dev/null 2>&1
+    [ -n "\$UNIT" ] && systemctl stop "\$UNIT.timer" >/dev/null 2>&1
+fi
+# stdout reaches the journal under systemd even when logger cannot (early boot).
+echo "grin-ssh-autorevert: \$msg"
+command -v logger >/dev/null 2>&1 && logger -t grin-ssh-autorevert "\$msg" 2>/dev/null
+exit 0
 EOF
-    chmod +x "$AUTOREVERT_SH"
-    nohup bash "$AUTOREVERT_SH" >/dev/null 2>&1 &
-    echo $! > "$AUTOREVERT_PID"
-    log "Scheduled auto-revert in $mins min (pid $(cat "$AUTOREVERT_PID"))"
+    chmod 700 "$tmp" || { error "Cannot chmod $tmp"; rm -f "$tmp"; return 1; }
+    mv -f "$tmp" "$AUTOREVERT_SH" || { error "Cannot move $tmp to $AUTOREVERT_SH"; rm -f "$tmp"; return 1; }
+    return 0
 }
 
-_ssh_cancel_autorevert() {
-    if _ssh_autorevert_active; then
-        kill "$(cat "$AUTOREVERT_PID" 2>/dev/null)" 2>/dev/null || true
+# Install + enable the boot guard. Returns 1 when it could not be installed;
+# the caller still has a countdown but must warn about the reboot gap.
+# DefaultDependencies=no is required, not cosmetic: the default After=basic.target
+# plus Before=ssh.socket is an ordering cycle (ssh.socket is Before=sockets.target,
+# which basic.target is After), and systemd breaks a cycle by dropping a job —
+# the guard (nothing reverts) or ssh.socket (nothing listens). Ordering before
+# sockets.target covers socket-activated sshd (Ubuntu 22.10+) as well.
+# After=systemd-journald.socket is cycle-free here (that socket is itself
+# DefaultDependencies=no and Before=sockets.target) and gives logger a journal.
+_ssh_install_boot_guard() {
+    _ssh_have_systemd || return 1
+    cat > "$AUTOREVERT_UNIT_FILE" <<EOF || { error "Cannot write $AUTOREVERT_UNIT_FILE"; return 1; }
+# Managed by Grin Node Toolkit (085_ssh_hardening.sh) — do not edit by hand.
+# Undoes SSH hardening that was applied with a safety timer and never confirmed
+# when the box reboots inside the timer window. Inert unless the marker exists.
+[Unit]
+Description=Grin Node Toolkit: undo unconfirmed SSH hardening at boot
+ConditionPathExists=$AUTOREVERT_STATE
+DefaultDependencies=no
+RequiresMountsFor=$CONF_DIR
+After=local-fs.target systemd-journald.socket
+Before=sockets.target ssh.socket ssh.service sshd.service shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash $AUTOREVERT_SH boot
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload >/dev/null 2>&1 || { error "systemctl daemon-reload failed"; return 1; }
+    systemctl enable "$AUTOREVERT_UNIT" >/dev/null 2>&1 \
+        || { error "Cannot enable $AUTOREVERT_UNIT"; return 1; }
+    return 0
+}
+
+# Delete the marker and stop everything that serves it. Caller holds the lock.
+# Returns 0 when something was disarmed, 2 when nothing was armed (or an undo
+# got there first), 1 when the marker could not be deleted.
+_ssh_autorevert_disarm_locked() {
+    local unit pid had=0
+    unit="$(_ssh_autorevert_state_get UNIT || true)"
+    pid="$(cat "$AUTOREVERT_PID" 2>/dev/null || true)"
+    if [[ -e "$AUTOREVERT_STATE" ]]; then
+        rm -f "$AUTOREVERT_STATE" || { error "Cannot delete $AUTOREVERT_STATE — the timer is still armed"; return 1; }
+        had=1
     fi
-    rm -f "$AUTOREVERT_PID" "$AUTOREVERT_SH" 2>/dev/null || true
+    if command -v systemctl >/dev/null 2>&1; then
+        if [[ -n "$unit" ]]; then
+            systemctl stop "$unit.timer" >/dev/null 2>&1 || true
+            systemctl reset-failed "$unit.timer" "$unit.service" >/dev/null 2>&1 || true
+        fi
+        systemctl disable "$AUTOREVERT_UNIT" >/dev/null 2>&1 || true
+    fi
+    # The nohup countdown, and one armed by an older toolkit (which has no
+    # marker to check), are stopped by pid. KILL, because a countdown started
+    # from the armed-window handler inherits "ignore TERM", and bash cannot
+    # un-ignore a signal that was ignored when it started.
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        kill -KILL "$pid" 2>/dev/null || true
+        had=1
+    fi
+    rm -f "$AUTOREVERT_PID" "$AUTOREVERT_SH" "$AUTOREVERT_POLICY_PREV" 2>/dev/null || true
+    if [[ $had -eq 1 ]]; then return 0; fi
+    return 2
+}
+
+# Confirmed: disarm. Returns 0 disarmed, 2 nothing was armed (an undo may have
+# run just before), 1 still armed.
+_ssh_cancel_autorevert() {
+    local rc=0
+    _ssh_autorevert_lock || return 1
+    _ssh_autorevert_disarm_locked || rc=$?
+    _ssh_autorevert_unlock
+    return $rc
+}
+
+# Take over an earlier unconfirmed change before a new one is applied, so its
+# countdown cannot fire in the middle of the new apply. Sets _SSH_SUPERSEDED:
+#   none    nothing was pending
+#   plain   a change was pending; it stays in place with its timer stopped, so
+#           the caller must re-arm or undo it
+#   policy  same, and it carried a policy restore: its saved policy moves to
+#           $POLICY_STASH (absent = there was none), for the caller to carry on
+# Returns 1 (nothing changed) if the lock or the stash move failed.
+_ssh_autorevert_supersede() {
+    local rc=0
+    _SSH_SUPERSEDED="none"
+    _SSH_ARMED_THIS_RUN=0
+    _ssh_autorevert_lock || return 1
+    if _ssh_autorevert_pending && grep -qx 'POLICY_RESTORE=1' "$AUTOREVERT_STATE" 2>/dev/null; then
+        _ssh_policy_move "$AUTOREVERT_POLICY_PREV" "$POLICY_STASH" || { _ssh_autorevert_unlock; return 1; }
+        _SSH_SUPERSEDED="policy"
+    fi
+    _ssh_autorevert_disarm_locked || rc=$?
+    _ssh_autorevert_unlock
+    case "$rc" in
+        0) [[ "$_SSH_SUPERSEDED" == "none" ]] && _SSH_SUPERSEDED="plain"
+           info "An earlier unconfirmed change was pending — this run takes it over (its timer is stopped)." ;;
+        2) _SSH_SUPERSEDED="none" ;;
+        *) if [[ "$_SSH_SUPERSEDED" == "policy" && -f "$POLICY_STASH" ]]; then
+               mv -f "$POLICY_STASH" "$AUTOREVERT_POLICY_PREV" || true
+           fi
+           _SSH_SUPERSEDED="none"
+           return 1 ;;
+    esac
+    return 0
+}
+
+# Arm the marker, script and boot guard — no countdown yet. Call BEFORE the
+# apply. $1 (optional) = a stashed policy file (see _ssh_policy_stash) that the
+# undo restores; passing it sets POLICY_RESTORE=1 even when the file is absent
+# (= there was no policy). On failure the stash is left where it was.
+# The marker carries a random ID that the countdown passes to the script, so a
+# countdown from an earlier arming that wakes late cannot act on this one.
+_ssh_autorevert_arm() {
+    local stash="${1:-}" restore=0 id
+    [[ -n "$stash" ]] && restore=1
+    id="$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || true)"
+    [[ -n "$id" ]] || id="$$-$RANDOM-$(date +%s)"
+    _ssh_write_autorevert_script || return 1
+    printf 'ID=%s\nPOLICY_RESTORE=%s\n' "$id" "$restore" > "$AUTOREVERT_STATE" \
+        || { error "Cannot write $AUTOREVERT_STATE"; rm -f "$AUTOREVERT_STATE" 2>/dev/null; return 1; }
+    chmod 600 "$AUTOREVERT_STATE" \
+        || { error "Cannot chmod $AUTOREVERT_STATE"; rm -f "$AUTOREVERT_STATE" 2>/dev/null; return 1; }
+    if [[ -n "$stash" ]] && ! _ssh_policy_move "$stash" "$AUTOREVERT_POLICY_PREV"; then
+        rm -f "$AUTOREVERT_STATE" 2>/dev/null || true
+        return 1
+    fi
+    if _ssh_install_boot_guard; then
+        log "Boot guard $AUTOREVERT_UNIT enabled"
+    else
+        warn "Could not install the boot guard ($AUTOREVERT_UNIT; systemd is needed)."
+        warn "If this server REBOOTS before you confirm, the change will NOT be undone"
+        warn "— keep this session open and do not reboot until key login is proven."
+    fi
+    _SSH_ARMED_THIS_RUN=1
+    return 0
+}
+
+# Start the countdown on an armed marker: undo in $1 minutes unless confirmed.
+# Returns 1 when NO countdown could be started — the caller must then roll the
+# change back itself (_ssh_rollback_change).
+_ssh_autorevert_start() {
+    local mins="$1" secs deadline unit pid id
+    _ssh_autorevert_pending || { error "The safety timer is not armed."; return 1; }
+    id="$(_ssh_autorevert_state_get ID || true)"
+    secs=$(( 10#$mins * 60 ))
+    deadline=$(( $(date +%s) + secs ))
+    printf 'DEADLINE=%s\n' "$deadline" >> "$AUTOREVERT_STATE" \
+        || { error "Cannot write $AUTOREVERT_STATE"; return 1; }
+
+    if _ssh_have_systemd; then
+        unit="grin-ssh-undo-$(date +%Y%m%d%H%M%S)"
+        if systemd-run --unit="$unit" \
+                --description="Grin Node Toolkit: SSH hardening auto-undo" \
+                --on-active="${secs}s" --timer-property=AccuracySec=1s \
+                /bin/bash "$AUTOREVERT_SH" "$id" >/dev/null 2>&1; then
+            printf 'UNIT=%s\n' "$unit" >> "$AUTOREVERT_STATE" \
+                || error "Cannot record the timer unit in $AUTOREVERT_STATE"
+            log "Scheduled auto-revert in $mins min ($unit.timer, deadline $deadline)"
+            return 0
+        fi
+        warn "systemd-run could not arm the timer — falling back to a background process."
+    fi
+
+    # fd 8 closed so the countdown never holds the shared lock.
+    nohup bash -c "sleep $secs; exec /bin/bash '$AUTOREVERT_SH' '$id'" >/dev/null 2>&1 8>&- &
+    pid=$!
+    if ! kill -0 "$pid" 2>/dev/null; then
+        error "Could not start the auto-undo countdown."
+        return 1
+    fi
+    echo "$pid" > "$AUTOREVERT_PID" || error "Cannot write $AUTOREVERT_PID"
+    log "Scheduled auto-revert in $mins min (pid $pid, deadline $deadline)"
+    return 0
+}
+
+# The change failed before (or while) the countdown started: put back the
+# policy the marker saved, then disarm. The sshd revert is the caller's job.
+_ssh_autorevert_abort() {
+    _ssh_autorevert_lock || return 1
+    if _ssh_autorevert_pending && grep -qx 'POLICY_RESTORE=1' "$AUTOREVERT_STATE" 2>/dev/null; then
+        if _ssh_policy_move "$AUTOREVERT_POLICY_PREV" "$POLICY_CONF"; then
+            log "Policy restored to its state before this run"
+        fi
+    fi
+    _ssh_autorevert_disarm_locked || true
+    _ssh_autorevert_unlock
+    return 0
+}
+
+# Between arm and start the change is covered only at boot. If the session dies
+# there (SSH drop = SIGHUP, Ctrl-C, kill), start the countdown on the way out —
+# the operator may be cut off and unable to roll back — so the change is undone
+# on time; if no countdown can start, revert at once. The handler ignores
+# further signals first, so it runs once. Only a Ctrl-C (the terminal is still
+# there) gets a line of output.
+_SSH_ARMED_MINS=""
+_ssh_armed_trap_set() {
+    _SSH_ARMED_MINS="$1"
+    trap '_ssh_armed_trap_fire HUP' HUP
+    trap '_ssh_armed_trap_fire INT' INT
+    trap '_ssh_armed_trap_fire TERM' TERM
+}
+_ssh_armed_trap_clear() {
+    trap - HUP INT TERM
+    _SSH_ARMED_MINS=""
+}
+_ssh_armed_trap_fire() {
+    local sig="$1"
+    trap '' HUP INT TERM
+    if [[ -n "$_SSH_ARMED_MINS" ]] && _ssh_autorevert_pending; then
+        if _ssh_autorevert_start "$_SSH_ARMED_MINS" >/dev/null 2>&1; then
+            log "Session ended ($sig) while armed — countdown started on exit"
+            if [[ "$sig" == "INT" ]]; then
+                echo "Interrupted — the ${_SSH_ARMED_MINS}-minute auto-undo is running; confirm with option 5." 2>/dev/null || true
+            fi
+        else
+            _ssh_revert_hardening >/dev/null 2>&1 || true
+            log "Session ended ($sig) while armed — countdown FAILED, reverted"
+        fi
+    fi
+    exit 1
+}
+
+# Undo a change that failed after its confirm prompt (option 4 and the guided
+# setup share this). $1 = 1 once the sshd apply was attempted, $2 = 1 once
+# $POLICY_STASH holds the policy to go back to. An earlier unconfirmed change
+# this run took over is undone as well: its own timer is gone, and the
+# dead-man promise was that it would not survive unconfirmed.
+# The revert always reloads sshd: a failed apply removes the files but leaves
+# the running daemon on the previous config.
+_ssh_rollback_change() {
+    local applied="$1" stashed="$2"
+    if [[ "$_SSH_SUPERSEDED" != "none" ]]; then
+        warn "Undoing the earlier unconfirmed change too — this run took over its timer."
+    fi
+    if [[ "$applied" == "1" || "$_SSH_SUPERSEDED" != "none" ]]; then
+        if [[ "$applied" == "1" ]]; then
+            warn "This removes ALL toolkit SSH hardening, including any applied and confirmed earlier."
+        fi
+        _ssh_revert_hardening || error "Rollback FAILED — fix $SSHD_CONFIG by hand NOW, in this session."
+    fi
+    _ssh_armed_trap_clear
+    if _ssh_autorevert_pending; then
+        # Armed: the marker owns the saved policy; abort puts it back.
+        _ssh_autorevert_abort || true
+    elif [[ "$_SSH_ARMED_THIS_RUN" == "1" ]]; then
+        # Armed, and the marker is gone: the countdown already fired, and the
+        # undo put the policy back. The stash went to it, so unstashing now
+        # would delete that restored policy.
+        :
+    elif [[ "$stashed" == "1" ]]; then
+        _ssh_policy_unstash || true
+    fi
+    _SSH_SUPERSEDED="none"
+    _SSH_ARMED_THIS_RUN=0
+    return 0
 }
 
 # =============================================================================
@@ -1048,24 +1487,34 @@ disable_password_auth() {
     local mode; read -r mode
     mode="${mode:-A}"
 
+    # From each confirm prompt on, every failure goes through _ssh_rollback_change,
+    # which reverts AND reloads sshd, undoes an earlier unconfirmed change this
+    # run took over, and puts back the policy that change was owed.
+    local stashed=0
     if [[ "${mode,,}" == "b" ]]; then
         if ! confirm "Confirm: you have ALREADY logged in with your key in another session?"; then
             info "Aborted — nothing changed."; pause; return 0
         fi
-        if _ssh_apply_hardening; then
-            echo ""
-            info "Checking what sshd actually resolved (not just what we wrote) ..."
-            if _ssh_postapply_gate "$(_ssh_policy_get ROOT_LOGIN || echo prohibit-password)" ""; then
-                _ssh_cancel_autorevert
-                success "Password authentication DISABLED. Login is key-only now."
-            else
-                warn "The change did not take effect — rolling it back rather than"
-                warn "leaving you in a half-applied state."
-                _ssh_revert_hardening || error "Rollback FAILED — fix $SSHD_CONFIG by hand NOW, in this session."
-            fi
-        else
-            error "Hardening not applied (see above). Passwords remain enabled."
+        # An earlier unconfirmed change is taken over first, so its countdown
+        # cannot fire in the middle of this apply.
+        _ssh_autorevert_supersede || { info "Nothing changed."; pause; return 0; }
+        if [[ "$_SSH_SUPERSEDED" == "policy" ]]; then stashed=1; fi
+        if ! _ssh_apply_hardening; then
+            error "Hardening not applied (see above) — rolling back to password login."
+            _ssh_rollback_change 1 "$stashed"
+            pause; return 0
         fi
+        echo ""
+        info "Checking what sshd actually resolved (not just what we wrote) ..."
+        if ! _ssh_postapply_gate "$(_ssh_policy_get ROOT_LOGIN || echo prohibit-password)" ""; then
+            warn "The change did not take effect — rolling it back rather than"
+            warn "leaving you in a half-applied state."
+            _ssh_rollback_change 1 "$stashed"
+            pause; return 0
+        fi
+        # Permanent: an earlier unconfirmed change is confirmed along with it.
+        rm -f "$POLICY_STASH" 2>/dev/null || true
+        success "Password authentication DISABLED. Login is key-only now."
         pause; return 0
     fi
 
@@ -1073,31 +1522,65 @@ disable_password_auth() {
     echo -ne "${BOLD}Auto-restore passwords after how many minutes? [5]: ${RESET}"
     local mins; read -r mins
     mins="${mins:-5}"
-    if ! [[ "$mins" =~ ^[0-9]+$ ]] || [[ "$mins" -lt 1 ]]; then mins=5; fi
+    # Base 10 forced: "08" passes the regex but is invalid octal in arithmetic.
+    if [[ "$mins" =~ ^[0-9]{1,5}$ ]]; then mins=$((10#$mins)); else mins=5; fi
+    if [[ "$mins" -lt 1 ]]; then mins=5; fi
 
     if ! confirm "Apply key-only login now with a ${mins}-minute safety timer?"; then
         info "Aborted — nothing changed."; pause; return 0
     fi
 
-    if _ssh_apply_hardening; then
-        echo ""
-        info "Checking what sshd actually resolved (not just what we wrote) ..."
-        if ! _ssh_postapply_gate "$(_ssh_policy_get ROOT_LOGIN || echo prohibit-password)" ""; then
-            warn "The change did not take effect — rolling it back. Nothing is half-applied,"
-            warn "and no timer was armed."
-            _ssh_revert_hardening || error "Rollback FAILED — fix $SSHD_CONFIG by hand NOW, in this session."
-            pause; return 0
-        fi
-        _ssh_cancel_autorevert      # clear any previous timer
-        _ssh_schedule_autorevert "$mins"
-        echo ""
-        success "Password login DISABLED with a ${mins}-minute safety timer."
-        echo ""
-        echo -e "${BOLD}Now, in another terminal:${RESET} ${DIM}ssh root@<server-ip> -p $port${RESET}"
-        echo -e "  • If key login works  → return here and run ${BOLD}option 5${RESET} to make it permanent."
-        echo -e "  • If you get locked out → do nothing; passwords auto-restore in ${mins} min."
-    else
-        error "Hardening not applied (see above). Passwords remain enabled."
+    # Armed BEFORE the apply, so a reboot at any point from here on undoes it.
+    # A policy restore owed by an earlier unconfirmed run is carried over.
+    _ssh_autorevert_supersede || { info "Nothing changed."; pause; return 0; }
+    local carry=""
+    if [[ "$_SSH_SUPERSEDED" == "policy" ]]; then carry="$POLICY_STASH"; stashed=1; fi
+    if ! _ssh_autorevert_arm "$carry"; then
+        error "The safety timer could not be armed — nothing applied."
+        _ssh_rollback_change 0 "$stashed"
+        pause; return 0
+    fi
+    _ssh_armed_trap_set "$mins"
+
+    if ! _ssh_apply_hardening; then
+        error "Hardening not applied (see above) — rolling back to password login."
+        _ssh_rollback_change 1 "$stashed"
+        pause; return 0
+    fi
+    # The countdown starts BEFORE the check below: that check waits for input,
+    # and a session cut off there with no SIGHUP (tmux, screen) must still be
+    # undone on time. A failed check rolls back, which disarms the countdown.
+    if ! _ssh_autorevert_start "$mins"; then
+        error "The safety timer could not be started — rolling the change back rather"
+        error "than leaving key-only login in place with no undo."
+        _ssh_rollback_change 1 "$stashed"
+        pause; return 0
+    fi
+    _ssh_armed_trap_clear
+    echo ""
+    info "Checking what sshd actually resolved (not just what we wrote) ..."
+    if ! _ssh_postapply_gate "$(_ssh_policy_get ROOT_LOGIN || echo prohibit-password)" ""; then
+        warn "The change did not take effect — rolling it back. Nothing is half-applied,"
+        warn "and the timer is disarmed."
+        _ssh_rollback_change 1 "$stashed"
+        pause; return 0
+    fi
+    if ! _ssh_autorevert_pending; then
+        warn "The ${mins}-minute timer ran out during the check above, and the change"
+        warn "has been undone: password login is back. Run option 4 again."
+        pause; return 0
+    fi
+    echo ""
+    success "Password login DISABLED with a ${mins}-minute safety timer."
+    if _ssh_autorevert_boot_guarded; then
+        info "A reboot before you commit also undoes it (boot guard $AUTOREVERT_UNIT)."
+    fi
+    echo ""
+    echo -e "${BOLD}Now, in another terminal:${RESET} ${DIM}ssh root@<server-ip> -p $port${RESET}"
+    echo -e "  • If key login works  → return here and run ${BOLD}option 5${RESET} to make it permanent."
+    echo -e "  • If you get locked out → do nothing; passwords auto-restore in ${mins} min."
+    if _ssh_autorevert_boot_guarded; then
+        echo -e "    (Or reboot the server from the provider panel — that undoes it at once.)"
     fi
     pause
 }
@@ -1114,10 +1597,23 @@ commit_hardening() {
         warn "Run option 4 first to disable it."
         pause; return 0
     fi
-    if _ssh_autorevert_active; then
+    if _ssh_autorevert_pending || _ssh_autorevert_active; then
+        if ! _ssh_autorevert_active; then
+            warn "The change is still unconfirmed, but its countdown is no longer running."
+            if _ssh_autorevert_boot_guarded; then
+                warn "It will be undone at the next boot unless you confirm it here."
+            fi
+        fi
         if confirm "Key login confirmed working — cancel the safety timer and keep key-only login?"; then
-            _ssh_cancel_autorevert
-            success "Safety timer cancelled. Key-only root login is now permanent."
+            local crc=0
+            _ssh_cancel_autorevert || crc=$?
+            case "$crc" in
+                0) success "Safety timer cancelled. Key-only root login is now permanent."
+                   success "A reboot no longer undoes it." ;;
+                2) warn "Too late — the timer fired just before this, and the change has been"
+                   warn "undone: password login is back. Re-apply with option 4 or the wizard." ;;
+                *) error "The timer is still armed — the change may yet be undone." ;;
+            esac
         else
             info "Left the safety timer running."
         fi
@@ -1137,7 +1633,9 @@ enable_password_auth() {
     if ! confirm "Re-enable SSH password authentication for root?"; then
         info "Cancelled."; pause; return 0
     fi
-    _ssh_cancel_autorevert
+    # Abort, not cancel: an unconfirmed guided-setup run gets the policy it
+    # replaced put back, exactly as its timer would have done.
+    _ssh_autorevert_abort || true
     if _ssh_revert_hardening; then
         success "Password authentication RE-ENABLED (toolkit hardening removed)."
         info "Distro defaults now apply. Your installed keys still work too."
@@ -1233,7 +1731,23 @@ ssh_status() {
     fi
 
     if _ssh_autorevert_active; then
-        printf "  ${BOLD}%-26s${RESET} %b\n" "Safety timer:" "${YELLOW}ARMED — passwords will auto-restore; commit with option 5${RESET}"
+        local dl left=""
+        dl="$(_ssh_autorevert_state_get DEADLINE || true)"
+        if [[ "$dl" =~ ^[0-9]+$ ]]; then
+            left=" (~$(( (dl - $(date +%s) + 59) / 60 )) min left)"
+        fi
+        printf "  ${BOLD}%-26s${RESET} %b\n" "Safety timer:" "${YELLOW}ARMED${left} — passwords will auto-restore; commit with option 5${RESET}"
+        if _ssh_autorevert_boot_guarded; then
+            printf "  ${BOLD}%-26s${RESET} %s\n" "" "a reboot before commit also undoes it"
+        else
+            printf "  ${BOLD}%-26s${RESET} %b\n" "" "${YELLOW}no boot guard — a reboot would leave the change in place${RESET}"
+        fi
+    elif _ssh_autorevert_pending; then
+        if _ssh_autorevert_boot_guarded; then
+            printf "  ${BOLD}%-26s${RESET} %b\n" "Safety timer:" "${YELLOW}UNCONFIRMED — countdown gone; undone at next boot unless you commit (option 5)${RESET}"
+        else
+            printf "  ${BOLD}%-26s${RESET} %b\n" "Safety timer:" "${YELLOW}UNCONFIRMED — countdown gone and nothing will undo it; commit (5) or roll back (6)${RESET}"
+        fi
     else
         printf "  ${BOLD}%-26s${RESET} %s\n" "Safety timer:" "none"
     fi
@@ -1737,26 +2251,74 @@ wizard_admin_user() {
         fi
     fi
 
-    _ssh_policy_set "$allow" "no"
     echo ""
     echo -e "${BOLD}A safety timer is strongly recommended:${RESET} the change is applied now and"
     echo -e "automatically undone in N minutes ${BOLD}unless${RESET} you confirm you can still get"
-    echo -e "in. If anything is wrong, you wait it out and nothing is lost."
+    echo -e "in — and undone at boot if the server restarts before you confirm. If"
+    echo -e "anything is wrong, you wait it out (or reboot it) and nothing is lost."
     echo ""
     echo -ne "${BOLD}Auto-undo after how many minutes? [10, 0 = no timer]: ${RESET}"
     local mins; read -r mins
     mins="${mins:-10}"
-    [[ "$mins" =~ ^[0-9]+$ ]] || mins=10
+    # Base 10 forced: "08" passes the regex but is invalid octal in arithmetic.
+    if [[ "$mins" =~ ^[0-9]{1,5}$ ]]; then mins=$((10#$mins)); else mins=10; fi
 
+    # The policy is written only after this answer: it is what option 4 applies,
+    # so a "no" here must leave nothing behind for it to pick up.
     if ! confirm "Apply now?"; then
-        info "Not applied. The user, key, sudo and group setup all remain in place."
+        info "Not applied, and no SSH policy was stored — option 4 behaves as before."
+        info "The user, key, sudo and group setup all remain in place."
         pause; return 0
+    fi
+
+    # An earlier unconfirmed change is taken over BEFORE anything is applied, so
+    # its countdown cannot fire mid-run and undo this change behind our back.
+    # The policy stash then holds the policy to go back to if this run fails:
+    # the earlier run's saved one when it owed a restore, else the current file.
+    local stashed=0
+    _ssh_autorevert_supersede || { error "Nothing was applied."; pause; return 1; }
+    if [[ "$_SSH_SUPERSEDED" == "policy" ]]; then
+        stashed=1
+    elif _ssh_policy_stash; then
+        stashed=1
+    else
+        _ssh_rollback_change 0 0
+        error "Nothing was applied."
+        pause; return 1
+    fi
+
+    # Armed BEFORE the apply, so a reboot at any point from here on undoes it.
+    if [[ "$mins" -gt 0 ]] && ! _ssh_autorevert_arm "$POLICY_STASH"; then
+        error "The safety timer could not be armed — nothing was applied."
+        _ssh_rollback_change 0 1
+        pause; return 1
+    fi
+    if [[ "$mins" -gt 0 ]]; then _ssh_armed_trap_set "$mins"; fi
+
+    if ! _ssh_policy_set "$allow" "no"; then
+        error "Could not store the SSH policy — nothing was applied."
+        _ssh_rollback_change 0 1
+        pause; return 1
     fi
 
     if ! _ssh_apply_hardening; then
         error "sshd would not accept the change — nothing was applied."
-        error "Password login and root access are exactly as they were."
+        _ssh_rollback_change 1 1
+        error "Password login and root access are back to the distro defaults."
         pause; return 1
+    fi
+
+    # The countdown starts BEFORE the check below: that check waits for input,
+    # and a session cut off there with no SIGHUP (tmux, screen) must still be
+    # undone on time. A failed check rolls back, which disarms the countdown.
+    if [[ "$mins" -gt 0 ]]; then
+        if ! _ssh_autorevert_start "$mins"; then
+            error "The safety timer could not be started — rolling the change back rather"
+            error "than leaving it in place with no undo."
+            _ssh_rollback_change 1 1
+            pause; return 1
+        fi
+        _ssh_armed_trap_clear
     fi
 
     echo ""
@@ -1767,15 +2329,22 @@ wizard_admin_user() {
         echo ""
         warn "The hardening did not fully take. Rolling it back so you are not left"
         warn "in a half-applied state."
-        _ssh_revert_hardening || error "Rollback ALSO failed — fix $SSHD_CONFIG by hand NOW, in this session."
+        _ssh_rollback_change 1 1
         pause; return 1
     fi
 
-    _ssh_cancel_autorevert
     if [[ "$mins" -gt 0 ]]; then
-        _ssh_schedule_autorevert "$mins"
+        if ! _ssh_autorevert_pending; then
+            warn "The ${mins}-minute timer ran out during the check above, and the change"
+            warn "has been undone: password login and root SSH are back. Re-run the wizard."
+            pause; return 1
+        fi
         success "Applied, with a ${mins}-minute auto-undo."
+        if _ssh_autorevert_boot_guarded; then
+            info "A reboot before you confirm also undoes it (boot guard $AUTOREVERT_UNIT)."
+        fi
     else
+        rm -f "$POLICY_STASH" 2>/dev/null || true
         success "Applied permanently (no timer)."
     fi
 
@@ -1806,6 +2375,9 @@ wizard_admin_user() {
         echo -e "  Log in as ${BOLD}${user}${RESET} in a new terminal right now."
         echo -e "   • it works  → come back and run ${BOLD}option 5${RESET} (make permanent)"
         echo -e "   • it fails  → do nothing; everything reverts in ${mins} min"
+        if _ssh_autorevert_boot_guarded; then
+            echo -e "                 (or at once if you reboot the server from the provider panel)"
+        fi
     else
         echo -e "  ${DIM}Break-glass: option 6 re-enables password login and root SSH.${RESET}"
     fi

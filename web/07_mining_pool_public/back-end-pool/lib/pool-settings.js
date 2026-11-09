@@ -98,6 +98,15 @@ const NameRule = require('./name-rule');
 const explorers = require('./explorers');
 const { MIN_WITHDRAWAL_FEE } = require('./config');
 
+// One block reward. A giveaway total at or above it makes discarding a found seed block to re-roll
+// the draw worth a miner's while, so neither limit may reach it. Also guards against a typo draining
+// the prize pool in one draw.
+const GIVEAWAY_GRIN_LIMIT = 60;
+// The block-finder jackpot's ceiling, the same block reward. IncentivesManager queues a jackpot the
+// prize pool cannot cover and pays the queue strictly oldest first, so a jackpot set by mistake to
+// more than the prize pool will ever hold would stall every jackpot behind it.
+const JACKPOT_GRIN_LIMIT = GIVEAWAY_GRIN_LIMIT;
+
 // Own-property membership tests for the settings schema. `defaults[section]` and
 // `key in defaults[section]` both walk Object.prototype, so `constructor`, `toString`,
 // `valueOf` and `__proto__` passed the section gate and `name`/`length`/`call` passed the
@@ -777,6 +786,14 @@ PASS      any-password-you-choose</code>
       lottery_min_active_days: 1,              // min distinct active days to qualify (anti-sybil gate)
       lottery_max_ticket_share_percent: 0,     // whale cap on Pot A tickets (% of total; 0 = off)
       lottery_pot_fraction_percent: 100,       // % of prize_pool paid out per draw
+      // Daily giveaway (lib/daily-giveaway.js). Needs incentives_enabled but NOT lottery_enabled:
+      // it is its own switch, so turning it on arms no weekly draw and no campaign.
+      daily_giveaway_enabled: 'false',
+      daily_giveaway_min_grin: 1,            // the day's total is rolled between these two
+      daily_giveaway_max_grin: 5,
+      daily_giveaway_min_winners: 1,         // the day's prize count is rolled between these two
+      daily_giveaway_max_winners: 3,
+      daily_giveaway_min_active_hours: 6,    // hours of mining time within the UTC day
       // special events: JSON array of {name, date:"MM-DD", pot_grin, enabled}
       lottery_special_events: JSON.stringify([
         { name: 'Christmas', date: '12-25', pot_grin: 0, enabled: false },
@@ -1363,6 +1380,13 @@ PASS      any-password-you-choose</code>
         if (isNaN(n) || n < 0 || n > 100) throw new Error(`${name} must be 0-100`);
         return n;
       };
+      const giveawayGrin = (name) => (val) => {
+        const n = parseFloat(val);
+        if (!Number.isFinite(n) || n < 1e-9 || n >= GIVEAWAY_GRIN_LIMIT) {
+          throw new Error(`${name} must be at least 0.000000001 and below ${GIVEAWAY_GRIN_LIMIT} GRIN (one block reward)`);
+        }
+        return n;
+      };
       // Finiteness, not just NaN (audit §J9-4) — this is the only unbounded numeric family in
       // the schema, and both keys it guards (join_bonus_amount, jackpot_amount) are credited
       // straight onto a REAL miner balance. §J7-5 records what +Inf does to one: permanent,
@@ -1399,7 +1423,12 @@ PASS      any-password-you-choose</code>
         donor_banner_slots: intRange('donor_banner_slots', 0, 10),
         donor_name_change_days: intRange('donor_name_change_days', 0, 90),
         join_bonus_amount: nonNeg('join_bonus_amount'),
-        jackpot_amount: nonNeg('jackpot_amount'),
+        // Below one block reward — see JACKPOT_GRIN_LIMIT.
+        jackpot_amount: (val) => {
+          const n = nonNeg('jackpot_amount')(val);
+          if (n >= JACKPOT_GRIN_LIMIT) throw new Error(`jackpot_amount must be below ${JACKPOT_GRIN_LIMIT} GRIN (one block reward)`);
+          return n;
+        },
         streak_bonus_per_week_percent: percent('streak_bonus_per_week_percent'),
         streak_max_percent: percent('streak_max_percent'),
         lottery_pot_share_weighted_percent: percent('lottery_pot_share_weighted_percent'),
@@ -1408,6 +1437,11 @@ PASS      any-password-you-choose</code>
         lottery_min_shares: intRange('lottery_min_shares', 0, 1000000),
         lottery_min_active_days: intRange('lottery_min_active_days', 0, 366),
         lottery_max_ticket_share_percent: percent('lottery_max_ticket_share_percent'),
+        daily_giveaway_min_grin: giveawayGrin('Daily giveaway: minimum per day'),
+        daily_giveaway_max_grin: giveawayGrin('Daily giveaway: maximum per day'),
+        daily_giveaway_min_winners: intRange('Daily giveaway: minimum prizes', 1, 1000),
+        daily_giveaway_max_winners: intRange('Daily giveaway: maximum prizes', 1, 1000),
+        daily_giveaway_min_active_hours: intRange('Daily giveaway: hours mined', 1, 24),
         lottery_special_events: (val) => {
           let arr = val;
           if (typeof arr === 'string') {
@@ -1798,6 +1832,12 @@ PASS      any-password-you-choose</code>
         if (w + e > 100) {
           throw new Error('lottery_pot_share_weighted_percent + lottery_pot_equal_chance_percent must not exceed 100');
         }
+        if (parseFloat(merged.daily_giveaway_min_grin) > parseFloat(merged.daily_giveaway_max_grin)) {
+          throw new Error('Daily giveaway: the minimum GRIN must not exceed the maximum');
+        }
+        if (parseInt(merged.daily_giveaway_min_winners, 10) > parseInt(merged.daily_giveaway_max_winners, 10)) {
+          throw new Error('Daily giveaway: the minimum prizes must not exceed the maximum');
+        }
       }
 
       // Dormancy re-arm: on a false→true transition (and only if the caller didn't set the anchor
@@ -2035,3 +2075,5 @@ PASS      any-password-you-choose</code>
 
 module.exports = PoolSettings;
 module.exports.stratumPauseBanners = stratumPauseBanners;
+module.exports.GIVEAWAY_GRIN_LIMIT = GIVEAWAY_GRIN_LIMIT;
+module.exports.JACKPOT_GRIN_LIMIT = JACKPOT_GRIN_LIMIT;

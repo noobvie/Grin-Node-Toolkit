@@ -36,6 +36,7 @@ class BlockMonitor {
       try {
         await this.checkNewBlocks();
         await this.distributeConfirmedBlocks();
+        this.payPendingJackpots();
 
         const now = Date.now();
         if (now - this.lastOrphanCheck > this.orphanCheckInterval) {
@@ -103,9 +104,17 @@ class BlockMonitor {
             // The status flip is the CLAIM on this block. If it does not land (CAS reports 0
             // rows), the row is still 'immature' and the next tick will run this branch again
             // — so paying the jackpot anyway would pay it twice. See audit §J5-6.
-            if (!this.orphanDetector.confirmBlock(block.id)) continue;
-            // Block-finder jackpot is paid at maturity (idempotent per block height).
-            this.orphanDetector.incentives.payBlockFinderJackpot(block);
+            // The block-finder jackpot falls due here too (paid now, or queued in jackpot_pending
+            // when the prize pool is short); confirmAndPayJackpot claims and decides it in one
+            // transaction, so a throw leaves the block 'immature' for the next tick.
+            let claimed;
+            try {
+              claimed = this.orphanDetector.confirmAndPayJackpot(block);
+            } catch (err) {
+              console.error(`[block ${block.id}] confirm rolled back, retried next tick: ${err.message}`);
+              continue;
+            }
+            if (!claimed) continue;
             console.log(
               `[${new Date().toISOString()}] Block confirmed: height=${block.height}, confirmations=${confirmationCount}`
             );
@@ -174,6 +183,20 @@ class BlockMonitor {
       }
     } catch (err) {
       console.error(`Error distributing confirmed blocks: ${err.message}`);
+    }
+  }
+
+  // Pay jackpots that waited for the prize pool. Runs on this tick because it is the loop that
+  // queues them (the maturity sweep above, same IncentivesManager) and its steps run one after
+  // another, so a payment never interleaves with a maturity claim or an orphan reversal; it also
+  // runs right after distribution, whose fee cut and donations are the prize pool's usual inflow,
+  // and it runs whether or not the node answered. An empty queue costs one read of an empty
+  // table and no writes.
+  payPendingJackpots() {
+    try {
+      this.orphanDetector.incentives.payPendingJackpots();
+    } catch (err) {
+      console.error(`Error paying pending jackpots: ${err.message}`);
     }
   }
 

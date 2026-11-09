@@ -137,6 +137,9 @@ source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
 # node_api_secret_path in sync with the live node after a node rebuild).
 # shellcheck source=lib/grin_node_secrets.sh
 source "$SCRIPT_DIR/lib/grin_node_secrets.sh"
+# Node event recorder: 9) Deploy new code refreshes its installed copies (gne_install).
+# shellcheck source=lib/grin_node_events.sh
+source "$SCRIPT_DIR/lib/grin_node_events.sh"
 
 # ─── Source pool wallet lib (combined coinbase + payout, Owner+Foreign 3420) ───
 # pw_* functions: install/init the pool wallet, run BOTH listeners, autostart +

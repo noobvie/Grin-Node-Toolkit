@@ -1,4 +1,4 @@
-// /api/public/* — branding, footer price, endpoints directory, lottery, CMS pages/posts and the ads feed.
+// /api/public/* — branding, footer price, endpoints directory, lottery, fortune-board incentives, CMS pages/posts and the ads feed.
 // Registrations stay at 2-space
 // indent and write FULL paths. Instances/state come from ctx.
 
@@ -6,6 +6,7 @@ const express = require('express');
 const caches = require('./_shared/caches');
 const explorers = require('../lib/explorers');
 const { latencyConfig } = require('../lib/latency-probe');
+const IncentivesPublic = require('../lib/incentives-public');
 
 module.exports = function createPublicRoutes(ctx) {
   const {
@@ -13,6 +14,9 @@ module.exports = function createPublicRoutes(ctx) {
     poolSettings, postsManager, rateLimiter, stratumPause
   } = ctx;
   const router = express.Router();
+  // Fortune-board read model; holds its own 60 s memo, so one instance per router.
+  const incentivesPublic = incentivesManager && lotteryManager
+    ? new IncentivesPublic({ incentives: incentivesManager, lottery: lotteryManager }) : null;
 
   // ─── Public Health Check (rate-limited, no auth) ───────────────────────────
   // Registered on both /health and /api/health: nginx proxies /api/* to the backend,
@@ -95,7 +99,7 @@ module.exports = function createPublicRoutes(ctx) {
         // when the operator has enabled incentives. Winner addresses are truncated.
         try {
           if (incentivesManager && incentivesManager.enabled()) {
-            const recent = lotteryManager.recentDraws(3);
+            const recent = lotteryManager.recentDraws(3, { paidOnly: true });
             const trunc = (a) => (a && a.length > 14 ? `${a.slice(0, 10)}…${a.slice(-4)}` : a);
             const incCfg = poolSettings.getSection('incentives');
             cfg.incentives = {
@@ -109,7 +113,8 @@ module.exports = function createPublicRoutes(ctx) {
                   address: trunc(w.address || w.grin_address),
                   amount: w.amount,
                 }))
-              ),
+              // This payload is on every page, and a giveaway draw can have up to 1000 winners.
+              ).slice(0, 20),
             };
           } else {
             cfg.incentives = { enabled: false };
@@ -242,7 +247,9 @@ module.exports = function createPublicRoutes(ctx) {
     'GET /api/public/ads': { desc: 'Active operator ads by placement (+ rotation interval). Cached 60s, so ad edits take up to a minute to appear.', shape: 'raw', params: 'placement (omit for every slot keyed by placement)' },
     'POST /api/public/ads/event': { desc: 'Ad impression/click beacon — aggregate counters only, no visitor data. Always 204, even on a malformed body.', shape: 'none', body: 'impressions[], clicks[] (ad ids)' },
     'GET /api/public/lottery/winners': { desc: 'Fortune-board winner history (truncated addresses). Empty when incentives are disabled.', shape: 'envelope', params: 'limit (≤100, default 25) · offset' },
-    'GET /api/public/lottery/stats': { desc: 'Fortune-board aggregates: total prizes/winners/draws, Pot A/B split, monthly series.', shape: 'envelope' },
+    'GET /api/public/lottery/stats': { desc: 'Fortune-board aggregates: total prizes/winners/draws, split by pot (a share-weighted, b equal chance, d daily giveaway), monthly series, and daily_giveaway: the current limits, or null while it is off.', shape: 'envelope' },
+    'GET /api/public/incentives/overview': { desc: 'Fortune board. enabled:false (and nothing else) while incentives are off. prize_pool_grin = current prize pool. offers holds one key per incentive that would pay right now — absent means switched off: daily_giveaway { min_grin, max_grin, min_winners, max_winners, min_active_hours }, lottery_weekly { next_draw_at (UNIX seconds; null = due at the next hourly tick), pot_share_weighted_percent, pot_equal_chance_percent, min_active_days, max_ticket_share_percent (0 = off), pot_fraction_percent }, special_events [{ name, date MM-DD UTC, pot_grin (0 = pot fraction), + the five draw rules }], campaigns [{ name, description, starts_at, ends_at, pot_grin, + the five draw rules }]; the five draw rules (pot_fraction_percent, pot_share_weighted_percent, pot_equal_chance_percent, min_active_days, max_ticket_share_percent) belong to that draw, resolved as the draw will apply them (campaign overrides applied, Pot B clamped so A + B ≤ 100). A draw nobody can qualify for (min_active_days above the UTC days its window touches) is not offered. join_bonus { amount_grin }, jackpot { amount_grin }, streak { bonus_per_week_percent, max_percent }. Every prize is paid only while the prize pool can cover it. given = all-history totals to real miner addresses, net of jackpot clawbacks: total_grin, miners_rewarded, draws_held, by_kind [{ kind: lottery|giveaway|jackpot|join_bonus|streak|award, grin, count }], monthly [{ month YYYY-MM UTC, one GRIN figure per kind }] oldest first, by_event [{ event, count, amount }] (draw prizes per event name, top 12 by GRIN, as on /api/public/lottery/stats), streak_active_miners. Streak bonuses are published as totals only. pool_flows = the prize pool in/out by source { in, out, balance } as on /api/pool/prize-pool. Cached 60 s.', shape: 'envelope' },
+    'GET /api/public/incentives/history': { desc: 'Fortune-board reward history, newest first, masked addresses: { total, next, rows: [{ kind, address, amount, at, event, prizes, seed_height, seed_hash, block_height, clawed_back }] }. Keyset pages: pass next back as before for the following page; next is null on the last page, and a malformed before answers 400. total counts every row of that kind (cached 60 s). at is UNIX seconds; rows older than the ledger raw window carry their UTC-day start, may sum one day of that kind for that address, and have block_height null and clawed_back null. event = draw name (lottery rows), prizes = prize count (giveaway rows), seed_* = the draw seed block (draw rows), block_height + clawed_back (true/false) on jackpot rows. Streak bonuses are never listed (kind=streak answers 400). Empty when incentives are disabled. Cached 60 s.', shape: 'envelope', params: 'limit (≤100, default 25) · before (next from the previous page) · kind (lottery | giveaway | jackpot | join_bonus | award; omit for all)' },
     'GET /api/public/pages': { desc: 'Published CMS pages (slug + title) for the header/footer link lists.', shape: 'envelope' },
     'GET /api/public/page/:key': { desc: 'One published CMS page by slug (About / Terms / Privacy / FAQ …). 404 if the slug is unknown or unpublished.', shape: 'envelope' },
     'GET /api/public/posts': { desc: 'Blog: paginated list of published posts (card view — excerpt, cover, date).', shape: 'envelope', params: 'limit (≤50, default 10) · offset' },
@@ -287,7 +294,7 @@ module.exports = function createPublicRoutes(ctx) {
     'GET /api/account/:addr/shares': { desc: 'Raw accepted shares for an address, newest first. Shares are pruned aggressively — use the hashrate history for anything older than ~a day.', shape: 'raw', params: 'limit (≤500, default 100) · offset' },
     'GET /api/account/:addr/workers': { desc: 'Per-worker (rig) hashrate + share quality over a recent window. `donate_percent` per worker = the % of that rig’s share credit donated to the prize pool, read from its `donateN` name tag (0–100); null when untagged or while the operator has donations switched off.', shape: 'raw', params: 'window minutes (1–1440, default 10)' },
     'GET /api/account/:addr/hashrate/history': { desc: 'Account hashrate time-series, downsampled for charting.', shape: 'raw', params: 'hours (1–720, default 24)' },
-    'GET /api/account/:addr/earnings': { desc: 'Credited earnings per period (1h/24h/7d/30d) + 30d in/out totals. Payout reversals count as money-in but never as earnings.', shape: 'raw' },
+    'GET /api/account/:addr/earnings': { desc: 'Credited earnings per period (1h/24h/7d/30d) + 30d in/out totals. Payout reversals count as money-in but never as earnings. prizes = { count, total_grin }: lifetime draw wins (lottery and daily giveaway), from lottery_winners.', shape: 'raw' },
     'GET /api/account/:addr/balance/log': { desc: 'Address ledger. direction=in|out splits it by movement of the spendable balance: a payout appears in OUT once, as its lock at request time (gross, fee included), and a payout that fails, expires or is cancelled comes back in IN as a reversal — the confirm-time settlement rows appear only in the unfiltered view. Payout rows carry payout_method (tor · slatepack · nostr · manual; null on other rows); the CSV does not. Raw rows prune after ~60 days (the durable record is the withdrawal history below). format=csv streams the filtered window as a download on a tighter rate limit.', shape: 'raw · csv', params: 'direction=in|out · days (≤3650, default all) · limit (≤500, default 50) · offset · format=csv' },
     'GET /api/account/:addr/withdrawals': { desc: 'Payout history for an address — kept forever, so this is the durable record for accounting. Payouts only: no donations or orphan clawbacks. fee_charged is the flat withdrawal fee you were charged (you received amount − fee_charged); fee is the real network fee the POOL wallet paid, not a charge to you. The CSV carries withdrawal_fee and received instead, filled only for paid rows. format=csv streams all-time on a tighter rate limit. The on-chain kernel is NOT returned here — rows carry has_kernel_proof and has_payment_proof (booleans) and the proofs themselves need an ownership proof; see POST /api/account/:addr/withdrawals/proofs. A tor_failed row carries fail_code — why the ONE Tor attempt failed (the balance was returned): wallet_offline (your wallet did not answer over Tor), wallet_unreachable (it could not reach your wallet), wallet_not_findable (a fresh Tor connection could not find your wallet: restart your wallet listener and check your clock), pool_send_path (the pool could not deliver), pool_busy (the pool wallet could not cover it), unknown (a held payout that did not go out), wallet_offline_cleared (the operator un-counted it); null on every other row.', shape: 'raw · csv', params: 'limit (≤200, default 20) · offset · format=csv' },
     'POST /api/account/:addr/withdrawals/proofs': { desc: 'Payment proofs for your own payouts, two kinds in one call. proofs: { <withdrawal id>: <kernel excess> } - the on-chain kernel of every confirmed payout (proves the tx was mined). payment_proofs: { <withdrawal id>: <PaymentProof> } - the signed proof grin-wallet requested on Tor and Slatepack payouts: { amount (nanogrin), excess, recipient_address, recipient_sig, sender_address, sender_sig }, the same JSON `grin-wallet export_proof` writes; save one as a file and `grin-wallet verify_proof` it. recipient_sig is YOUR wallet\'s signature, so it proves receipt to anyone. Goblin (nostr) payouts, and Slatepack payouts made before the pool requested proofs on that rail, carry no signed proof (kernel only). Newest 500 signed proofs. Ownership-gated on purpose: publishing an address next to its kernels would be a public address-to-chain index on a privacy coin. 403 = proof failed, 404 = no such account.', shape: 'raw', auth: 'ownership proof', rate: 'withdraw', body: OWNER_PROOF_BODY },
@@ -379,7 +386,7 @@ module.exports = function createPublicRoutes(ctx) {
   );
 
   // ─── Public Fortune Board: lottery winner history (no auth, rate-limited) ──────
-  // Transparency/audit feed — winner (truncated address) + amount + date + verifiable seed.
+  // Transparency/audit feed — winner (truncated address) + amount + date + seed block.
   router.get('/api/public/lottery/winners',
     rateLimiter.middleware('public'),
     (req, res) => {
@@ -406,13 +413,56 @@ module.exports = function createPublicRoutes(ctx) {
         if (!incentivesManager || !incentivesManager.enabled()) {
           return res.json({
             success: true,
-            data: { total_prizes_grin: 0, total_winners: 0, unique_winners: 0, total_draws: 0, by_pot: [], by_event: [], monthly: [] },
+            data: { total_prizes_grin: 0, total_winners: 0, unique_winners: 0, total_draws: 0, by_pot: [], by_event: [], monthly: [], daily_giveaway: null },
           });
         }
         res.setHeader('Cache-Control', 'public, max-age=60');
         res.json({ success: true, data: lotteryManager.stats() });
       } catch (err) {
         res.status(500).json({ error: 'Failed to load lottery stats' });
+      }
+    }
+  );
+
+  // Fortune board: what is on offer, what has been given (all history) and the prize-pool flows.
+  // Streak bonuses appear as totals only (lib/incentives-public.js).
+  router.get('/api/public/incentives/overview',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        res.setHeader('Cache-Control', 'public, max-age=60');
+        if (!incentivesPublic || !incentivesManager.enabled()) {
+          return res.json({ success: true, data: { enabled: false } });
+        }
+        res.json({ success: true, data: incentivesPublic.overview() });
+      } catch (err) {
+        res.status(500).json({ error: 'Failed to load incentives overview' });
+      }
+    }
+  );
+
+  // Fortune board reward history: draws, jackpots, join bonuses and awards (masked addresses),
+  // newest first, keyset-paged by the `before` cursor. kind=streak is refused: streak rows would
+  // publish earnings. A malformed cursor is a 400, never a 500. `offset` is not read.
+  router.get('/api/public/incentives/history',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        const kind = typeof req.query.kind === 'string' ? req.query.kind : '';
+        if (kind !== '' && !IncentivesPublic.HISTORY_KINDS.includes(kind)) {
+          return res.status(400).json({ error: 'Unknown kind' });
+        }
+        const before = req.query.before === undefined ? '' : req.query.before;
+        if (!IncentivesPublic.parseCursor(before)) {
+          return res.status(400).json({ error: 'Bad cursor' });
+        }
+        res.setHeader('Cache-Control', 'public, max-age=60');
+        if (!incentivesPublic || !incentivesManager.enabled()) {
+          return res.json({ success: true, data: { total: 0, rows: [], next: null } });
+        }
+        res.json({ success: true, data: incentivesPublic.history({ limit: req.query.limit, before, kind }) });
+      } catch (err) {
+        res.status(500).json({ error: 'Failed to load reward history' });
       }
     }
   );

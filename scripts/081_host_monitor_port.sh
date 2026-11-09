@@ -1367,7 +1367,7 @@ for dir in /opt/grin/node/mainnet-prune /opt/grin/node/mainnet-full /opt/grin/no
         kill -TERM $L 2>/dev/null; sleep 5; kill -KILL $L 2>/dev/null
     fi
     if id grin &>/dev/null; then
-        chown -R grin:grin "$dir" 2>/dev/null || true
+        chown -R grin "$dir" 2>/dev/null || true
         su -s /bin/bash grin -c "cd $dir && env HOME=$dir SHELL=/bin/bash tmux new-session -d -s $sess \"./grin server run; echo; read\"" && \
             echo "  started: $sess (view: gtmux attach -t $sess)" || echo "  tmux failed: $sess"
     else

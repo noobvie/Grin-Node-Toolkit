@@ -126,6 +126,9 @@ FIREWALL=""   # Populated by detect_firewall()
 # If this file is missing, the toolkit is broken; fail loudly rather than silently.
 # shellcheck source=lib/nginx_shared_helpers.sh
 source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
+# Required by IP Filtering (fwh_block_ip / fwh_unblock_ip in lib/02_lib_security.sh).
+# shellcheck source=lib/firewall_shared_helpers.sh
+source "$SCRIPT_DIR/lib/firewall_shared_helpers.sh"
 # Menu sections split out of this file (same globals and logging; see each lib's header).
 # shellcheck source=lib/02_lib_ratelimit.sh
 source "$SCRIPT_DIR/lib/02_lib_ratelimit.sh"
@@ -927,9 +930,9 @@ get_files_directory() {
 get_bandwidth_settings() {
     if [[ -z "$ENABLE_BANDWIDTH_LIMIT" ]]; then
         echo ""
-        read -r -p "Enable bandwidth limiting? (Y/n/0) [default: Y, 0 = cancel]: " bw_choice
+        read -r -p "Enable bandwidth limiting? (y/N/0) [default: N, 0 = cancel]: " bw_choice
         [[ "$bw_choice" == "0" ]] && return 1
-        if [[ ! "${bw_choice,,}" =~ ^n ]]; then
+        if [[ "${bw_choice,,}" =~ ^y ]]; then
             ENABLE_BANDWIDTH_LIMIT="yes"
 
             read -p "Download quota per IP in GB [default: 40, 0 = cancel]: " quota_input
@@ -957,6 +960,28 @@ get_bandwidth_settings() {
             print_info "Bandwidth limiting disabled"
         fi
     fi
+}
+
+# Name of the nginx variable that carries a domain's download rate. nginx variables are
+# global to the http context, so each domain gets its own name (a second `map` defining
+# the same variable makes `nginx -t` fail).
+_bw_map_var() {
+    local v="${1//[^A-Za-z0-9]/_}"
+    printf 'bw_limit_%s' "${v,,}"
+}
+
+# Writes the domain's rate map to /etc/nginx/conf.d/ (included inside http{}; `map` is not
+# valid inside server{}). nginx-bandwidth-limiter.sh regenerates this same file with the
+# over-quota IPs added. One fixed file per domain, so re-running setup overwrites it.
+_bw_write_map_file() {
+    local map_file="/etc/nginx/conf.d/${DOMAIN}-bandwidth-map.conf"
+    local var; var="$(_bw_map_var "$DOMAIN")"
+    cat > "$map_file" << EOF || { print_error "Could not write $map_file"; return 1; }
+# Bandwidth limiting map for ${DOMAIN} - auto-generated
+map \$remote_addr \$${var} {
+    default ${NORMAL_SPEED_LIMIT:-0};
+}
+EOF
 }
 
 # 6.0 - Function to create files directory
@@ -1061,22 +1086,22 @@ enhance_nginx_config() {
     # Determine bandwidth limiting configuration
     local bandwidth_config=""
     local limit_rate_config=""
-    
+    local bw_map_file="/etc/nginx/conf.d/${DOMAIN}-bandwidth-map.conf"
+    local bw_map_created="no"
+
     if [[ "$ENABLE_BANDWIDTH_LIMIT" == "yes" ]]; then
+        local bw_var; bw_var="$(_bw_map_var "$DOMAIN")"
+        [[ -f "$bw_map_file" ]] || bw_map_created="yes"
+        # The vhost below references the map variable, so the map must exist before nginx -t.
+        _bw_write_map_file || { rm -f "$NGINX_CONF.backup"; exit 1; }
         bandwidth_config="
-    # Bandwidth limiting - track downloads per IP
+    # Bandwidth limiting - per-IP download log read by nginx-bandwidth-limiter.sh;
+    # the rate map is ${bw_map_file} (http context)
     access_log /var/log/nginx/${DOMAIN}-bandwidth.log combined;
-    
-    # Map to determine rate limit based on download quota
-    map \$remote_addr \$limit_rate_value {
-        default ${NORMAL_SPEED_LIMIT:-0};
-    }
 "
-        if [[ -n "$NORMAL_SPEED_LIMIT" ]]; then
-            limit_rate_config="
-        # Apply speed limit
-        limit_rate \$limit_rate_value;"
-        fi
+        limit_rate_config="
+        # Rate from the map: normal speed (0 = unlimited), slow speed once over quota
+        limit_rate \$${bw_var};"
     fi
     
     # Create enhanced config with HSTS
@@ -1148,6 +1173,9 @@ EOF
     else
         print_error "Enhanced Nginx configuration test failed, restoring backup"
         mv "$NGINX_CONF.backup" "$NGINX_CONF"
+        if [[ "$bw_map_created" == "yes" ]]; then
+            rm -f "$bw_map_file"
+        fi
         nginx -t
         exit 1
     fi
@@ -1236,7 +1264,7 @@ generate_nginx_map() {
     
     cat > "$map_file" << 'MAP_HEADER'
 # Bandwidth limiting map - auto-generated
-map $remote_addr $limit_rate_value {
+map $remote_addr $__MAP_VAR__ {
     default __NORMAL_SPEED__;
 MAP_HEADER
     
@@ -1300,6 +1328,7 @@ SCRIPT_EOF
     sed -i "s|__NGINX_CONF__|$NGINX_AVAILABLE/$DOMAIN|g" "$BANDWIDTH_SCRIPT"
     sed -i "s|__DOMAIN__|$DOMAIN|g" "$BANDWIDTH_SCRIPT"
     sed -i "s|__NORMAL_SPEED__|${NORMAL_SPEED_LIMIT:-0}|g" "$BANDWIDTH_SCRIPT"
+    sed -i "s|__MAP_VAR__|$(_bw_map_var "$DOMAIN")|g" "$BANDWIDTH_SCRIPT"
     
     chmod +x "$BANDWIDTH_SCRIPT"
     

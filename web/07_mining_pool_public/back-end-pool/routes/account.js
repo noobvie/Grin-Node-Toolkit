@@ -15,6 +15,8 @@ const DonorProfiles = require('../lib/donor-profiles');
 const { parseDonateToken } = require('../lib/stratum-protocol');
 const { verifyOwnerProof, auditOwnerProof, normalizeIp, PROOF_SET_MAX } = require('../lib/owner-proof');
 
+const LotteryManager = require('../lib/lottery');
+
 module.exports = function createAccountRoutes(ctx) {
   const {
     config, db, donorNameRule, dormancyManager, hashrateTracker, incentivesManager, minerManager,
@@ -542,7 +544,7 @@ module.exports = function createAccountRoutes(ctx) {
   });
 
   // Credited earnings summed per period (block rewards + bonuses/giveaways), plus the 30-day
-  // outflow total — drives the account page's earnings table and the ledger Σ titles. Reads RAW
+  // outflow total and lifetime draw wins (prizes) — drives the account page's earnings table and the ledger Σ titles. Reads RAW
   // balance_log, which retention DOES prune (database.balance_log_keep_days, default 60 with a
   // hard 45-day floor) — that floor is why the longest period here is 30 days. A longer one
   // would have to read the balance_log_daily rollup too, the way /api/pool/donors does.
@@ -569,7 +571,9 @@ module.exports = function createAccountRoutes(ctx) {
         `SELECT COALESCE(SUM(amount), 0) AS s FROM balance_log
          WHERE grin_address = ? AND created_at > ? AND ${LEDGER_DIRECTION_SQL.out}`
       ).get(addr, now - 30 * 86400).s;
-      res.json({ grin_address: addr, periods: sums, in_30d: in30, out_30d: out30 });
+      // From lottery_winners, not balance_log: its raw rows are pruned, and this is a lifetime figure.
+      const prizes = LotteryManager.prizeTotals(db, addr);
+      res.json({ grin_address: addr, periods: sums, in_30d: in30, out_30d: out30, prizes });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

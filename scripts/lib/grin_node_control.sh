@@ -24,6 +24,7 @@
 #   gnc_kill_grin_procs [dir] [grace] TERM→wait→KILL grin server processes
 #   _gnc_heal_grin_socket_dir         reclaim /tmp/tmux-<grin uid> from a foreign owner
 #   _gnc_node_run_cmd <dir> <bin> [cron]   the command a node's tmux pane runs
+#   gnc_autostart_heal_owner_chown    make @reboot node lines keep the node dir's groups
 #   gnc_launch_node_session <dir> <bin> <sess>   THE ONLY sanctioned node launcher
 #   gnc_start_node_tmux <network>     conf-resolved wrapper around the launcher
 #   gnc_owner_get_status <network>    raw get_status JSON (Owner API, localhost)
@@ -583,7 +584,9 @@ gnc_launch_node_session() {
     if id grin &>/dev/null; then
         # chown first reclaims any root-owned leftovers from an earlier root-run
         # start (a root-run node writes root:root files that EACCES-block grin).
-        chown -R grin:grin "$dir" 2>/dev/null || true
+        # Owner only: grin needs nothing from the group, and the API secrets carry a
+        # grant there (grinsecret) that the de-rooted pool reads them through.
+        chown -R grin "$dir" 2>/dev/null || true
         # Reclaim grin's tmux socket path if a root/foreign owner squats on it
         # ("error connecting to /tmp/tmux-<uid>/default (Permission denied)").
         _gnc_heal_grin_socket_dir
@@ -616,6 +619,35 @@ gnc_launch_node_session() {
     # Make sure the operator can actually see the grin-owned session.
     gnc_install_gtmux_helper
     info "View: gtmux attach -t $sess   (grin-owned — plain 'tmux attach' won't find it; detach: Ctrl+B then D)"
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# gnc_autostart_heal_owner_chown — rewrite @reboot node lines that still reset the
+# node dir's group (`chown -R grin:grin`) to the owner-only form the launcher uses.
+# An installed crontab line changes only when autostart is re-enabled, so a toolkit
+# update never reaches it; pool_deroot calls this on every install, deploy and
+# restore. Only the old shape matches, with or without the chgrp step some lines
+# carry, so a re-run is a no-op. The old crontab is saved first. rc 1 = could not
+# save or write it, or a line it cannot rewrite still resets the group.
+# -----------------------------------------------------------------------------
+gnc_autostart_heal_owner_chown() {
+    local cron new backup
+    cron=$(crontab -l 2>/dev/null) || return 0
+    new=$(sed -E "/^@reboot /s#chown -R grin:grin ('[^']+') 2>/dev/null;( chgrp grinsecret [^;]*;)? su #chown -R grin \1 2>/dev/null; su #" <<<"$cron") \
+        || { error "Could not read the crontab — @reboot lines left unchanged."; return 1; }
+    if [[ "$new" != "$cron" ]]; then
+        backup="${GNC_CRON_BACKUP_DIR:-/root}/crontab.before-owner-chown.$(date +%Y%m%d_%H%M%S)"
+        ( umask 077; printf '%s\n' "$cron" > "$backup" ) \
+            || { error "Could not save $backup — @reboot lines left unchanged."; return 1; }
+        printf '%s\n' "$new" | crontab - \
+            || { error "Could not write the crontab — @reboot lines unchanged, backup at $backup."; return 1; }
+        info "Updated the @reboot node lines to keep the node dir's groups. Backup: $backup"
+    fi
+    if grep -qE "^@reboot .*chown -R grin:grin" <<<"$new"; then
+        error "An @reboot line has a form this update does not recognise and still resets the group."
+        return 1
+    fi
     return 0
 }
 

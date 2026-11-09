@@ -254,6 +254,63 @@
       margin-top: 0.5rem;
     }
 
+    /* Body-colour text on an amber edge: --warn-color alone is too faint on the light theme. */
+    .giveaway-warning {
+      margin: .6rem 0;
+      padding: .15rem 0 .15rem .7rem;
+      border-left: 3px solid var(--warn-color);
+      font-size: .85rem;
+      color: var(--text);
+    }
+
+    .giveaway-odds {
+      margin: .6rem 0;
+    }
+    .giveaway-odds ol {
+      margin: .3rem 0;
+      padding: 0;
+      list-style: none;
+      max-width: 22rem;
+    }
+    .giveaway-odds li {
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+
+    /* A one-line strip that stays in view under the topbar and rail: the Save buttons it explains
+       can be a long way down the page. Its detail is a separate block that scrolls away. */
+    .settings-load-failed {
+      position: sticky;
+      top: calc(var(--topbar-h) + var(--rail-h, 58px));
+      z-index: 130;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: .4rem 1rem;
+      margin-bottom: .6rem;
+      padding: .5rem .9rem;
+      border: 1px solid var(--danger);
+      border-left-width: 4px;
+      border-radius: 6px;
+      background: var(--bg-card2);
+      color: var(--text);
+    }
+    .settings-load-why {
+      margin: 0 0 1.5rem;
+      font-size: .875rem;
+      color: var(--text-dim);
+    }
+    @media (max-width: 600px) {
+      .settings-load-failed { font-size: .85rem; }
+      .settings-load-failed .btn { width: auto; margin: 0; padding: .3rem .8rem; }
+    }
+    /* Tab must not land a field behind the strip. */
+    html:has(.settings-load-failed) {
+      scroll-padding-top: calc(var(--topbar-h) + var(--rail-h, 58px) + 6rem);
+    }
+
     .toast {
       position: fixed;
       bottom: 2rem;
@@ -263,6 +320,7 @@
       color: white;
       font-weight: 600;
       z-index: 1000;
+      max-width: min(34rem, calc(100vw - 4rem));
       animation: slideIn 0.3s ease;
     }
 

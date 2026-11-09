@@ -48,6 +48,7 @@
             <div class="helper-text">
               <strong>Prize pool balance:</strong> <span id="prize-pool-balance">…</span> GRIN
             </div>
+            <div class="helper-text" id="pp-jackpots-waiting" hidden></div>
             <div class="helper-text" id="prize-pool-breakdown" style="margin-top:.5rem;">
               <strong>Where it comes from · where it goes</strong> (lifetime)
               <div id="prize-pool-flows" style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-top:.35rem;">
@@ -129,8 +130,8 @@
           </div>
           <div class="form-group">
             <label for="jackpot_amount">Jackpot amount (GRIN)</label>
-            <input type="number" id="jackpot_amount" name="jackpot_amount" min="0" step="0.01" value="0">
-            <div class="helper-text">Credited when the block matures; clawed back automatically if the block is orphaned.</div>
+            <input type="number" id="jackpot_amount" name="jackpot_amount" min="0" max="59.99" step="0.01" value="0">
+            <div class="helper-text">Must be below 60 GRIN (one block reward). Credited when the block matures. If the prize pool is short then, it waits and is paid oldest first once the pool can cover it (the amount is fixed at maturity). Clawed back automatically if the block is orphaned.</div>
           </div>
         </div>
 
@@ -209,6 +210,77 @@
             <button type="button" class="btn btn-secondary" data-action="draw-lottery-now" data-kind="weekly">Run weekly draw now (test)</button>
             <div class="helper-text" id="lottery-draws"></div>
           </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Daily Giveaway</h3>
+          <div class="helper-text" style="margin-bottom:1rem;">
+            Each day the pool draws for the day before (UTC), within about two hours of 00:00 UTC. It picks
+            a random total between your two amounts and splits it into a random number of equal prizes
+            between your two counts. Each prize is drawn separately, and a miner's chance of each one follows
+            their mining work that day, so one miner can win more than one. A big miner will win often, in
+            proportion to their work. Splitting across addresses gains nothing.
+            <br><strong>The first draw starts within about an hour of saving this switched on, covers yesterday,
+            and pays about an hour after that.</strong> Use Preview first.
+            <br>Prizes come from the prize pool and go to miners' pool balances. Winners are shown on the public
+            Fortune Board. If the prize pool holds less than the minimum, the draw waits: a top-up before the
+            UTC day ends still draws it, otherwise that day is skipped. If you switch this off, a draw already waiting stays on hold until you switch it back on. A winner you ban before
+            the draw finishes loses their share.
+          </div>
+          <div class="checkbox-group">
+            <input type="checkbox" id="daily_giveaway_enabled" name="daily_giveaway_enabled">
+            <label for="daily_giveaway_enabled">Run the daily giveaway</label>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="daily_giveaway_min_grin">Minimum per day (GRIN)</label>
+              <input type="number" id="daily_giveaway_min_grin" name="daily_giveaway_min_grin" min="0.000000001" step="any" value="1">
+            </div>
+            <div class="form-group">
+              <label for="daily_giveaway_max_grin">Maximum per day (GRIN)</label>
+              <input type="number" id="daily_giveaway_max_grin" name="daily_giveaway_max_grin" min="0.000000001" step="any" value="5">
+              <div class="helper-text">Must be below 60 GRIN (one block reward), and best kept far below it. If a day's total is worth more than a block, a miner could gain by throwing away a block to get a different result.</div>
+              <div id="daily-max-warning" role="status"></div>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="daily_giveaway_min_winners">Minimum prizes per day</label>
+              <input type="number" id="daily_giveaway_min_winners" name="daily_giveaway_min_winners" min="1" max="1000" step="1" value="1">
+            </div>
+            <div class="form-group">
+              <label for="daily_giveaway_max_winners">Maximum prizes per day</label>
+              <input type="number" id="daily_giveaway_max_winners" name="daily_giveaway_max_winners" min="1" max="1000" step="1" value="3">
+              <div class="helper-text">One miner can win several prizes, so there can be fewer different winners than prizes.</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="daily_giveaway_min_active_hours">Hours mined that day to qualify</label>
+            <input type="number" id="daily_giveaway_min_active_hours" name="daily_giveaway_min_active_hours" min="1" max="24" step="1" value="6">
+            <div class="helper-text">Total mining time in that UTC day. This keeps out short visits. Once in, a miner's chance depends on their work, not on these hours.</div>
+          </div>
+
+          <button type="button" class="btn btn-primary" data-action="save-section" data-section="incentives">Save Changes</button>
+          <div class="helper-text">Preview and real draws use the saved limits, so save any change first.</div>
+
+          <h4 class="sub-title">Preview (no money moves)</h4>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="daily-preview-extra">Pretend extra miners (capacity test)</label>
+              <input type="number" id="daily-preview-extra" class="settings-skip" min="0" max="1000" step="1" value="0">
+              <div class="helper-text">Tests how the draw copes with more miners. It does not show real odds: pretend miners win prizes that real miners would have won. Added to yesterday's real qualifying miners, for the preview only, each doing the real miners' average work. The real odds appear above the simulated days.</div>
+            </div>
+          </div>
+          <button type="button" class="btn btn-secondary" data-action="daily-preview">Preview 7 days</button>
+          <div class="helper-text" id="daily-preview-out" role="status" aria-live="polite" style="margin-top:.75rem;"></div>
+
+          <h4 class="sub-title">Real draw (spends prize-pool GRIN)</h4>
+          <button type="button" class="btn btn-danger" data-action="daily-run-now">Run a real draw now</button>
+          <div class="helper-text" id="daily-run-out" role="status" aria-live="polite" style="margin-top:.75rem;"></div>
+
+          <h4 class="sub-title">Recent giveaway draws</h4>
+          <button type="button" class="btn btn-secondary" data-action="daily-refresh">Refresh</button>
+          <div class="helper-text" id="daily-draws" role="status" aria-live="polite" style="margin-top:.75rem;">Loading…</div>
         </div>
 
         <div class="form-section">
@@ -330,5 +402,6 @@
   <script src="/js/stepup.js"></script>
   <script src="/admin/admin-shell.js"></script>
   <script src="/admin/settings-common.js" data-section="incentives"></script>
+  <script src="/admin/js/settings-incentives.js"></script>
 </body>
 </html>

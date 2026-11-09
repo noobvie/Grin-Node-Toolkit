@@ -7,6 +7,37 @@
 //   client → server: login, submit, getjobtemplate, status
 //   server → client: job (push), and responses to the above
 
+const MAX_U64 = (1n << 64n) - 1n;
+
+// A nonce as the node can read it: the digits of a u64, with no leading zero. Everything else stops
+// at the pool. The nonce goes onto the node's wire as a bare number, so "0123" there is a line of
+// invalid JSON, and grin ends the connection on a line it cannot parse: every miner's shares share
+// that one socket.
+function isCanonicalU64(value) {
+  return typeof value === 'string' && /^(0|[1-9]\d{0,19})$/.test(value) && BigInt(value) <= MAX_U64;
+}
+
+// A proof as grin can pack it. The node hashes a submit's proof BEFORE it verifies anything, and its
+// packer panics on a proof that is not 42 edges or holds an edge wider than edge_bits. The panic
+// ends the task serving the connection, the one socket all miners' shares share, so a bad proof
+// must stop here. Ascending is grin's rule too (verify_impl), and it gives one solution one spelling.
+// 53 is where a JS number stops holding an edge exactly; real rigs send 31 or 32.
+const PROOF_SIZE = 42;
+const MIN_EDGE_BITS = 29;
+const MAX_EDGE_BITS = 53;
+
+function isValidProofShape(edgeBits, pow) {
+  if (!Number.isInteger(edgeBits) || edgeBits < MIN_EDGE_BITS || edgeBits > MAX_EDGE_BITS) return false;
+  if (!Array.isArray(pow) || pow.length !== PROOF_SIZE) return false;
+  const limit = 2 ** edgeBits;
+  let previous = -1;
+  for (const edge of pow) {
+    if (!Number.isInteger(edge) || edge <= previous || edge >= limit) return false;
+    previous = edge;
+  }
+  return true;
+}
+
 function parseStratumMessage(jsonStr) {
   try {
     const msg = JSON.parse(jsonStr.trim());
@@ -328,6 +359,8 @@ function createStatusResponse(id, sessionStats) {
 
 module.exports = {
   parseStratumMessage,
+  isCanonicalU64,
+  isValidProofShape,
   validateUsername,
   C32_GRAPH_WEIGHT,
   shareCreditDifficulty,

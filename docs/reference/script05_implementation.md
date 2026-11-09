@@ -1,9 +1,9 @@
 # Script 05 — Wallet & Payment Services Hub: implementation
 
 > **Covers code as of:** 2026-08-04 (the doc: "current as of 2026-08-04") · **Last verified:** never systematically verified
-> **Product code last changed:** 2026-09-27 — `scripts/05_grin_wallet_service.sh` (CMD wallet `L) Listener` screen; that section and the 2026-09-25 Nuke section are current, the rest of the doc is still as of 2026-08-04)
+> **Product code last changed:** 2026-11-06 — `scripts/05_grin_wallet_service.sh` + `scripts/lib/05_lib_cmd_wallet_menu.sh` (CMD wallet screens and the network check; the CMD wallet subsections are current, the rest of the doc is still as of 2026-08-04)
 
-**Status:** built. Sections 1.1–1.6 describe the hub as of 2026-08-04 (the 05x renumber + rename and the fixed-slot menu keys); the CMD wallet subsections are current as of 2026-09-27 and were exercised locally against stubs only — **not run on a VPS**.
+**Status:** built. Sections 1.1–1.6 describe the hub as of 2026-08-04 (the 05x renumber + rename and the fixed-slot menu keys); the CMD wallet subsections are current as of 2026-11-06 and were exercised locally against stubs only — **not run on a VPS**.
 
 This is the authoritative record for the 05 hub's numbering and menu behaviour. The hub's own
 header comment in `scripts/05_grin_wallet_service.sh` carries the short form; this file carries
@@ -202,6 +202,54 @@ debugging: **`journalctl -u grin-fidelius` never shows app output** — `append:
 away from the journal, so the journal carries only systemd's own start/stop/crash lines. The setup
 screen prints both destinations.
 
+#### CMD wallet (05C) — screens
+
+⚠ Exercised locally against a fake `grin-wallet` and stubbed `tmux` only — **not run on a VPS**.
+
+Network first, then action. The overview shows both networks and picks one; that network's screen
+holds every action, so nothing has to ask "which network?". The screens live in
+`scripts/lib/05_lib_cmd_wallet_menu.sh`; the setup flow, listener screen and primitives stay in the hub.
+
+| Key | Action | Available | Does |
+|---|---|---|---|
+| `1` | Listener | wallet exists | Start · stop · restart · recent output. |
+| `2` | Configure | wallet exists, network OK | Setup flow, intent `configure`: listener mode, toml patches, checks. Wallet untouched. |
+| `3` | Add | no wallet, or a half-initialized one | Intent `add`: new seed or recover from a phrase. |
+| `4` | Renew | wallet exists | Intent `renew`: retire the wallet, then new seed or recover. |
+| `5` | Wipe | a toml or a seed exists | Stop and remove; nothing is created. |
+| `F` | Fix network | printed only on a mismatch | See "network check" below. |
+| `B` | grin-wallet binary | always | The shared install/update/rollback screen. |
+
+Keys never move. A row that does not apply prints dimmed with the reason, and its key says what to
+do instead. Overview key `3) Both` runs Add on each network that has no wallet.
+
+**One wallet per network is deliberate.** Ports, the tmux name, the 089 registry key and the
+Transporter's wallet scan are all keyed on the network, so a second wallet on a network would need
+its own port pair and identity throughout. Separate funds on one wallet are grin-wallet accounts.
+
+The setup flow installs the binary only when it is missing; re-installing the pin is `B` key 1.
+
+**`0` leaves every prompt.** On a menu it goes back one level. Before init it cancels with nothing changed, and Renew's old wallet survives every `0`. After init the wallet exists, so `_cmd_setup_cancelled` says so, points at Configure, and pauses so a printed seed is not cleared. A question that is only optional (saving the passphrase, starting the listener) reads `0 skip`. Recovery is the one exception: `init -hr` prompts belong to grin-wallet, so an "is your phrase ready" prompt is the last exit, before the old wallet is retired.
+
+#### CMD wallet (05C) — network check
+
+**grin-wallet takes its chain from `chain_type` in the toml whenever a toml exists**
+(`src/bin/grin-wallet.rs`, `init_global_chain_type`, v5.5.0). `--testnet` only decides what a new
+toml gets. The address prefix follows the chain (`grin` on Mainnet, `tgrin` otherwise). So a testnet
+toml in `cmdwallet/mainnet/` runs as testnet with no flag at all, while the port pinned from the
+directory name makes its log look like mainnet. A mainnet sender rejects the `tgrin` address.
+
+| | |
+|---|---|
+| **Detection** | `_cmd_net_problems` reads the toml, so no passphrase is needed: `chain_type` must match the directory, a LOCAL `check_node_api_http_addr` must use that network's port, and `data_file_dir` must be inside the wallet's own folder. A remote node is the operator's choice and is not checked. |
+| **Enforcement** | `_cmd_start_listener` refuses a mismatched wallet, Restart refuses before it stops anything, Configure is blocked, and setup Step 6 will not report an address of the wrong prefix as success. The overview and the network screen both flag it. |
+| **Repair (`F`)** | Stops the listener, copies the toml to `grin-wallet.toml.before-network-fix-<ts>`, then sets `chain_type`, both listen ports, and the node address and `node_api_secret_path`. Edits go to a copy that replaces the toml only if all of them took. Seed and keys do not change. |
+| **Remote node** | Fix and Configure leave a remote address alone and give it no local secret: grin-wallet sends `node_api_secret_path` as Basic Auth to whichever node the toml names. |
+| **Foreign data dir** | Refused, not repaired: correcting the network would not change which wallet is in use, and Renew and Wipe would not touch that data. |
+| **After repair** | Outputs and transactions recorded against the other chain stay until a `scan -d` (plain `scan` keeps tx-log entries and unconfirmed outputs), so the listener is left stopped and the command is printed. |
+
+Only the CMD wallet has this check; the Drop, solo and pool wallets do not.
+
 #### CMD wallet (05C) — two listener modes
 
 The CMD wallet ran `grin-wallet listen` only. Setup now asks which mode, stored in
@@ -233,11 +281,11 @@ Details that bite:
 The trade is printed at the prompt and repeated in the summary. An operator who
 only wants to receive slates by hand is strictly better off on `listen`.
 
-#### CMD wallet (05C) — Nuke screen + Re-initialize fix
+#### CMD wallet (05C) — Wipe screen + Renew fix
 
 ⚠ Built and exercised locally against a fake `grin-wallet` only — **not run on a VPS**.
 
-**The bug.** Re-initialize deleted `<net>_pass_wallet.txt` / `<net>_seed.txt`, then ran
+**The bug.** Renewing a wallet deleted `<net>_pass_wallet.txt` / `<net>_seed.txt`, then ran
 `init -h` over the old wallet. grin-wallet refuses that whenever the toml **and** `wallet_data/`
 both exist (`create_config` → "… already exists in the target directory. Please remove it
 first", `impls/src/lifecycle/default.rs` at v5.5.0). The success check only looked for the toml,
@@ -254,25 +302,24 @@ also deleted before the mode prompt, so cancelling there left a wallet with no s
 | **Half-initialized dir** | toml present, no seed → reported as a failed earlier init and cleared without the "destroy" prompt; there is nothing in it to lose. |
 | **Stop by cwd, not port** | `_cmd_stop_wallet` kills the tmux session, then any `grin-wallet` whose cwd is the wallet dir (TERM, then KILL), and refuses to touch disk if one survives. A foreign holder of 3415/3420 is still never killed. |
 | **Mainnet is archived** | Testnet is deleted. Mainnet is **moved** to `/opt/grin/cmdwallet/.retired/mainnet-<ts>/` (700) and gated behind typing `MAINNET`. Purging it is a manual `rm -rf`. |
-| **Keep-lists** | Re-init keeps `grin-wallet`, `.grin-wallet.version`, `.listen_mode`. Nuke keeps the first two unless the operator declines "keep binary"; then the whole dir goes. The binary store `/opt/grin/wallet-bin/` is never touched. |
+| **Keep-lists** | Renew keeps `grin-wallet`, `.grin-wallet.version`, `.listen_mode`. Wipe keeps the first two unless the operator declines "keep binary"; then the whole dir goes. The binary store `/opt/grin/wallet-bin/` is never touched. |
 
-**`N) Nuke wallet`** on the 05C screen: one network per run, shows what will go (seed present,
+**`5) Wipe`** on a network's screen shows what will go (seed present,
 listener running, whether a saved seed exists), warns when a Transporter `agent.json` points into
 the dir (it is **not** edited), removes the `CMDWALLET_<NET>_WALLET_DIR` line from
 `grin_wallets_location.conf` so 089 stops collecting an empty dir, and prints restore/purge
-commands for a mainnet archive. Setup re-registers on its next run.
+commands for a mainnet archive. Add re-registers on its next run.
 
 Also fixed: the summary's "Listener started" line always printed the Foreign port; it now prints
 the active mode and its port.
 
-#### CMD wallet (05C) — `L) Listener` screen
+#### CMD wallet (05C) — Listener screen
 
 ⚠ Exercised locally against stubbed `tmux` / port helpers only — **not run on a VPS**.
 
-Setup (1/2) used to be the only way to (re)start a listener, and it walks every prompt (binary,
-init, passphrase, mode) before reaching it. `L` opens a per-network screen — straight in when only
-one network has a wallet — with a status block (state, PID, uptime, mode, whether the passphrase is
-saved) and four actions. It changes **no config**; mode, ports and the toml stay setup's job.
+The setup flow walks passphrase, mode and toml steps before it reaches the listener. Key `1` on a
+network's screen opens a status block (state, PID, uptime, mode, whether the passphrase is saved) and
+four actions. It changes **no config**; mode, ports and the toml stay Configure's job.
 
 | Action | Calls | Note |
 |---|---|---|
@@ -281,7 +328,7 @@ saved) and four actions. It changes **no config**; mode, ports and the toml stay
 | Restart | `_cmd_stop_wallet` → `_cmd_start_listener` | Deliberately **not** the setup flow's kill-session-and-wait: stopping by cwd waits on the wallet's own PIDs. Without a saved passphrase it is asked *after* the stop. |
 | Recent output | `tail` of `log_file_path` + `tmux capture-pane` | No attach needed — attaching and pressing Ctrl-C kills the listener. |
 
-The status block adds the one state the 05C screen cannot show: a `grin-wallet` started by hand
+The status block adds the one state the overview does not name: a `grin-wallet` started by hand
 from `listen.sh`, outside tmux. Start would otherwise fail the port guard ("held by ANOTHER
 process") with no hint that the holder is this very wallet.
 

@@ -1896,7 +1896,10 @@ _pmg_in_bringup() {
     success "grin-wallet binary present."
 
     # c. ownership (after the binary landed as root)
+    pw_pin_reset || true
     if declare -F pool_deroot >/dev/null 2>&1; then pool_deroot >/dev/null 2>&1 || { _pmg_in_fail 5 "pool_deroot failed"; return 1; }; fi
+    # pool_deroot's output is hidden above, so this runs again where a failure can be seen.
+    gnc_autostart_heal_owner_chown || warn "An @reboot node line still resets the secrets' group — re-enable node autostart."
     if declare -F pool_ensure_served_dirs >/dev/null 2>&1; then pool_ensure_served_dirs || true; fi
     success "Ownership swept to the grinpool service user."
 

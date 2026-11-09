@@ -114,6 +114,32 @@ console.log('\n[2] control');
   ok('…and so does the one-sided `GROUP BY region`', /SCAN shares/.test(regionPlan), regionPlan);
 }
 
+// The loyalty-streak updater counts activity from hashrate_history, not shares: shares keep only
+// ~31 h on mainnet and the updater needs the whole of yesterday. Its hourly window must stay
+// bounded on both sides so it SEARCHes the time-leading index for that window only.
+console.log('\n[3] loyalty-streak activity read (lib/incentives.js updateStreaks)');
+{
+  const src = fs.readFileSync(path.join(APP, 'lib/incentives.js'), 'utf8');
+  const body = src.slice(src.indexOf('  updateStreaks('), src.indexOf('  _minerDayRollupHorizon() {'));
+  ok('found the updateStreaks body', body.length > 0 && body.length < 5000, String(body.length));
+  const rolled = body.match(/'(SELECT grin_address FROM miner_hashrate_daily WHERE day = \? AND gps_seconds > 0)'/);
+  ok('a rolled-up day is read from miner_hashrate_daily by its day key', !!rolled);
+  if (rolled) {
+    const plan = db.prepare('EXPLAIN QUERY PLAN ' + rolled[1]).all(1).map((x) => x.detail).join(' | ');
+    ok('that read SEARCHes by day, never a full SCAN', /SEARCH miner_hashrate_daily/.test(plan) && !/SCAN miner_hashrate_daily/.test(plan), plan);
+  }
+  ok('updateStreaks does not read shares', !/\bFROM\s+shares\b/.test(body));
+  const m = body.match(/`(\s*SELECT DISTINCT grin_address FROM hashrate_history[^`]*)`/);
+  ok('updateStreaks reads hashrate_history (found the statement)', !!m);
+  if (m) {
+    const n = (m[1].match(/\?/g) || []).length;
+    const plan = db.prepare('EXPLAIN QUERY PLAN ' + m[1]).all(...Array(n).fill(1)).map((x) => x.detail).join(' | ');
+    ok('it SEARCHes idx_hashrate_time for the window, never a full SCAN',
+       /SEARCH hashrate_history USING (COVERING )?INDEX idx_hashrate_time \(recorded_at>\? AND recorded_at<\?\)/.test(plan) &&
+       !/SCAN hashrate_history/.test(plan), plan);
+  }
+}
+
 try { closeDb(); } catch (_) {}
 for (const s of ['', '-wal', '-shm']) { try { fs.unlinkSync(dbFile + s); } catch (_) {} }
 console.log('\n' + (fail ? 'FAILURES' : 'ALL PASS') + ` — ${pass} passed, ${fail} failed`);

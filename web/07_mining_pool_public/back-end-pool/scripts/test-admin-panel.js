@@ -1060,7 +1060,7 @@ console.log('\n[17] Stratum pause — strip, Announcements controls, Health line
        Z.zoned('') === null && Z.zoned('05/10/2026 09:00') === null);
   }
   ok('no new Date(<input value>) anywhere in the page script', !/new Date\((startV|endV|v)\)/.test(script));
-  ok('"settled — safe to proceed" is only said for a settled pause', /d\.settled\s*\?\s*'Paused · settled — safe to proceed/.test(script));
+  ok('"settled — safe to proceed" is only said for a settled pause', /d\.settled && !mayStillLand\s*\?\s*'Paused · settled — safe to proceed/.test(script));
   ok('the page states UTC in the section text', /All times UTC\./.test(sect));
   ok('the hub-move guide names Migrate OUT (B → 6) and IN (B → 7) and the resume-on-the-new-hub step',
      /B → 6<\/code> Migrate OUT/.test(sect) && /B → 7 → MIGRATE/.test(sect) && /Never resume the old hub after Migrate OUT/.test(sect));

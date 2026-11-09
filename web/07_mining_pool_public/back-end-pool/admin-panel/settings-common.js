@@ -45,6 +45,7 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
       // admin. The API calls are already secureAdmin-gated, but this avoids showing the
       // settings chrome to a logged-out visitor. See API.guardAdminPage.
       API.guardAdminPage();
+      setSettingsLoaded(false);
       loadAllSettings();
       // Each split settings page names its section on this script's data-section attribute
       // (→ window.SETTINGS_SECTION, the prelude at the top); fall back to a URL hash for any
@@ -56,10 +57,73 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
     // no-op instead of throwing (every page loads this whole shared script).
     function _safe(fn) { try { fn(); } catch (e) { /* not on this page */ } }
 
+    // A Save posts every field, and until a load succeeds those fields hold the page's HTML
+    // defaults, not the stored settings: saving them silently overwrites the real values, the
+    // incentives master switch included. Every settings write therefore starts refused and only a
+    // complete load opens it. Restore Defaults and Save campaign do not post the form, but they
+    // write settings, so they stay shut too. Buttons that act straight away (the draws, Run cleanup)
+    // use stored values, not this form, so they stay live, and the banner says so.
+    const WRITE_BUTTONS = '[data-action="save-section"], [data-action="restore-section"], [data-action="save-campaign"]';
+    let settingsLoaded = false;
+    let settingsRetrying = false;
+
+    function setSettingsLoaded(loaded) {
+      settingsLoaded = loaded;
+      document.querySelectorAll(WRITE_BUTTONS).forEach(btn => { btn.disabled = !loaded; });
+    }
+
+    // The code-side refusal: a disabled button is only the visible half of the rule.
+    function writesRefused() {
+      if (settingsLoaded) return false;
+      showToast('Nothing was saved: settings did not load. Use Retry at the top of the page, or reload it.', 'error');
+      return true;
+    }
+
+    function showSettingsLoadFailure(reason) {
+      let box = document.getElementById('settings-load-failed');
+      if (!box) {
+        box = document.createElement('div');
+        box.id = 'settings-load-failed';
+        box.className = 'settings-load-failed';
+        box.setAttribute('role', 'alert');
+        const title = document.createElement('strong');
+        title.textContent = 'Settings did not load. This form cannot be saved until they do.';
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'btn btn-secondary';
+        retry.addEventListener('click', retrySettingsLoad);
+        box.append(title, retry);
+        // Only the strip stays on screen: the detail scrolls away, so it cannot hide the form.
+        const why = document.createElement('p');
+        why.id = 'settings-load-why';
+        why.className = 'settings-load-why';
+        const host = document.querySelector('.settings-content.active') || document.querySelector('main') || document.body;
+        host.prepend(why);
+        host.prepend(box);
+      }
+      document.getElementById('settings-load-why').textContent = 'This form shows defaults, not your stored settings, '
+        + 'which are unchanged. Buttons that act straight away still work and use your stored settings. '
+        + 'Retry replaces anything typed here with the stored values. (' + reason + ')';
+      const retry = box.querySelector('button');
+      retry.disabled = false;
+      retry.textContent = 'Retry';
+      if (settingsRetrying) retry.focus();
+      settingsRetrying = false;
+    }
+
+    function retrySettingsLoad(e) {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.textContent = 'Retrying…';
+      settingsRetrying = true;
+      loadAllSettings();
+    }
+
     async function loadAllSettings(_attempt) {
       _attempt = _attempt || 0;
       try {
-        const response = await fetch('/api/admin/settings', { credentials: 'include', cache: 'no-store' });
+        // A stalled connection fails too, rather than leaving Save off with no banner.
+        const response = await fetch('/api/admin/settings', { credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(15000) });
         // A 429 (app rate limit) or 503 (nginx rate limit) is TRANSIENT — every Settings
         // sub-page re-fetches the whole config, so clicking quickly through the sidebar can
         // trip the limiter. Mirror guardAdminPage (api.js): back off briefly and retry a
@@ -67,14 +131,33 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
         if ((response.status === 429 || response.status === 503) && _attempt < 2) {
           return setTimeout(() => loadAllSettings(_attempt + 1), 1000 + _attempt * 1000);
         }
-        // A real auth failure is handled (redirect) by guardAdminPage; don't double-toast it.
-        if (response.status === 401 || response.status === 403) return;
-        if (!response.ok) throw new Error('Failed to load settings (HTTP ' + response.status + ')');
-        const data = await response.json();
-        populateForm(data.data);
-        populateBuilders(data.data);
+        // guardAdminPage redirects on a real auth failure. If it does not (its own check can
+        // answer differently), the banner explains the refused Save.
+        if (response.status === 401 || response.status === 403) throw new Error('not signed in as an admin, HTTP ' + response.status);
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const settings = (await response.json()).data;
+        // A 200 that lacks this page's section would leave the same defaults in the form.
+        if (!settings || !settings[window.SETTINGS_SECTION]) throw new Error('the reply held no settings for this page');
+        populateForm(settings);
+        populateBuilders(settings);
+        const banner = document.getElementById('settings-load-failed');
+        if (banner) {
+          banner.remove();
+          document.getElementById('settings-load-why').remove();
+          showToast('Settings loaded.', 'success');
+        }
+        setSettingsLoaded(true);
+        // Retry was just removed, and a keyboard user must not fall back to the top of the page.
+        if (settingsRetrying) {
+          settingsRetrying = false;
+          const heading = document.querySelector('main h1, h1');
+          if (heading) { heading.tabIndex = -1; heading.focus(); }
+        }
       } catch (err) {
-        showToast('Error loading settings: ' + err.message, 'error');
+        setSettingsLoaded(false);
+        showSettingsLoadFailure(err.message);
+        // These widgets have their own routes, so a settings failure need not blank them.
+        if (window.SETTINGS_SECTION === 'incentives') _safe(loadIncentiveData);
       }
     }
 
@@ -143,6 +226,7 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
     }
 
     async function saveSection(section, opts = {}) {
+      if (writesRefused()) return;
       const form = document.querySelector(`#${section} .settings-form`);
       const data = {};
 
@@ -222,21 +306,32 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
       // save the full section via the API so Plausible/Umami/Matomo are preserved (one source of truth).
       try {
         const r = await fetch('/api/admin/settings', { credentials: 'include' });
-        const all = (await r.json()).data || {};
-        const cur = all.analytics || {};
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        // Never merge into a guessed section: an empty one would post provider '' over the stored one.
+        const cur = ((await r.json()).data || {}).analytics;
+        if (!cur) throw new Error('the reply held no analytics settings');
         const body = Object.assign({}, cur, {
           ga_tracking_id: v,
           provider: v ? 'ga4' : (cur.provider || '')
         });
-        await adminFetch('/api/admin/settings/analytics', {
+        // adminFetch resolves on a 4xx or 5xx, so a refused save has to be read from the status.
+        const saved = await adminFetch('/api/admin/settings/analytics', {
           method: 'POST', credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body)
         });
-      } catch (e) { /* non-fatal: the GA mirror is a convenience */ }
+        if (!saved.ok) {
+          const refusal = await saved.clone().json().catch(() => ({}));
+          throw new Error(refusal.error || ('HTTP ' + saved.status));
+        }
+      } catch (e) {
+        // Non-fatal: the SEO section is already saved and the GA mirror is a convenience.
+        showToast('SEO saved, but the GA4 ID was not copied to Analytics: ' + e.message, 'warn');
+      }
     }
 
     async function restoreSection(section) {
+      if (writesRefused()) return;
       // pool_info carries the pool fee, and a restore applies it at once (routes/admin/settings.js
       // applyLiveFee): during a 0% promotion this ends the promotion for every block found next.
       const feeNote = section === 'pool_info'
@@ -1015,13 +1110,28 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
     }
 
     // ─── Prize pool + lottery dynamic data ──────────────────────────────────
+    // Refresh and Run now can overlap, so only the newest load may write to the page: an older
+    // reply landing last would put old figures back, or a failure over a good list.
+    let incentiveLoadSeq = 0;
+
     async function loadIncentiveData() {
+      const seq = ++incentiveLoadSeq;
+      const latest = () => seq === incentiveLoadSeq;
       try {
-        const r = await fetch('/api/admin/incentives/prize-pool', { credentials: 'include' });
-        if (r.ok) {
-          const d = await r.json();
+        const r = await fetch('/api/admin/incentives/prize-pool', { credentials: 'include', signal: AbortSignal.timeout(15000) });
+        const d = r.ok && latest() ? await r.json() : null;
+        if (d && latest()) {
           const bal = document.getElementById('prize-pool-balance');
           if (bal) bal.textContent = (d.balance || 0).toFixed(4);
+          const jw = document.getElementById('pp-jackpots-waiting');
+          const waiting = d.jackpots_waiting || { count: 0, amount: 0 };
+          if (jw) {
+            jw.hidden = !(waiting.count > 0);
+            jw.textContent = waiting.count > 0
+              ? `${waiting.count} block-finder jackpot${waiting.count === 1 ? '' : 's'} waiting: ${(waiting.amount || 0).toFixed(4)} GRIN. ` +
+                'They are paid oldest first as soon as the prize pool can cover each one.'
+              : '';
+          }
           const led = document.getElementById('prize-pool-ledger');
           if (led) led.innerHTML = (d.ledger || []).slice(0, 8).map(e =>
             `${escapeHtmlSafe(new Date(e.created_at * 1000).toLocaleString())} — ${escapeHtmlSafe(e.event_type)} ${(e.amount).toFixed(4)} (${escapeHtmlSafe(e.reference_type)})`
@@ -1048,16 +1158,24 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
           }
         }
       } catch (e) { /* non-fatal */ }
+      if (!latest()) return;
+      showGiveawayDrawsLoading();
+      const el = document.getElementById('lottery-draws');
       try {
-        const r = await fetch('/api/admin/incentives/lottery/draws', { credentials: 'include' });
-        if (r.ok) {
-          const d = await r.json();
-          const el = document.getElementById('lottery-draws');
-          if (el) el.innerHTML = (d.draws || []).slice(0, 5).map(dr =>
-            `#${dr.id} ${escapeHtmlSafe(dr.event_name || 'weekly')} — ${escapeHtmlSafe(dr.status)} — ${(dr.winners || []).map(w => `${escapeHtmlSafe(String(w.grin_address || '').slice(0, 12))}… ${w.amount.toFixed(4)}`).join(', ') || 'no winners'}`
-          ).join('<br>');
-        }
-      } catch (e) { /* non-fatal */ }
+        // A stalled connection fails too, rather than leaving "Loading…" up for good.
+        const r = await fetch('/api/admin/incentives/lottery/draws', { credentials: 'include', signal: AbortSignal.timeout(15000) });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        if (!latest()) return;
+        renderGiveawayDraws((d.draws || []).filter(dr => dr.draw_type === 'daily'), d.daily_status);
+        if (el) el.innerHTML = (d.draws || []).filter(dr => dr.draw_type !== 'daily').slice(0, 5).map(dr =>
+          `#${dr.id} ${escapeHtmlSafe(dr.event_name || 'weekly')} — ${escapeHtmlSafe(dr.status)} — ${(dr.winners || []).map(w => `${escapeHtmlSafe(String(w.grin_address || '').slice(0, 12))}… ${w.amount.toFixed(4)}`).join(', ') || 'no winners'}`
+        ).join('<br>');
+      } catch (e) {
+        if (!latest()) return;
+        showGiveawayDrawsFailed();
+        if (el) el.textContent = 'Could not load draws.';
+      }
       loadCampaigns();
     }
 
@@ -1122,6 +1240,7 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
     }
 
     async function saveCampaign() {
+      if (writesRefused()) return;
       const id = document.getElementById('camp-edit-id').value.trim();
       const payload = {
         name: document.getElementById('camp-name').value.trim(),
@@ -1197,13 +1316,19 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
       } catch (e) { showToast(e.message, 'error'); }
     }
 
+    // Loads can overlap, and only the newest may paint the list.
+    let campaignLoadSeq = 0;
+
     async function loadCampaigns() {
       const el = document.getElementById('campaigns-list');
       if (!el) return;
+      const seq = ++campaignLoadSeq;
       try {
-        const r = await fetch('/api/admin/incentives/campaigns', { credentials: 'include' });
+        const r = await fetch('/api/admin/incentives/campaigns', { credentials: 'include', signal: AbortSignal.timeout(15000) });
+        if (seq !== campaignLoadSeq) return;
         if (!r.ok) { el.textContent = 'Could not load campaigns.'; return; }
         const d = await r.json();
+        if (seq !== campaignLoadSeq) return;
         _campaignsCache = d.campaigns || [];
         if (!_campaignsCache.length) { el.textContent = 'No campaigns yet.'; return; }
         const esc = (typeof escapeHtmlSafe === 'function') ? escapeHtmlSafe : (s => s);
@@ -1230,7 +1355,7 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
             ${actions ? '<div style="margin-top:.3rem;display:flex;gap:.4rem;">' + actions + '</div>' : ''}
           </div>`;
         }).join('');
-      } catch (e) { el.textContent = 'Could not load campaigns.'; }
+      } catch (e) { if (seq === campaignLoadSeq) el.textContent = 'Could not load campaigns.'; }
     }
 
     async function topUpPrizePool() {
@@ -1326,7 +1451,10 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
       }
       _safe(updateProviderFields);
       // loadIncentiveData() hits the API and fills incentive widgets — only on that page.
-      if (window.SETTINGS_SECTION === 'incentives') _safe(loadIncentiveData);
+      if (window.SETTINGS_SECTION === 'incentives') {
+        _safe(loadIncentiveData);
+        _safe(updateGiveawayMaxWarning);
+      }
     }
 
     // Wire up dynamic listeners once the DOM is ready.

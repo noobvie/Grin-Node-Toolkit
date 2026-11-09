@@ -94,50 +94,120 @@ if ! declare -F success >/dev/null 2>&1; then success() { echo "[OK]    $*"; }; 
 _pw_own_pass_file() {
     local f="$1"
     if [[ -f "$f" && $(id -u) -eq 0 ]] && id grinpool >/dev/null 2>&1; then
-        chown grinpool:grinpool "$f" 2>/dev/null || true
+        chown -h grinpool:grinpool "$f" 2>/dev/null || true
     fi
 }
 
 # ─── Path resolvers (read live pool config when available) ──────────────────
 # pool_read_conf / the POOL_* vars are defined by the parent pool script. When
 # this lib is exercised standalone the env fallbacks keep the resolvers working.
+#
+# pool.json is owned by grinpool, and root acts on these two values: chown -R, unit text, generated
+# scripts. So root takes each from a root-owned pin file, written the first time it reads a safe
+# value; later edits to pool.json cannot steer it. A value that fails is never pinned, and
+# pw_paths_check stops a deploy on it rather than split the wallet between root and the backend.
+_pw_pin_file() { echo "${PW_PIN_DIR:-/opt/grin/conf}/pool_wallet_paths_$_PW_NET.conf"; }
+
+# Plain path text whose real location is outside what root protects, else the fallback.
+_pw_safe_path() {
+    local v="${1%/}" fallback="$2" real
+    if [[ "$v" =~ ^/[A-Za-z0-9._/-]+$ && "$v" != *..* ]]; then
+        real=$(realpath -m -- "$v" 2>/dev/null) || real=""
+        # POSIX lets a leading // survive, and the case below must see one slash.
+        real="/${real#"${real%%[!/]*}"}"
+        case "$real/" in
+            /|/opt/|/opt/grin/|/etc/*|/usr/*|/bin/*|/sbin/*|/lib/*|/lib64/*|/boot/*|/root/*|/proc/*|/sys/*|/dev/*|/run/*|\
+            /var/spool/*|/opt/grin/lib/*|/opt/grin/keys/*|/opt/grin/conf/*|/opt/grin/node/*) ;;
+            *) printf '%s' "$v"; return 0 ;;
+        esac
+    fi
+    echo "[WARN] Ignoring unsafe path: $(printf '%q' "$1")." >&2
+    printf '%s' "$fallback"
+}
+
+_pw_pin_set() {  # <key> <value>
+    local file; file=$(_pw_pin_file)
+    ( umask 077; { grep -v "^$1=" "$file" 2>/dev/null; printf '%s=%s\n' "$1" "$2"; } > "$file.new" ) \
+        && mv -f "$file.new" "$file" \
+        || { error "Could not write $file."; return 1; }
+}
+
+_pw_pinned() {  # <key> <default>
+    local key="$1" def="$2" file v raw
+    file=$(_pw_pin_file)
+    if [[ -f "$file" && ! -L "$file" && -O "$file" ]]; then
+        v=$(sed -n "s/^$key=//p" "$file" | tail -1)
+        if [[ -n "$v" ]]; then printf '%s' "$v"; return 0; fi
+    fi
+    raw=$(pool_read_conf "$key" "$def")
+    v=$(_pw_safe_path "$raw" "$def")
+    if [[ "$v" == "${raw%/}" && "$(id -u)" == 0 ]]; then _pw_pin_set "$key" "$v" >&2 || true; fi
+    printf '%s' "$v"
+}
+
+# A restore brings the operator's own config, so its paths are pinned afresh.
+pw_pin_reset() {
+    rm -f "$(_pw_pin_file)" || { error "Could not remove $(_pw_pin_file)."; return 1; }
+}
+
+# rc 1 when pool.json and root disagree: the backend reads pool.json, so the two would use
+# different wallets. Either the value is unsafe or it changed after root pinned it.
+pw_paths_check() {
+    local rc=0 key conf used
+    for key in grin_wallet_dir wallet_pass_file; do
+        conf=$(pool_read_conf "$key" "")
+        conf="${conf%/}"
+        if [[ "$key" == grin_wallet_dir ]]; then used=$(pw_wallet_dir 2>/dev/null); else used=$(pw_pass_file 2>/dev/null); fi
+        if [[ -n "$conf" && "$conf" != "$used" ]]; then
+            error "$key in $POOL_CONF is $(printf '%q' "$conf"), but root uses $used."
+            error "  If you did not change it, treat the pool user as compromised. If you did, use 5) Set up wallet."
+            rc=1
+        fi
+    done
+    return "$rc"
+}
+
 pw_wallet_dir() {
     if declare -F pool_read_conf >/dev/null 2>&1; then
-        pool_read_conf "grin_wallet_dir" "${POOL_WALLET_DIR:-/opt/grin/pubpoolwallet/$_PW_NET}"
+        _pw_pinned "grin_wallet_dir" "${POOL_WALLET_DIR:-/opt/grin/pubpoolwallet/$_PW_NET}"
     else
         echo "${POOL_WALLET_DIR:-/opt/grin/pubpoolwallet/$_PW_NET}"
     fi
 }
 pw_pass_file() {
     if declare -F pool_read_conf >/dev/null 2>&1; then
-        pool_read_conf "wallet_pass_file" "${POOL_APP_DIR:-/opt/grin/pubpool/$_PW_NET}/.wallet_pass"
+        _pw_pinned "wallet_pass_file" "${POOL_APP_DIR:-/opt/grin/pubpool/$_PW_NET}/.wallet_pass"
     else
         echo "${POOL_APP_DIR:-/opt/grin/pubpool/$_PW_NET}/.wallet_pass"
     fi
 }
 pw_bin()            { echo "$(pw_wallet_dir)/grin-wallet"; }
 pw_toml()           { echo "$(pw_wallet_dir)/grin-wallet.toml"; }
-pw_launcher()       { echo "$(pw_wallet_dir)/listen-wallet.sh"; }       # tmux payload (owner_api, no -p)
-pw_unlock_helper()  { echo "$(pw_wallet_dir)/pool-wallet-unlock.js"; }  # ECDH open_wallet
-pw_boot_script()    { echo "$(pw_wallet_dir)/pool-wallet-boot.sh"; }    # start + wait + unlock
+# Root runs these three from cron, so they live outside the wallet dir: grinpool owns that dir and
+# could replace anything in it, including a root-owned file.
+pw_script_dir()     { echo "/opt/grin/lib/pubpool-$_PW_NET"; }
+pw_launcher()       { echo "$(pw_script_dir)/listen-wallet.sh"; }       # tmux payload (owner_api, no -p)
+pw_unlock_helper()  { echo "$(pw_script_dir)/pool-wallet-unlock.js"; }  # ECDH open_wallet
+pw_boot_script()    { echo "$(pw_script_dir)/pool-wallet-boot.sh"; }    # start + wait + unlock
 
 # Resolve the wallet's own Owner/Foreign API secret files from grin-wallet.toml
-# (the Basic-Auth secrets the listener serves), falling back to the default names.
+# (the Basic-Auth secrets the listener serves), falling back to the default names. grinpool owns
+# that toml and these paths go into scripts root runs, so each is checked like a pool.json path.
 pw_owner_secret_path() {
     local dir toml p; dir=$(pw_wallet_dir); toml=$(pw_toml)
     p=$(grep -E '^[[:space:]]*owner_api_secret_path[[:space:]]*=' "$toml" 2>/dev/null | head -1 | sed -E 's/^[^=]*=[[:space:]]*//; s/^"//; s/"[[:space:]]*$//')
     case "$p" in
-        /*) echo "$p" ;;
+        /*) _pw_safe_path "$p" "$dir/.owner_api_secret"; echo ;;
         "") echo "$dir/.owner_api_secret" ;;
-        *)  echo "$dir/$p" ;;
+        *)  _pw_safe_path "$dir/$p" "$dir/.owner_api_secret"; echo ;;
     esac
 }
 pw_foreign_secret_path() {
     local dir toml p; dir=$(pw_wallet_dir); toml=$(pw_toml)
     p=$(grep -E '^[[:space:]]*api_secret_path[[:space:]]*=' "$toml" 2>/dev/null | head -1 | sed -E 's/^[^=]*=[[:space:]]*//; s/^"//; s/"[[:space:]]*$//')
     case "$p" in
-        /*) [[ -f "$p" ]] && { echo "$p"; return; } ;;
-        ?*) [[ -f "$dir/$p" ]] && { echo "$dir/$p"; return; } ;;
+        /*) [[ -f "$p" ]] && { _pw_safe_path "$p" "$dir/.foreign_api_secret"; echo; return; } ;;
+        ?*) [[ -f "$dir/$p" ]] && { _pw_safe_path "$dir/$p" "$dir/.foreign_api_secret"; echo; return; } ;;
     esac
     [[ -f "$dir/.foreign_api_secret" ]] && { echo "$dir/.foreign_api_secret"; return; }
     echo "$dir/.api_secret"
@@ -243,7 +313,13 @@ pw_write_launchers() {
     lf=$(pw_launcher); uj=$(pw_unlock_helper); boot=$(pw_boot_script)
     osec=$(pw_owner_secret_path)
     node_bin="$(command -v node 2>/dev/null || echo node)"
-    mkdir -p "$dir"
+    mkdir -p "$dir" || { error "Could not create $dir."; return 1; }
+    mkdir -p "$(pw_script_dir)" || { error "Could not create $(pw_script_dir)."; return 1; }
+    chown root:root "$(pw_script_dir)" 2>/dev/null || true
+    chmod 700 "$(pw_script_dir)" || { error "Could not chmod $(pw_script_dir)."; return 1; }
+
+    # Written beside the live files and moved in at the end, so a failed write cannot leave cron
+    # running a partial script.
 
     # 1) Long-running listener (tmux payload): combined Owner+Foreign API, NO -p.
     #    owner_api_include_foreign=true (set in grin-wallet.toml) mounts the
@@ -256,7 +332,7 @@ pw_write_launchers() {
     #    grinpool and must be able to open the same wallet db. The chown reclaims
     #    root-owned leftovers from init/address one-shots (idempotent, mirrors the
     #    node launch contract). HOME=wallet dir for the same reason as the node's.
-    cat > "$lf" <<EOF
+    cat > "$lf.new" <<EOF || { error "Could not write $lf.new."; return 1; }
 #!/bin/bash
 # GENERATED by 07_lib_pool_wallet.sh — combined Owner+Foreign listener (port $PW_OWNER_PORT, no passphrase in argv).
 cd "$dir" || exit 1
@@ -266,13 +342,13 @@ if [[ \$(id -u) -eq 0 ]] && id grinpool &>/dev/null; then
 fi
 exec "$bin" $PW_NET_FLAG --top_level_dir "$dir" owner_api
 EOF
-    chmod 700 "$lf"
+    chmod 700 "$lf.new" || { error "Could not chmod $lf.new."; return 1; }
 
     # 2) ECDH unlock helper (mirrors back-end-pool/lib/wallet.js ownerApiSession).
     #    Reads the owner secret + passphrase from FILES, never argv. open_wallet
     #    decrypts the seed into the listener's memory so build_coinbase works.
     #    The shared key is computeSecret() AS-IS — never sha256 it (see CLAUDE.md).
-    cat > "$uj" <<'NODE'
+    cat > "$uj.new" <<'NODE' || { error "Could not write $uj.new."; return 1; }
 const crypto = require('crypto'), fs = require('fs');
 const [ownerPort, secFile, passFile] = process.argv.slice(2);
 const ownerUrl = 'http://127.0.0.1:' + ownerPort + '/v3/owner';
@@ -314,12 +390,12 @@ async function enc(sk, method, params) {
   catch (e) { if (/already.*(open|unlock)/i.test(e.message)) { console.log('OK already open'); return; } throw e; }
 })().catch(e => { console.log('ERR ' + e.message); process.exit(1); });
 NODE
-    chmod 700 "$uj"
+    chmod 700 "$uj.new" || { error "Could not chmod $uj.new."; return 1; }
 
     # 3) Boot/relaunch orchestrator: (re)start the tmux listener, wait for the
     #    port, then unlock. Reused by @reboot autostart AND the watchdog so the
     #    wallet is re-opened after every restart (a reboot wipes the seed from RAM).
-    cat > "$boot" <<EOF
+    cat > "$boot.new" <<EOF || { error "Could not write $boot.new."; return 1; }
 #!/bin/bash
 # GENERATED by 07_lib_pool_wallet.sh — start combined listener + open_wallet.
 set -uo pipefail
@@ -331,7 +407,7 @@ OWNER_SECRET="$osec"
 PASS_FILE="$pass_file"
 NODE_BIN="$node_bin"
 EOF
-    cat >> "$boot" <<'EOF'
+    cat >> "$boot.new" <<'EOF' || { error "Could not write $boot.new."; return 1; }
 port_up(){ (exec 3<>"/dev/tcp/127.0.0.1/$OWNER_PORT") 2>/dev/null; }
 if ! tmux has-session -t "=$TMUX_NAME" 2>/dev/null; then
     SHELL=/bin/bash tmux new-session -d -s "$TMUX_NAME" "$LAUNCHER"
@@ -341,7 +417,39 @@ port_up || { echo "[boot] owner_api port $OWNER_PORT not up"; exit 1; }
 [[ -x "$NODE_BIN" ]] || NODE_BIN="$(command -v node 2>/dev/null || echo node)"
 "$NODE_BIN" "$UNLOCK_JS" "$OWNER_PORT" "$OWNER_SECRET" "$PASS_FILE"
 EOF
-    chmod 700 "$boot"
+    chmod 700 "$boot.new" || { error "Could not chmod $boot.new."; return 1; }
+    mv -f "$lf.new" "$lf" && mv -f "$uj.new" "$uj" && mv -f "$boot.new" "$boot" \
+        || { error "Could not move the wallet scripts into $(pw_script_dir)."; return 1; }
+}
+
+# Regenerate the wallet's scripts, and move a box off the older layout that kept them in the wallet
+# dir: the boot path in root's crontab changes first, and the old copies go last. The running
+# listener is not touched.
+pw_refresh_scripts() {
+    local dir old cron new
+    [[ -f "$(pw_toml)" ]] || return 0
+    pw_write_launchers || return 1
+    if [[ -x "$PW_WATCHDOG_BIN" ]]; then
+        _pw_write_watchdog_bin || return 1
+    fi
+    dir=$(pw_wallet_dir)
+    # By tag, not by exact path: the line may spell the old path differently.
+    if ! cron=$(crontab -l 2>&1) && [[ "$cron" != *"no crontab"* ]]; then
+        error "Could not read the crontab — old scripts left in $dir."
+        return 1
+    fi
+    new=$(sed "\|$PW_AUTOSTART_TAG|s|[^ ]*/pool-wallet-boot\.sh|$(pw_boot_script)|" <<<"$cron")
+    if [[ "$cron" != *"no crontab"* && "$new" != "$cron" ]]; then
+        printf '%s\n' "$new" | crontab - \
+            || { error "Could not update the wallet's @reboot line — old scripts left in $dir."; return 1; }
+    fi
+    # The old copies stay until no cron line can still reach them.
+    if crontab -l 2>/dev/null | grep -F 'pool-wallet-boot.sh' | grep -vqF "$(pw_boot_script)"; then
+        error "A cron line still runs an old wallet boot script — old scripts left in $dir."
+        return 1
+    fi
+    rm -f "$dir/pool-wallet-boot.sh" "$dir/listen-wallet.sh" "$dir/pool-wallet-unlock.js" \
+        || { error "Could not remove the old wallet scripts from $dir."; return 1; }
 }
 
 # ─── Unlock the running listener (open_wallet over ECDH) ─────────────────────
@@ -440,7 +548,7 @@ pw_listener_start() {
         _pw_ensure_toml_key "$_toml" "owner_api_include_foreign" "true" "wallet"
         info "Enabled owner_api_include_foreign in grin-wallet.toml (coinbase via Owner port)."
     fi
-    pw_write_launchers
+    pw_write_launchers || return 1
 
     _pw_port_collision_check "$PW_OWNER_PORT" "$PW_TMUX_WALLET" || return 1
     if tmux has-session -t "=$PW_TMUX_WALLET" 2>/dev/null && gnc_get_pid_on_port "$PW_OWNER_PORT" >/dev/null 2>&1; then
@@ -573,7 +681,13 @@ pw_setup() {
         echo -ne "Wallet dir [$cur_dir]: "
         read -r new_dir || true
         if [[ -n "$new_dir" && "$new_dir" != "$cur_dir" ]]; then
+            if [[ -z "$(_pw_safe_path "$new_dir" "" 2>/dev/null)" ]]; then
+                error "$new_dir cannot hold the wallet: use a plain path outside the system and toolkit dirs."
+                return 1
+            fi
+            new_dir="${new_dir%/}"
             pool_write_conf_key "grin_wallet_dir" "$new_dir"
+            _pw_pin_set "grin_wallet_dir" "$new_dir" || return 1
             info "Wallet dir set to $new_dir"
         fi
     fi
@@ -715,7 +829,7 @@ pw_setup() {
     #    surfaces here, and the operator should NOT continue (start the service,
     #    accept miners) until it shows [RUNNING], or coinbase + payouts silently fail.
     echo ""
-    pw_write_launchers
+    pw_write_launchers || return 1
     if ! pw_listener_start; then
         error "Pool wallet listener is NOT up/unlocked — setup is incomplete."
         error "  Do NOT start the pool service yet. Fix the cause (passphrase, port"
@@ -853,7 +967,7 @@ pw_autostart_enable() {
     local delay="${1:-45}" cron boot
     [[ "$delay" =~ ^[0-9]+$ ]] || delay=45
     boot=$(pw_boot_script)
-    [[ -x "$boot" ]] || pw_write_launchers
+    [[ -x "$boot" ]] || pw_write_launchers || return 1
     [[ -f "$(pw_pass_file)" ]] || { error "No saved password — run Setup wallet first."; return 1; }
 
     # Boot delay larger than the node's (the listener + unlock need the node up first).
@@ -877,12 +991,13 @@ pw_autostart_disable() {
 # LISTENER WATCHDOG (*/5) — relaunch if the port drops, re-unlock if it locks
 # =============================================================================
 _pw_write_watchdog_bin() {
-    mkdir -p "$(dirname "$PW_WATCHDOG_BIN")"
+    mkdir -p "$(dirname "$PW_WATCHDOG_BIN")" \
+        || { error "Could not create $(dirname "$PW_WATCHDOG_BIN")."; return 1; }
     local lf boot uj osec fsec pass_file node_bin
     lf=$(pw_launcher); boot=$(pw_boot_script); uj=$(pw_unlock_helper)
     osec=$(pw_owner_secret_path); fsec=$(pw_foreign_secret_path); pass_file=$(pw_pass_file)
     node_bin="$(command -v node 2>/dev/null || echo node)"
-    cat > "$PW_WATCHDOG_BIN" <<EOF
+    cat > "$PW_WATCHDOG_BIN.new" <<EOF || { error "Could not write $PW_WATCHDOG_BIN.new."; return 1; }
 #!/bin/bash
 # grin-pubpool-wallet-watchdog — GENERATED by 07_lib_pool_wallet.sh. Do not edit.
 STATE_DIR="$PW_WATCHDOG_STATE"
@@ -897,7 +1012,7 @@ FOREIGN_SECRET="$fsec"
 PASS_FILE="$pass_file"
 NODE_BIN="$node_bin"
 EOF
-    cat >> "$PW_WATCHDOG_BIN" <<'EOF'
+    cat >> "$PW_WATCHDOG_BIN.new" <<'EOF' || { error "Could not write $PW_WATCHDOG_BIN.new."; return 1; }
 set -uo pipefail
 mkdir -p "$STATE_DIR" "$(dirname "$LOG_FILE")" 2>/dev/null || true
 wlog() { echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] $*" >> "$LOG_FILE" 2>/dev/null || true; }
@@ -939,13 +1054,17 @@ wlog "listener up on $OWNER_PORT but wallet LOCKED — re-running open_wallet."
     && wlog "re-unlock OK." || wlog "re-unlock FAILED."
 exit 0
 EOF
-    chmod 750 "$PW_WATCHDOG_BIN"
+    chmod 750 "$PW_WATCHDOG_BIN.new" || { error "Could not chmod $PW_WATCHDOG_BIN.new."; return 1; }
+    mv -f "$PW_WATCHDOG_BIN.new" "$PW_WATCHDOG_BIN" \
+        || { error "Could not install $PW_WATCHDOG_BIN."; return 1; }
     info "Wrote pool wallet watchdog: $PW_WATCHDOG_BIN"
 }
 
 pw_watchdog_install() {
     mkdir -p "$PW_WATCHDOG_STATE" "$(dirname "$PW_WATCHDOG_LOG")" 2>/dev/null || true
-    _pw_write_watchdog_bin
+    # The watchdog exits quietly when these are missing, so they must exist first.
+    pw_write_launchers || return 1
+    _pw_write_watchdog_bin || return 1
     cat > "$PW_WATCHDOG_CRON" <<EOF
 # grin-node-toolkit: pool wallet listener watchdog (every 5 min).
 SHELL=/bin/bash

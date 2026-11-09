@@ -734,3 +734,8 @@ body {
      so stack them explicitly — flex-basis 0 above means they never wrap on their own. */
   .gauge-block { flex-basis: 100%; max-width: none; }
 }
+
+/* Fortune board filters: below 16px iOS zooms the page when a field takes focus. */
+@media (max-width: 768px) {
+  #fb-search, #fb-pot { font-size: 16px; min-height: 44px; }
+}

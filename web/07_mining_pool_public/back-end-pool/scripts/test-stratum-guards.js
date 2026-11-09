@@ -11,7 +11,8 @@
 // Audit §J6 resolution — every one of these ASSERTS A DENIAL, which is what the
 // original six could not do: they all held the worker name constant, so the multiplier below
 // passed straight through them:
-//   · §J6-1  the worker name is NOT in the dedup key
+//   · §J6-1  the dedup key holds only the work, the nonce and the proof
+//            (the full submit path: scripts/test-share-dedup.js)
 //   · §J6-5  a consecutive-reject ceiling exists and resets on an accepted share
 //   · §J6-6  the bech32 CHECKSUM is verified, not just the charset
 //   · §J6-10 isValidJob consults jobIdMap — bounded above, integers only
@@ -22,7 +23,7 @@
 const ShareValidator = require('../lib/shares');
 const NodeStratumClient = require('../lib/node-stratum-client');
 const StratumServer = require('../lib/stratum-server');
-const { validateUsername, bech32ChecksumValid } = require('../lib/stratum-protocol');
+const { validateUsername, bech32ChecksumValid, isCanonicalU64, isValidProofShape } = require('../lib/stratum-protocol');
 const {
   tokenBucketStep,
   MSG_RATE_PER_SEC,
@@ -39,13 +40,12 @@ function check(name, cond) {
 
 // generateShareHash never touches `this` (pure crypto), so call it off the prototype —
 // constructing ShareValidator would require an initialised DB (getDb throws otherwise).
-const shareHash = (addr, workId, worker, nonce) =>
-  ShareValidator.prototype.generateShareHash.call(null, addr, workId, worker, nonce);
+const POW = [3, 7, 19];
+const shareHash = (workId, nonce, pow = POW) =>
+  ShareValidator.prototype.generateShareHash.call(null, workId, nonce, pow);
 
 // ── Dedup key is the pre_pow (actual work), not the pool job_id ─────────────────────────
 {
-  const addr   = 'grin1abc';
-  const worker = 'rig01';
   const nonce  = '17293822569102704642'; // u64 above 2^53, carried as a string
   const prePow = '00112233445566778899aabbccddeeff'; // one template
   const prePow2 = 'ffeeddccbbaa99887766554433221100'; // a genuinely new template
@@ -54,41 +54,46 @@ const shareHash = (addr, workId, worker, nonce) =>
   // pool job_id wrapped it, the dedup key is now the pre_pow → identical hash → the second
   // submit of the same solution hits the share_hash UNIQUE constraint and is not double-credited.
   check('same work (pre_pow) → identical dedup hash regardless of wrapping job_id',
-    shareHash(addr, prePow, worker, nonce) === shareHash(addr, prePow, worker, nonce));
+    shareHash(prePow, nonce) === shareHash(prePow, nonce));
 
   // A genuinely new template (different pre_pow) is different work → different hash → credited.
   check('new template (different pre_pow) → distinct hash',
-    shareHash(addr, prePow, worker, nonce) !== shareHash(addr, prePow2, worker, nonce));
+    shareHash(prePow, nonce) !== shareHash(prePow2, nonce));
 
   // Two different valid nonces for the same template are two real shares → distinct hashes.
   check('same template, different nonce → distinct hash',
-    shareHash(addr, prePow, worker, nonce) !== shareHash(addr, prePow, worker, '999'));
+    shareHash(prePow, nonce) !== shareHash(prePow, '999'));
 
-  // grin_address stays in the key: two miners sharing a worker name (e.g. "default") can never
-  // collide and have one's valid share rejected as the other's duplicate.
-  check('cross-miner isolation (address in key)',
-    shareHash(addr, prePow, worker, nonce) !== shareHash('grin1xyz', prePow, worker, nonce));
+  // ── §J6-1: nothing the miner chooses may change the dedup identity ─────────────────────
+  // The key takes only the work, the nonce and the proof, so a label or an address cannot reach
+  // it. The case that proves it end to end, one share sent under two logins, is in
+  // test-share-dedup.js.
+  check('§J6-1 the key takes three inputs: the work, the nonce and the proof',
+    ShareValidator.prototype.generateShareHash.length === 3);
+  check('a second cycle in one graph is a different share',
+    shareHash(prePow, nonce, [1, 2, 3]) !== shareHash(prePow, nonce, [1, 2, 4]));
 
-  // ── §J6-1: the worker name must NOT change the dedup identity ──────────────────────────
-  // The worker label is whatever the miner types after the dot. While it was in the key, ONE
-  // solved (pre_pow, nonce, pow) re-submitted under N rig labels inserted N times and multiplied
-  // that address's PPLNS weight N-fold — from one socket, inside the token bucket, at ~11x floor
-  // (the node re-issues ~JOB_WINDOW distinct job_ids per identical pre_pow, so every copy looked
-  // novel to the node too). This is the assertion the original six were missing: they all held
-  // the worker name constant, so the control passed and the attack was invisible.
-  check('§J6-1 worker name does NOT change the dedup hash (one solution = one share)',
-    shareHash(addr, prePow, 'rig01', nonce) === shareHash(addr, prePow, 'rig02', nonce));
-  check('§J6-1 ...and that holds for many labels, not just two',
-    new Set(['a', 'b', 'c', 'd', 'default', 'x-1', 'z_9']
-      .map(w => shareHash(addr, prePow, w, nonce))).size === 1);
-  // The address still isolates miners, which is what the worker name was WRONGLY credited with.
-  check('§J6-1 address alone already separates two miners sharing a worker name',
-    shareHash(addr, prePow, 'default', nonce) !== shareHash('grin1xyz', prePow, 'default', nonce));
+  // Only a proof grin can pack gets through: anything else panics the task serving the node link.
+  const proof = Array.from({ length: 42 }, (_, i) => i * 1000);
+  check('a 42-edge ascending proof passes at C31 and C32', isValidProofShape(32, proof) && isValidProofShape(31, proof));
+  check('the widest edge that fits passes', isValidProofShape(32, [...proof.slice(0, 41), 2 ** 32 - 1]));
+  check('every other proof is refused', ![
+    [32, [1]], [32, []], [32, proof.slice(0, 41)], [32, [...proof, 50000]], [32, 'x'], [32, null],
+    [32, [...proof.slice(0, 41), 2 ** 32]], [32, [...proof].reverse()], [32, [...proof.slice(0, 41), proof[40]]],
+    [32, [...proof.slice(0, 41), 41000.5]], [32, [-1, ...proof.slice(1)]], [32, [...proof.slice(0, 41), '41000']],
+    [64, proof], [28, proof], [54, proof], [31.5, proof], ['32', proof],
+  ].some(([bits, pow]) => isValidProofShape(bits, pow)));
+
+  // Only the form the node can read gets through: a bare 0123 on its wire ends the connection.
+  check('canonical u64 nonces pass', ['0', '1', '123', '18446744073709551615'].every(isCanonicalU64));
+  check('every other nonce is refused',
+    !['0123', '00', '', ' 1', '1 ', '-1', '1.5', '1e3', 'abc', '18446744073709551616', '9'.repeat(400)].some(isCanonicalU64)
+    && ![1, null, undefined, ['1'], {}].some(isCanonicalU64));
 
   // Deterministic 64-char lowercase hex (SHA-256).
-  const h = shareHash(addr, prePow, worker, nonce);
+  const h = shareHash(prePow, nonce);
   check('hash is 64-char lowercase hex', /^[0-9a-f]{64}$/.test(h));
-  check('hash is deterministic', h === shareHash(addr, prePow, worker, nonce));
+  check('hash is deterministic', h === shareHash(prePow, nonce));
 }
 
 // ── Per-connection message token bucket ─────────────────────────────────────────────────
@@ -400,6 +405,8 @@ const shareHash = (addr, workId, worker, nonce) =>
       JSON.stringify({ id: 3, method: 'login', params: { login: 'x', pass: 'y' } }));
   check('§J6-11 a non-numeric nonce string is left alone (never a bare token on the wire)',
     ser({ id: 4, params: { nonce: 'abc' } }).includes('"nonce":"abc"'));
+  check('a leading-zero nonce keeps its quotes, so the node line stays valid JSON',
+    ser({ id: 5, params: { nonce: '0123' } }).includes('"nonce":"0123"'));
 }
 
 // ── NodeStratumClient pending-backlog bound (2000-miner node-stall safety) ──────────────

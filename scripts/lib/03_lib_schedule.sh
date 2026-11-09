@@ -541,14 +541,14 @@ add_grin_autostart() {
         fi
 
         # Grin Node Launch Contract (CLAUDE.md): run as the grin user with
-        # HOME=$GRIN_DIR, after chown -R grin:grin. A root-run node leaves
+        # HOME=$GRIN_DIR, after chown -R grin. A root-run node leaves
         # root:root files in the node dir → next grin-user start hits EACCES.
         # Mirrors gnk_autostart_enable in lib/grin_node_keepalive.sh, including
         # the launcher's pane command (_gnc_node_run_cmd, cron-escaped): exit-code
         # capture + a `read` tail, so a crash after a reboot keeps its panic text.
         local run_cmd
         run_cmd=$(_gnc_node_run_cmd "$GRIN_DIR" "$GRIN_BINARY" cron)
-        local cron_line="@reboot sleep $delay && chown -R grin:grin '$GRIN_DIR' 2>/dev/null; su -s /bin/bash grin -c \"cd '$GRIN_DIR' && env HOME='$GRIN_DIR' SHELL=/bin/bash tmux new-session -d -s $TMUX_SESSION '$run_cmd'\" $cron_marker"
+        local cron_line="@reboot sleep $delay && chown -R grin '$GRIN_DIR' 2>/dev/null; su -s /bin/bash grin -c \"cd '$GRIN_DIR' && env HOME='$GRIN_DIR' SHELL=/bin/bash tmux new-session -d -s $TMUX_SESSION '$run_cmd'\" $cron_marker"
 
         # Check for existing entry
         if echo "$existing_cron" | grep -qF "$cron_marker"; then

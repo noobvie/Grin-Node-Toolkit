@@ -108,7 +108,9 @@ re-applies to all consumers, so no per-product re-run is needed.
   nginx); `grin_secrets_sync_all` runs them all (no-op when a product is absent/correct).
 - **Auto self-heal:** `grin_install_secret_sync` installs the lib to `/opt/grin/lib/`, a
   `/usr/local/bin/grin-secret-sync` CLI, and a `grin-secret-sync.timer` (every 5 min). Called
-  from every product's setup that consumes node secrets. Manual one-shot: run `grin-secret-sync`.
+  from every product's setup that consumes node secrets, and from pool 9) Deploy new code. The
+  timer runs that installed copy, so a toolkit update alone does not change it. Manual one-shot:
+  run `grin-secret-sync`.
 - **New consumer:** source the lib, add a `grin_sync_<x>` + call it in `grin_secrets_sync_all`,
   and call `grin_install_secret_sync` in that product's setup. Don't re-implement resolution.
 
@@ -133,8 +135,23 @@ serves first install and every rebuild — there is no separate "first time" pat
   So `_gns_probe_secret` also calls with a deliberately wrong secret and reports UNKNOWN unless
   that one is rejected. Never treat a bare HTTP 200 from the node API as proof of a credential.
 - **Never blanket-chown/chmod an existing secret file** — Script 04 sets the foreign secret to
-  `root:<web_user>` 640 for its REST collector and the de-rooted pool sets `root:grinsecret` 640.
+  `root:<web_user>` 640 for its REST collector and the de-rooted pool uses group `grinsecret`, 640.
   `_gns_node_put` rewrites in place; only brand-new files get 600 grin:grin.
+- **A node dir's chown is OWNER ONLY: `chown -R grin <dir>`, never `grin:grin`.** Resetting the
+  group strips `grinsecret`, so a pool that starts before the next `grin-secret-sync` run reads no
+  secret and shows a healthy node as offline (401). Seen live 2026-11-05 after a binary update +
+  reboot. `pool_deroot` runs `gnc_autostart_heal_owner_chown`, so Install, Deploy, Migrate IN and
+  restore all rewrite older `@reboot` lines (old crontab saved under `/root`); test it with
+  `bash docs/tools/check_autostart_heal.sh`. `lib/grin-node.js` also re-reads the file after a 401.
+  `grin_secret_group_grant` is the one place that applies the group, for every node dir on the box.
+  A foreign secret can hold one group, so a pool box cannot also run the Script 04 REST collector.
+- **grinpool must never reach root through a file root runs or a path root reads.** Scripts root
+  runs live in root-owned `/opt/grin/lib/pubpool-<net>/`, never in the wallet dir (grinpool owns it).
+  `pool.json` is grinpool-owned, so root takes `pw_wallet_dir` and `pw_pass_file` from the root-owned
+  pin `/opt/grin/conf/pool_wallet_paths_<net>.conf`, seeded through `_pw_safe_path`. A deploy stops
+  when pool.json and the pin disagree (`pw_paths_check`). Tests: `docs/tools/check_pool_paths.sh`,
+  `check_wallet_scripts.sh`. A new conf or toml value that root acts on needs the same treatment.
+  Still open: `pw_show_address` and `_pw_verify_pass` run the wallet-dir binary as root.
 - **Rotation is explicit:** `grin-secret-sync --rotate <net>` (updates vault + node dir, re-syncs
   consumers, then **requires a node restart**). Vault rides along in 089 backups.
 

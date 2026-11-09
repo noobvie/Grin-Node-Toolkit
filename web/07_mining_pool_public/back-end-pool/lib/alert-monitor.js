@@ -24,6 +24,8 @@ const DRAIN_SETTLE_SECS = 6 * 3600;
 const NETWORK_FEE_SAMPLE = 20;
 const NETWORK_FEE_MIN_SAMPLE = 5;
 
+const SHARE_RECORD_CLEAR_CHECKS = 5;
+
 class AlertMonitor {
   constructor(config, modules, db) {
     this.config = config;
@@ -40,6 +42,10 @@ class AlertMonitor {
     this.withdrawalScheduler = modules.withdrawalScheduler;
     this.alertDelivery = modules.alertDelivery; // wired so alerts are actually delivered
     this.nodeAvailability = modules.nodeAvailability || null;  // shares its fresh node probe
+    this.lotteryManager = modules.lotteryManager || null;
+    this.prevUnrecordedShares = 0;
+    this.quietShareChecks = 0;
+    this.unrecordedSinceAlert = 0;
     this.db = db;
 
     this.monitorInterval = null;
@@ -117,6 +123,15 @@ class AlertMonitor {
       // above, this is an EVENT, not a condition, and there is no later observation that could
       // say "the block that was lost is fine now". The row stays active until a human clears it.
       block_record_failed: true,
+      // Pushed by the stratum server: submits lost their reply and the chain could not be read
+      // to check them. An event a human clears, like block_record_failed.
+      block_check_incomplete: true,
+      // Node-accepted shares could not be stored, so miners are losing credit. Resolved by the
+      // next check with none.
+      share_record_failed: true,
+      // The daily giveaway is on but its stored rules are invalid, so no draw runs. Resolved once
+      // the rules are saved again.
+      giveaway_rules_invalid: true,
       // §21.11. Pushed by lib/stratum-pause.js, not polled: a resume / re-bind left a stratum
       // listener down (EADDRINUSE, wg0 gone → EADDRNOTAVAIL). Resolved by the next re-bind that
       // brings every listener up.
@@ -190,6 +205,14 @@ class AlertMonitor {
       // so it rides the fast loop rather than the money cadence.
       if (this.enabledAlerts.distribution_stalled) {
         await this.checkDistributionStalled();
+      }
+
+      // Guarded here: a failure in either must not skip the money checks further down.
+      try {
+        if (this.enabledAlerts.share_record_failed) await this.checkShareRecording();
+        if (this.enabledAlerts.giveaway_rules_invalid) await this.checkGiveawayRules();
+      } catch (err) {
+        this.error(`Share/giveaway check failed: ${err.message}`);
       }
 
       // Money-integrity + withdrawal-anomaly checks — slower cadence (they force a fresh,
@@ -686,6 +709,46 @@ class AlertMonitor {
     }
   }
 
+  // Quiet checks before the alert clears, so an intermittent fault raises one alert, not a stream.
+  async checkShareRecording() {
+    if (!this.stratumServer) return;
+    const total = this.stratumServer.unrecordedShares || 0;
+    const fresh = total - this.prevUnrecordedShares;
+    this.prevUnrecordedShares = total;
+    if (fresh > 0) {
+      this.quietShareChecks = 0;
+      this.unrecordedSinceAlert += fresh;
+      await this.triggerAlert('share_record_failed', {
+        level: 'critical',
+        message: `${this.unrecordedSinceAlert} share(s) accepted by the node could not be stored, so ` +
+          'miners are losing credit. Check the pool database and its disk.',
+        data: { unrecorded: this.unrecordedSinceAlert },
+        refresh: true,
+      });
+      return;
+    }
+    this.quietShareChecks += 1;
+    if (this.quietShareChecks >= SHARE_RECORD_CLEAR_CHECKS) {
+      this.unrecordedSinceAlert = 0;
+      await this.resolveAlert('share_record_failed');
+    }
+  }
+
+  async checkGiveawayRules() {
+    const daily = this.lotteryManager && this.lotteryManager.daily;
+    if (!daily) return;
+    if (daily.enabled() && !daily.rules()) {
+      await this.triggerAlert('giveaway_rules_invalid', {
+        level: 'warning',
+        message: 'The daily giveaway is on, but its saved rules are invalid, so no draw will run. ' +
+          'Open admin → Incentives and save them again. The maximum must stay below one block reward.',
+        data: {},
+      });
+    } else {
+      await this.resolveAlert('giveaway_rules_invalid');
+    }
+  }
+
   /**
    * Blocks that matured but were never credited — audit §J5-8.
    *
@@ -780,7 +843,9 @@ class AlertMonitor {
   /**
    * Trigger an alert (or update existing one)
    */
+  // Resolves false if the alert row could not be stored.
   async triggerAlert(alertType, details) {
+    let stored = false;
     try {
       const now = new Date().toISOString();
 
@@ -792,7 +857,8 @@ class AlertMonitor {
       `);
       const existing = stmt.get(alertType);
 
-      if (existing) {
+      // `separate` is for events that each carry their own data, such as a block to enter by hand.
+      if (existing && !details.separate) {
         // Update existing alert
         const updateStmt = this.db.prepare(`
           UPDATE alerts
@@ -800,7 +866,12 @@ class AlertMonitor {
           WHERE id = ?
         `);
         updateStmt.run(now, existing.id);
-        return;
+        // `refresh` is for a running total: the row keeps the latest figure, with no new delivery.
+        if (details.refresh) {
+          this.db.prepare('UPDATE alerts SET message = ?, data = ? WHERE id = ?')
+            .run(details.message, JSON.stringify(details.data || {}), existing.id);
+        }
+        return true;
       }
 
       // Create new alert
@@ -817,6 +888,7 @@ class AlertMonitor {
         now
       );
 
+      stored = true;
       this.log(`Alert triggered: ${alertType} (level: ${details.level})`);
 
       // Deliver alert (email, webhook, etc.)
@@ -825,6 +897,7 @@ class AlertMonitor {
     } catch (err) {
       this.error(`Failed to trigger alert: ${err.message}`);
     }
+    return stored;
   }
 
   /**

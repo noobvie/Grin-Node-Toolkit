@@ -2273,7 +2273,7 @@ impl §10.13 *Operator side*. What changed against §19.3, §19.12, D16 and D18:
 12. **Weekly games VACUUM: Sunday 03:30 UTC**, half an hour after the pool's, run as `grinplay` via
     `runuser`, so the rewritten file and any sidecar stay the service's. `pgs_status` reads
     `schema_version` the same way, as `grinplay`, for the same reason (the pool's §J16-8 trap).
-13. **Cleanup prompts:** group 1b (everything but the DB) is `[Y/n]` like its neighbours. 1c (the DB)
+13. **Cleanup prompts:** group 1b (everything but the DB) is `[Y/n]`, so Enter removes it. 1c (the DB)
     is **`[y/N]`, default keep**: it is player history, not rebuildable state. Uninstall (P → 8)
     likewise keeps the DB unless confirmed, and keeps the `grinplay` user and the pool.json keys.
     Both remove the link file; the pool then answers `link_not_configured` and the probe hides the

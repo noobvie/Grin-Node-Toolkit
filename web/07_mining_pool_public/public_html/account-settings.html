@@ -445,6 +445,9 @@
                         </div>
                         <button class="btn-save" id="acct-lookup">View Account</button>
                     </div>
+                    <!-- A plain link: ?addr= already drives the lookup, and the demo address renders
+                         built-in sample data with no API call. Hidden once an account is showing. -->
+                    <p class="note" id="acct-demo-hint" style="margin-top:8px;">Not mining yet? <a href="?addr=grin1demodemodemodemodemodemo">See a demo account</a> with sample data to find out what a miner sees here.</p>
                     <div class="acct-msg" id="acct-msg"></div>
                     <!-- The page's ONE ownership proof. Shown once an address is loaded; every gated
                          action reads it through getProof(): the P-04 payouts, P-08's proof reveal and the
@@ -871,6 +874,8 @@
                                     <tr><td>Last 30 days</td><td class="grin">—</td><td>—</td><td>—</td></tr>
                                 </tbody>
                             </table>
+                            <!-- Lifetime, from lottery_winners: every draw this address has won. -->
+                            <p class="note" style="margin:10px 0 0;"><span id="acct-prizes-text">Draw prizes won: —</span> · <a href="/fortune-board.html">Fortune Board</a></p>
                             </div>
                         </div>
                     </div>

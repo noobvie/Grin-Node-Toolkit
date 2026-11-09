@@ -129,17 +129,24 @@ class GrinNodeAPI {
     //   3. the live node dir under /opt/grin/node (see _detectNodeDir)
     // Reading by path means there are no copies to keep in sync when the node is rebuilt.
     // The backend is de-rooted (runs as `grinpool`), so it reads the grin-owned secret files
-    // through the `grinsecret` group — 640 root:grinsecret, applied by pool_deroot() and
-    // re-applied by grin_sync_pool_stratum() after a node rebuild.
-    const nodeDir = config.node_dir || this._detectNodeDir();
-    this.secret = this._resolveSecret(
-      config.node_api_secret, config.node_api_secret_path,
-      path.join(nodeDir, '.api_secret')
-    );
-    this.foreignSecret = this._resolveSecret(
-      config.node_foreign_api_secret, config.node_foreign_api_secret_path,
-      path.join(nodeDir, '.foreign_api_secret')
-    );
+    // through the `grinsecret` group (640), applied by grin_secret_group_grant() on deploy and
+    // by the secret-sync timer after a node rebuild.
+    this._secretSources = {
+      secret: { path: config.node_api_secret_path, file: '.api_secret' },
+      foreignSecret: { path: config.node_foreign_api_secret_path, file: '.foreign_api_secret' },
+    };
+    this._fixedNodeDir = config.node_dir || '';
+    this._reloadWarned = new Set();
+    this.secret = this._resolveSecret(config.node_api_secret, this._secretPath('secret'));
+    this.foreignSecret = this._resolveSecret(config.node_foreign_api_secret, this._secretPath('foreignSecret'));
+    // An explicit pool.json value has no file behind it for _reloadSecret() to re-read.
+    this._secretSources.secret.pinned = this._usableValue(config.node_api_secret);
+    this._secretSources.foreignSecret.pinned = this._usableValue(config.node_foreign_api_secret);
+  }
+
+  _secretPath(field) {
+    const src = this._secretSources[field];
+    return src.path || path.join(this._fixedNodeDir || this._detectNodeDir(), src.file);
   }
 
   // Which node dir actually serves this network. Mirrors the fallback branch of
@@ -172,11 +179,8 @@ class GrinNodeAPI {
   // group grant is missing, and the resulting unauthenticated call gets a 401 that looks
   // exactly like a dead node. Never let that one pass silently — it is not diagnosable
   // from the symptom.
-  _resolveSecret(value, explicitPath, defaultPath) {
-    if (value && String(value).trim() && !/^CHANGE_ME/i.test(value)) {
-      return String(value).trim();
-    }
-    const p = explicitPath || defaultPath;
+  _resolveSecret(value, p) {
+    if (this._usableValue(value)) return String(value).trim();
     try {
       if (p && fs.existsSync(p)) return fs.readFileSync(p, 'utf-8').trim();
       this._warnNoSecret(p, `no such file (wrong node dir? this box may run a different ${this.network} layout)`);
@@ -187,6 +191,34 @@ class GrinNodeAPI {
         : (err.code || err.message));
     }
     return '';
+  }
+
+  _usableValue(value) {
+    return Boolean(value && String(value).trim() && !/^CHANGE_ME/i.test(value));
+  }
+
+  // Re-read a secret file after the node refused a call. The file can be repaired or rotated
+  // after this process started, and a prune↔full rebuild moves it, so the node dir is resolved
+  // again. A failed read warns once per fault: this runs on every refused call while it lasts,
+  // and a file that broke after startup has no startup warning to go on.
+  _reloadSecret(field) {
+    if (this._secretSources[field].pinned) return;
+    const p = this._secretPath(field);
+    let value;
+    try {
+      value = fs.readFileSync(p, 'utf-8').trim();
+    } catch (err) {
+      if (!this._reloadWarned.has(field)) {
+        this._reloadWarned.add(field);
+        console.error(`[grin-node] the node refused the API secret and ${p} cannot be read: ` +
+          `${err.code || err.message}. Run grin-secret-sync.`);
+      }
+      return;
+    }
+    this._reloadWarned.delete(field);
+    if (!value || value === this[field]) return;
+    this[field] = value;
+    console.log(`[grin-node] reloaded the API secret from ${p} after the node refused the old one.`);
   }
 
   // One line at startup, per missing secret. Without it an unresolved secret is completely
@@ -290,6 +322,7 @@ class GrinNodeAPI {
         height: result.height,
         hash: result.hash,
         nonce: result.nonce,
+        cuckoo_solution: result.cuckoo_solution,
         timestamp: result.timestamp,
         difficulty: result.difficulty,
         total_difficulty: result.total_difficulty
@@ -377,11 +410,27 @@ class GrinNodeAPI {
   }
 
   async _ownerRpcCall(method, params = []) {
-    return this._rpcCall(`${this.nodeUrl}/v2/owner`, method, params, this.secret);
+    return this._authedCall(`${this.nodeUrl}/v2/owner`, method, params, 'secret');
   }
 
   async _foreignRpcCall(method, params = []) {
-    return this._rpcCall(`${this.nodeUrl}/v2/foreign`, method, params, this.foreignSecret);
+    return this._authedCall(`${this.nodeUrl}/v2/foreign`, method, params, 'foreignSecret');
+  }
+
+  // One retry, and only with a value that differs from the one this call sent. Comparing to
+  // what was SENT matters: when calls overlap, another call may already have reloaded the
+  // secret. The node refuses a call before running it, so repeating a refused
+  // push_transaction cannot send it twice.
+  async _authedCall(endpoint, method, params, field) {
+    const sent = this[field];
+    try {
+      return await this._rpcCall(endpoint, method, params, sent);
+    } catch (err) {
+      if (err.transport !== 'auth') throw err;
+      this._reloadSecret(field);
+      if (this[field] === sent) throw err;
+      return this._rpcCall(endpoint, method, params, this[field]);
+    }
   }
 
   async _rpcCall(endpoint, method, params = [], secret = '') {

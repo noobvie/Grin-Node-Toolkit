@@ -60,11 +60,14 @@ module.exports = function createAdminIncentivesRoutes(ctx, guards) {
       // in; prizes · jackpots · join bonuses · streaks out) + current balance + recent 25 rows.
       // `balance`/`ledger` kept for backward-compat with the existing panel wiring.
       const statement = incentivesManager.prizePoolStatement(25);
+      // jackpots_waiting = { count, amount }: jackpots due at maturity that the prize pool could
+      // not yet cover. Admin only — kept out of `statement`, which the public report shares.
       res.json({
         success: true,
         balance: statement.balance,
         ledger: statement.recent,
         statement,
+        jackpots_waiting: incentivesManager.pendingJackpotSummary(),
       });
     } catch (err) {
       res.status(500).json({ error: 'Failed to load prize pool' });
@@ -92,6 +95,7 @@ module.exports = function createAdminIncentivesRoutes(ctx, guards) {
         success: true,
         draws: lotteryManager.recentDraws(20),
         next: lotteryManager.nextScheduled(),
+        daily_status: lotteryManager.daily.status(),
       });
     } catch (err) {
       res.status(500).json({ error: 'Failed to load lottery draws' });
@@ -110,6 +114,33 @@ module.exports = function createAdminIncentivesRoutes(ctx, guards) {
       db.prepare(`
         INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details)
         VALUES (?, 'lottery_draw_now', 'lottery', ?, ?)
+      `).run(req.user.user_id, String(result.draw_id || ''), JSON.stringify(result));
+      res.json({ success: true, result });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ─── Daily giveaway ─────────────────────────────────────────────────────────
+  // Rehearsal: writes nothing, moves nothing. extra_miners adds invented miners to the real
+  // eligible list, so a pool with one miner can see what a busy day would do.
+  router.get('/api/admin/incentives/daily-giveaway/preview', secureAdmin, (req, res) => {
+    try {
+      const extra = parseInt(req.query.extra_miners, 10);
+      const extraMiners = Number.isFinite(extra) ? Math.min(1000, Math.max(0, extra)) : 0;
+      res.json(lotteryManager.daily.preview({ extraMiners }));
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to build the preview' });
+    }
+  });
+
+  // A REAL extra draw over the last 24 h, paid from the prize pool once its seed block is mined.
+  router.post('/api/admin/incentives/daily-giveaway/run', freshAdmin, async (req, res) => {
+    try {
+      const result = await lotteryManager.daily.runNow();
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details)
+        VALUES (?, 'daily_giveaway_run_now', 'lottery', ?, ?)
       `).run(req.user.user_id, String(result.draw_id || ''), JSON.stringify(result));
       res.json({ success: true, result });
     } catch (err) {

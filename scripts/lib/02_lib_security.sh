@@ -1,19 +1,14 @@
 # 02_lib_security.sh — security sections of Script 02: firewall detection, hardening, IP filtering and fail2ban management.
 # Sourced by 02_nginx_fileserver_manager.sh; shares its globals and log/info/warn/error.
-# Moved as-is; callers reach these via `fn || …`, so errexit is off and file operations are not individually guarded.
+# Callers reach these via `fn || …`, so errexit is off: IP Filtering checks every firewall and file command; the older sections do not guard theirs individually.
 
 # 1.7 - Detect available firewall (firewalld, ufw or iptables)
-# firewalld first: it is the default on RHEL/Rocky/Alma, where iptables may be
-# absent entirely (removed in RHEL 10) or conflict with firewalld if used directly.
+# Order and tests live in fwh_detect (lib/firewall_shared_helpers.sh): firewalld first
+# (RHEL/Rocky/Alma default; iptables may be absent there or conflict with it), ufw only
+# when enabled, plain iptables as the fallback.
 detect_firewall() {
-    if command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null; then
-        FIREWALL="firewalld"
-    elif command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
-        FIREWALL="ufw"
-    elif command -v iptables &>/dev/null; then
-        FIREWALL="iptables"
-    else
-        FIREWALL="none"
+    FIREWALL="$(fwh_detect)"
+    if [[ "$FIREWALL" == "none" ]]; then
         print_warn "No supported firewall found (firewalld, ufw or iptables). IP blocking will not work."
     fi
     print_info "Firewall detected: $FIREWALL"
@@ -185,110 +180,121 @@ EOF
     read -r
 }
 
-# 28.1 - Block a single IP or CIDR via the detected firewall
-_ip_block() {
-    read -p "Enter IP / CIDR to block (e.g. 1.2.3.4 or 1.2.3.0/24) or 0 to cancel: " target_ip
-    [[ -z "$target_ip" || "$target_ip" == "0" ]] && return
-    read -p "Reason / note (optional, 0 to cancel): " reason
-    [[ "$reason" == "0" ]] && return
-
-    case "$FIREWALL" in
-        firewalld)
-            firewall-cmd --permanent --add-rich-rule="rule family='ipv4' source address='${target_ip}' drop" &>/dev/null \
-                && firewall-cmd --reload &>/dev/null \
-                || { print_warn "firewalld: failed to add drop rule for $target_ip"; return; }
-            print_info "firewalld: blocked $target_ip"
-            ;;
-        ufw)
-            ufw deny from "$target_ip" to any
-            print_info "UFW: blocked $target_ip"
-            ;;
-        iptables)
-            iptables -I INPUT   -s "$target_ip" -j DROP
-            iptables -I OUTPUT  -d "$target_ip" -j DROP
-            iptables -I FORWARD -s "$target_ip" -j DROP
-            print_info "iptables: blocked $target_ip (INPUT / OUTPUT / FORWARD)"
-            ;;
-        none)
-            print_warn "No firewall available. Cannot block IP."
-            return
-            ;;
-    esac
-
-    echo "$target_ip | $(date -u '+%Y-%m-%d %H:%M UTC') | ${reason:-no reason}" >> "$BLOCKED_LIST_FILE"
-    print_info "Logged to: $BLOCKED_LIST_FILE"
+# Print stdin indented, or "  (none)" when it is empty. A `cmd | grep | sed || echo`
+# chain cannot do this: sed exits 0 on empty input, so the fallback never ran.
+_ip_print_or_none() {
+    local text
+    text="$(cat)"
+    if [[ -n "$text" ]]; then
+        printf '%s\n' "$text" | sed 's/^/  /'
+    else
+        echo "  (none)"
+    fi
+    return 0
 }
 
-# 28.2 - Unblock a single IP via the detected firewall
-_ip_unblock() {
-    echo ""
-    echo "Currently blocked IPs:"
-    if [[ ! -s "$BLOCKED_LIST_FILE" ]]; then
-        print_info "(none recorded)"
-        echo ""
-        echo "Press Enter to continue..."
-        read -r
-        return
+# 28.1 - Block a single IP or CIDR via the detected firewall.
+# The firewall work and the record are lib/firewall_shared_helpers.sh (fwh_block_ip,
+# fwh_record_add); this is the prompt. The record is written only once the firewall
+# accepted the rule.
+_ip_block() {
+    local target_ip reason rc ssh_ip confirm
+    read -r -p "Enter IP / CIDR to block (e.g. 1.2.3.4, 1.2.3.0/24, 2001:db8::/32) or 0 to cancel: " target_ip
+    if [[ -z "$target_ip" || "$target_ip" == "0" ]]; then return 0; fi
+    fwh_validate_target "$target_ip" || return 0
+
+    if ssh_ip="$(fwh_target_covers_ssh "$target_ip")"; then
+        print_warn "$target_ip covers $ssh_ip, the address of your current SSH session — blocking it locks you out."
+        read -r -p "Block it anyway? (type YES): " confirm
+        if [[ "$confirm" != "YES" ]]; then print_info "Cancelled."; return 0; fi
     fi
 
-    nl -ba "$BLOCKED_LIST_FILE"
-    echo ""
-    read -p "Enter IP address to unblock (or 0 to cancel): " target_ip
-    [[ -z "$target_ip" || "$target_ip" == "0" ]] && return
+    read -r -p "Reason / note (optional, 0 to cancel): " reason
+    if [[ "$reason" == "0" ]]; then return 0; fi
 
-    case "$FIREWALL" in
-        firewalld)
-            firewall-cmd --permanent --remove-rich-rule="rule family='ipv4' source address='${target_ip}' drop" &>/dev/null \
-                && firewall-cmd --reload &>/dev/null \
-                || print_warn "firewalld rule not found for $target_ip"
-            print_info "firewalld: unblocked $target_ip"
-            ;;
-        ufw)
-            ufw delete deny from "$target_ip" to any 2>/dev/null \
-                || print_warn "UFW rule not found for $target_ip"
-            print_info "UFW: unblocked $target_ip"
-            ;;
-        iptables)
-            iptables -D INPUT   -s "$target_ip" -j DROP 2>/dev/null || true
-            iptables -D OUTPUT  -d "$target_ip" -j DROP 2>/dev/null || true
-            iptables -D FORWARD -s "$target_ip" -j DROP 2>/dev/null || true
-            print_info "iptables: unblocked $target_ip"
-            ;;
-        none)
-            print_warn "No firewall available."
-            ;;
-    esac
+    fwh_block_ip "$target_ip" "$FIREWALL"; rc=$?
+    if (( rc == 1 )); then
+        print_error "$target_ip was NOT blocked — nothing recorded."
+        return 0
+    fi
+    if (( rc == 2 )); then
+        print_warn "$target_ip is blocked now but the block will be LOST at the next reboot (see above)."
+    fi
 
-    sed -i "/^${target_ip//\//\\/}/d" "$BLOCKED_LIST_FILE" 2>/dev/null || true
-    print_info "Removed $target_ip from block list"
+    fwh_record_add "$target_ip" "$reason" \
+        || { print_error "Blocked, but the record in $(fwh_record_file) was not written."; return 0; }
+    print_info "Logged to: $(fwh_record_file)"
+    return 0
 }
 
-# 28.3 - List all blocked IPs from the recorded list and active iptables rules
+# 28.2 - Unblock a single IP or CIDR (fwh_unblock_ip). Any address can be typed, also one
+# missing from the record (blocked by hand, or before the record existed). The record line
+# is removed only once the firewall no longer holds the block, live and in the saved ruleset.
+_ip_unblock() {
+    local target_ip rc record
+    record="$(fwh_record_file)"
+    echo ""
+    echo "Currently blocked IPs (grin-toolkit record):"
+    if [[ -s "$record" ]]; then
+        nl -ba "$record"
+    else
+        print_info "(none recorded — you can still type an address blocked outside this menu)"
+    fi
+    echo ""
+    read -r -p "Enter IP / CIDR to unblock, exactly as blocked (or 0 to cancel): " target_ip
+    if [[ -z "$target_ip" || "$target_ip" == "0" ]]; then return 0; fi
+
+    fwh_unblock_ip "$target_ip" "$FIREWALL"; rc=$?
+    if (( rc == 1 )); then
+        print_error "$target_ip may still be blocked — record kept."
+        return 0
+    fi
+    if (( rc == 2 )); then
+        print_warn "Unblocked now, but the saved ruleset was not updated — the block may return at reboot."
+        print_warn "Record kept so it stays listed; run Unblock again once the save works."
+        return 0
+    fi
+
+    fwh_record_remove "$target_ip" || return 0
+    print_info "Removed $target_ip from the block list"
+    return 0
+}
+
+# 28.3 - List all blocked IPs from the recorded list and the active firewall rules
 _ip_list() {
+    local record tool
+    record="$(fwh_record_file)"
     echo ""
     echo "Blocked IPs (grin-toolkit record):"
-    if [[ -s "$BLOCKED_LIST_FILE" ]]; then
+    if [[ -s "$record" ]]; then
         while IFS= read -r line; do
             echo -e "  ${RED}✖${NC} $line"
-        done < "$BLOCKED_LIST_FILE"
+        done < "$record"
     else
         print_info "(none recorded)"
     fi
 
     echo ""
-    if [[ "$FIREWALL" == "firewalld" ]]; then
-        echo "Active firewalld drop rich-rules:"
-        firewall-cmd --list-rich-rules 2>/dev/null | grep "drop" | sed 's/^/  /' \
-            || echo "  (none)"
-    else
-        echo "Active iptables DROP rules (INPUT chain):"
-        if command -v iptables &>/dev/null; then
-            iptables -L INPUT -n --line-numbers 2>/dev/null | grep "DROP" | sed 's/^/  /' \
-                || echo "  (none)"
-        else
-            echo "  (iptables not available)"
-        fi
-    fi
+    case "$FIREWALL" in
+        firewalld)
+            echo "Active firewalld drop rich-rules:"
+            firewall-cmd --list-rich-rules 2>/dev/null | grep "drop" | _ip_print_or_none
+            ;;
+        ufw)
+            echo "Active ufw DENY rules (evaluated top-down — a deny must sit above the allows):"
+            ufw status numbered 2>/dev/null | grep -E "DENY|REJECT" | _ip_print_or_none
+            ;;
+        *)
+            for tool in iptables ip6tables; do
+                echo "Active $tool DROP rules (INPUT chain):"
+                if command -v "$tool" &>/dev/null; then
+                    "$tool" -L INPUT -n --line-numbers 2>/dev/null | grep "DROP" | _ip_print_or_none
+                else
+                    echo "  ($tool not available)"
+                fi
+            done
+            ;;
+    esac
     echo ""
 }
 
@@ -395,9 +401,9 @@ run_ip_filtering() {
         read -p "Select [0-3]: " ip_choice
 
         case "$ip_choice" in
-            1) _ip_block ;;
-            2) _ip_unblock ;;
-            3) _ip_list ; echo "Press Enter to continue..."; read -r ;;
+            1) _ip_block || true ;;
+            2) _ip_unblock || true ;;
+            3) _ip_list || true; echo "Press Enter to continue..."; read -r ;;
             0) break ;;
             *) print_error "Invalid choice." ; sleep 1 ;;
         esac

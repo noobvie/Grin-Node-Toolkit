@@ -76,27 +76,29 @@ class ShareValidator {
     }
   }
 
-  // Dedup key for a submitted share: address + work + nonce, and NOTHING the miner can re-spell.
+  // Dedup key for a submitted share: the work, the nonce and the proof, and NOTHING the miner can
+  // re-spell.
   //
   // `workId` = the job's pre_pow (the identity of the actual work), NOT the pool's incrementing
   // job_id: the node re-issues many job_ids for one identical pre_pow, and keying on job_id let
   // the same solved (nonce,pow) be credited once per wrapping job. pre_pow collapses every
   // re-version of a template to one dedup identity, so a resubmitted solution always hits the
-  // share_hash UNIQUE constraint. `grinAddress` gives total cross-miner isolation: two miners
-  // are two different addresses, so one's valid share can never be rejected as the other's
-  // duplicate even when both use the default worker name.
+  // share_hash UNIQUE constraint.
   //
-  // ⚠ `workerName` is accepted but DELIBERATELY NOT HASHED (audit §J6-1). Putting it in the
-  // key was once justified as the cross-miner-collision guard — but grinAddress already was that guard,
-  // and the worker label is whatever the miner types after the dot. Including it would let one
-  // solved (pre_pow, nonce, pow) re-submitted under N rig labels insert N times and multiply
-  // that address's PPLNS weight N-fold for one unit of real work, from one socket, inside the
-  // token bucket. That is the SAME defect the pre_pow dedup key closed (verified 2026-07-17), re-entered through
-  // a second miner-chosen field. The parameter stays so call sites and tests keep their shape,
-  // and shares.worker_name is still written — as attribution, never as part of the uniqueness
-  // decision. Do not put it back.
-  generateShareHash(grinAddress, workId, workerName, nonce) {
-    const input = `${grinAddress}-${workId}-${nonce}`;
+  // ⚠ The worker name and the address must stay OUT of this key (audit §J6-1). Both are whatever
+  // the miner typed at login, so with either in it, one solved (pre_pow, nonce, pow) inserts once
+  // per label or once per address and multiplies PPLNS weight for one unit of real work, inside
+  // the token bucket. The node keeps no record of shares, so this key is the only control.
+  //
+  // `pow` is in it because one graph can hold two 42-cycles, and each is a real solution. It cannot
+  // be re-spelled: the node refuses a proof whose edges are not ascending. Nor can the nonce:
+  // handleSubmit takes only the canonical form (isCanonicalU64).
+  //
+  // grin-miner draws each nonce from the OS RNG across the whole u64, so its rigs do not collide
+  // here. A rig that reused a nonce sequence another rig also uses would lose those shares; no
+  // other miner software has been checked.
+  generateShareHash(workId, nonce, pow) {
+    const input = `${workId}-${nonce}-${pow.join(',')}`;
     return crypto.createHash('sha256').update(input).digest('hex');
   }
 

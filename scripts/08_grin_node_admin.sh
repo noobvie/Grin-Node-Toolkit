@@ -1163,11 +1163,14 @@ self_update() {
     echo -e "  ${CYAN}2${RESET})  add-ons       ${DIM}— addon features in development${RESET}"
     echo -e "  ${YELLOW}3${RESET})  Custom branch ${DIM}— enter branch name manually${RESET}"
     echo ""
-    echo -ne "${BOLD}  Choose [1-3, default 1]: ${RESET}"
+    echo -e "  ${DIM}0${RESET})  Back"
+    echo ""
+    echo -ne "${BOLD}  Choose [1-3, 0 = back, default 1]: ${RESET}"
     read -r branch_choice
 
     local branch
     case "$branch_choice" in
+        ""|1) branch="main" ;;
         2) branch="add-ons" ;;
         3)
             # Cancel returns to the menu — it must NOT fall through to `main`.
@@ -1185,7 +1188,18 @@ self_update() {
                 pause; return
             fi
             ;;
-        *) branch="main" ;;
+        0)
+            # Back leaves the tree untouched; the menu redraws on return.
+            return 0
+            ;;
+        *)
+            # Any other key stops here. Falling through to `main` would arm a
+            # self-update from a branch the operator never picked. The pause
+            # keeps the message on screen, since the menu clears on return.
+            warn "Invalid selection."
+            pause
+            return 0
+            ;;
     esac
 
     local tarball_url="https://github.com/$repo/archive/refs/heads/$branch.tar.gz"

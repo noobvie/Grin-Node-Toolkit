@@ -186,6 +186,9 @@ source "$SCRIPT_DIR/lib/grin_wallet_install.sh"
 # gnc_get_pid_on_port / gnc_wait_for_port — listener port-collision guard.
 # shellcheck source=lib/grin_node_control.sh
 source "$SCRIPT_DIR/lib/grin_node_control.sh"
+# CMD wallet screens and the wallet ↔ network check.
+# shellcheck source=lib/05_lib_cmd_wallet_menu.sh
+source "$SCRIPT_DIR/lib/05_lib_cmd_wallet_menu.sh"
 
 # =============================================================================
 # INSTALLATION DETECTION
@@ -614,9 +617,7 @@ _cmd_pass_ok() {
 # call against the same dir blocks until it times out. Every probe below must
 # check this first — otherwise re-running setup on a live wallet stalls the menu
 # for the full `info` timeout and then reports a bogus failure.
-_cmd_wallet_busy() {
-    tmux has-session -t "$(_cmd_tmux_name "$1")" 2>/dev/null
-}
+_cmd_wallet_busy() { _cmd_listener_running "$1"; }
 
 # `info` refreshes outputs against the node's Foreign API, so it is the only
 # cheap call that actually exercises wallet → node (CLAUDE.md link ②). The
@@ -704,7 +705,7 @@ _cmd_write_launcher() {
 # .init_capture holds the MNEMONIC between `init -h` and the save prompt. Every
 # normal exit path removes it, but Ctrl-C during that window does not — and the
 # operator most likely to hit Ctrl-C there is the one who did NOT want a
-# plaintext seed on the box. INT/TERM only: no EXIT trap, because this file is
+# plaintext seed on the box. HUP is the dropped SSH session. No EXIT trap, because this file is
 # sourced by the hub and an EXIT trap would follow it out of this function.
 #
 # The handler only shreds the file and disarms itself — it deliberately does NOT
@@ -717,12 +718,12 @@ _cmd_trap_cleanup() {
     _CMD_TMP_INIT=""
     # Leaving the trap armed would follow us back into the hub menu, where INT
     # would run this no-op instead of interrupting.
-    trap - INT TERM
+    trap - INT TERM HUP
     return 0
 }
 
 # ─── Retire a wallet: stop · archive-or-delete · unregister ──────────────────
-# Shared by Re-initialize (setup Step 2) and the N) Nuke screen. Deleting only the
+# Shared by Renew (setup Step 2) and the Wipe screen. Deleting only the
 # saved pass/seed files and running `init -h` over the old wallet_data/ is not
 # enough: grin-wallet REFUSES whenever the toml and wallet_data/ both exist
 # ("… already exists in the target directory. Please remove it first",
@@ -784,9 +785,9 @@ _cmd_stop_wallet() {
     return 0
 }
 
-# _cmd_retire_wallet <net> <reinit|nuke|all>
+# _cmd_retire_wallet <net> <reinit|wipe|all>
 #   reinit  keeps the binary, its version record and the listener mode
-#   nuke    keeps the binary and its version record (setup skips the download)
+#   wipe    keeps the binary and its version record (setup skips the download)
 #   all     removes the whole per-network dir
 # TESTNET is deleted. MAINNET is MOVED to /opt/grin/cmdwallet/.retired/<net>-<ts>/
 # (mode 700, same custody as before) — a mis-keyed network or a phrase never
@@ -807,7 +808,7 @@ _cmd_retire_wallet() {
     local -a keep=()
     case "$scope" in
         reinit) keep=(grin-wallet .grin-wallet.version .listen_mode) ;;
-        nuke)   keep=(grin-wallet .grin-wallet.version) ;;
+        wipe)   keep=(grin-wallet .grin-wallet.version) ;;
         all)    keep=() ;;
         *) error "_cmd_retire_wallet: unknown scope '$scope'"; return 1 ;;
     esac
@@ -865,16 +866,25 @@ _cmd_warn_transporter_bound() {
 # muscle-memory "y" meant for testnet. Testnet passes straight through.
 _cmd_confirm_mainnet() {
     [[ "$1" == "mainnet" ]] || return 0
-    echo -ne "  ${BOLD}${RED}Type MAINNET to confirm:${RESET} "
+    echo -ne "  ${BOLD}${RED}Type MAINNET to confirm${RESET} ${DIM}(0 cancel)${RESET}: "
     local t; read -r t || true
     if [[ "$t" != "MAINNET" ]]; then info "Not confirmed — nothing was changed."; return 1; fi
     return 0
 }
 
-# Setup wallet for one network.
+# One flow behind three actions, so the patches and checks can never drift apart:
+#   add        create the wallet on a network that has none (or a failed init)
+#   renew      retire the existing wallet, then create or recover a new one
+#   configure  keep the wallet; re-apply mode, toml patches and checks
 # Returns 0 = completed or skipped, 1 = user cancelled mid-flow.
 _cmd_wallet_setup_for_net() {
-    local net="$1"
+    local net="$1" intent="$2" intent_label
+    case "$intent" in
+        add)       intent_label="Add wallet" ;;
+        renew)     intent_label="Renew wallet" ;;
+        configure) intent_label="Configure" ;;
+        *) error "_cmd_wallet_setup_for_net: unknown intent '$intent'"; return 1 ;;
+    esac
     local net_flag net_label wallet_dir tmux_name
     net_flag=$(_cmd_net_flag "$net");   net_label=$(_cmd_net_label "$net")
     wallet_dir=$(_cmd_dir "$net");      tmux_name=$(_cmd_tmux_name "$net")
@@ -894,7 +904,7 @@ _cmd_wallet_setup_for_net() {
 
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN} CMD Wallet Quick Setup — ${net_label}${RESET}"
+    echo -e "${BOLD}${CYAN} CMD Wallet — ${intent_label} · ${net_label}${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     [[ "$net" == "mainnet" ]] && \
@@ -914,72 +924,61 @@ _cmd_wallet_setup_for_net() {
     echo ""
 
     # ── Step 1: Download (shared lib — verifies the sha256 when published) ────
-    # NB: this re-installs the PINNED version, not whatever upstream calls
-    # latest. Moving between versions (and undoing such a move) is the job of
-    # the B) grin-wallet binary screen, which is the only one that records a
-    # rollback target.
-    local had_bin=0 force_dl=0
+    # Only when the binary is missing. Moving between versions, re-installing the
+    # pin and undoing either is the job of the B) grin-wallet binary screen, the
+    # only one that records a rollback target.
     if [[ -x "$wallet_bin" ]]; then
-        had_bin=1
         local ver; ver=$("$wallet_bin" --version 2>/dev/null | head -1 || echo "?")
         success "Binary already installed  ${DIM}($ver)${RESET}"
-        echo -ne "  Re-install the pinned ${GWI_DEFAULT_TAG}? [y/N/0 cancel]: "
-        local redown; read -r redown || true
-        [[ "$redown" == "0" ]] && return 1
-        if [[ "${redown,,}" == "y" ]]; then force_dl=1; fi
-    fi
-    echo ""
-
-    if [[ $had_bin -eq 0 || $force_dl -eq 1 ]]; then
-        if ! gwi_install_grin_wallet "$wallet_dir" "$force_dl"; then
-            error "grin-wallet install failed — nothing else was changed."
-            echo -ne "\n  Press Enter..."; read -r || true; return 0
-        fi
+    elif gwi_install_grin_wallet "$wallet_dir" 0; then
         _did_download="${GWI_INSTALLED_VERSION:-unknown}"
+    else
+        error "grin-wallet install failed — nothing else was changed."
+        echo -ne "\n  Press Enter..."; read -r || true; return 0
     fi
     echo ""
 
     # ── Step 2: Init or recover ──────────────────────────────────────────────
-    # Re-initializing RETIRES the old wallet (_cmd_retire_wallet) — toml,
-    # wallet_data/, tor/, the saved pass/seed — only AFTER every question below
-    # has been answered. Deleting the pass/seed files first would leave a wallet
-    # with no saved passphrase if the operator cancels at the next prompt, and
-    # its listener could no longer restart.
+    # Renew RETIRES the old wallet (_cmd_retire_wallet) — toml, wallet_data/, tor/,
+    # the saved pass/seed — only AFTER every question below has been answered.
+    # Deleting the pass/seed files first would leave a wallet with no saved
+    # passphrase if the operator cancels at the next prompt, and its listener could
+    # no longer restart.
     local do_init=1 tmp_init="" _reinit=0 _half=0
-    if [[ -f "$toml_file" ]] && ! _cmd_has_seed "$net"; then
+    if [[ "$intent" == "configure" ]]; then
+        do_init=0
+        info "Existing wallet kept — config, checks and listener run below."
+        # Re-applying the toml patches is what refreshes a wallet set up before a
+        # node rebuild.
+        if [[ -f "$pass_file" ]]; then
+            wallet_pass=$(<"$pass_file"); know_pass=1
+        else
+            # No saved passphrase on an existing wallet: without this the flow
+            # could never gain one — the checks below would be skipped forever and
+            # the listener would fall back to a one-shot start on every single run.
+            _need_pass=1
+        fi
+    elif _cmd_has_seed "$net"; then
+        warn "This replaces the wallet at $wallet_dir"
+        if [[ "$net" == "mainnet" ]]; then
+            echo -e "  ${DIM}The current wallet moves to /opt/grin/cmdwallet/.retired/${RESET}"
+        else
+            echo -e "  ${DIM}The current testnet wallet is DELETED.${RESET}"
+        fi
+        echo -ne "  Replace it? ${RED}(the new wallet takes over this network)${RESET} [y/N/0 cancel]: "
+        local reinit; read -r reinit || true
+        if [[ "${reinit,,}" != "y" ]]; then
+            info "Nothing was changed."
+            return 1
+        fi
+        _reinit=1
+    elif [[ -f "$toml_file" ]]; then
         # toml without a seed = an earlier init that failed after create_config.
         # Nothing to keep, and grin-wallet would refuse a fresh init over it once
         # wallet_data/ exists — so clear it without asking to "destroy" anything.
         warn "Half-initialized wallet at $wallet_dir — a toml but no wallet_data/wallet.seed."
         info "An earlier init did not finish; it will be cleared and initialized fresh."
         _reinit=1; _half=1
-    elif [[ -f "$toml_file" ]]; then
-        warn "Wallet already initialized at $wallet_dir"
-        if [[ "$net" == "mainnet" ]]; then
-            echo -e "  ${DIM}Re-initializing moves the current wallet to /opt/grin/cmdwallet/.retired/${RESET}"
-        else
-            echo -e "  ${DIM}Re-initializing DELETES the current testnet wallet.${RESET}"
-        fi
-        echo -ne "  Re-initialize? ${RED}(replaces the existing wallet!)${RESET} [y/N/0 cancel]: "
-        local reinit; read -r reinit || true
-        [[ "$reinit" == "0" ]] && return 1
-        if [[ "${reinit,,}" == "y" ]]; then
-            _reinit=1
-        else
-            do_init=0
-            info "Existing wallet kept — config, checks and listener still run below."
-            # Re-running on an existing wallet re-applies the toml patches too,
-            # so a wallet set up before a node rebuild gets its config refreshed.
-            if [[ -f "$pass_file" ]]; then
-                wallet_pass=$(<"$pass_file"); know_pass=1
-            else
-                # No saved passphrase on an existing wallet: without this the
-                # flow could never gain one — the checks below would be skipped
-                # forever and the listener would fall back to a one-shot start
-                # on every single run.
-                _need_pass=1
-            fi
-        fi
     fi
     echo ""
 
@@ -995,6 +994,20 @@ _cmd_wallet_setup_for_net() {
         fi
         echo ""
 
+        # Recovery's prompts belong to grin-wallet, so 0 means nothing there, and on
+        # Renew the old wallet is already retired by then. This is the last exit.
+        if [[ "$mode" == "2" ]]; then
+            warn "grin-wallet then asks for the recovery phrase, and after it a password."
+            warn "  Those prompts are its own: 0 does not work there."
+            echo -ne "  Is your recovery phrase ready? [y/N/0 cancel]: "
+            local _ready; read -r _ready || true
+            if [[ "${_ready,,}" != "y" ]]; then
+                info "Nothing was changed."
+                return 1
+            fi
+            echo ""
+        fi
+
         if [[ "$mode" == "1" ]]; then
             # NEW — this script owns the passphrase, so collect it here and feed
             # it to init on STDIN. Collected BEFORE the old wallet is retired, so
@@ -1003,7 +1016,8 @@ _cmd_wallet_setup_for_net() {
             local pass2=""
             while true; do
                 echo -ne "    Passphrase : "
-                read -rs wallet_pass; echo ""
+                read -rs wallet_pass || { wallet_pass=""; return 1; }
+                echo ""
                 [[ "$wallet_pass" == "0" ]] && { wallet_pass=""; return 1; }
                 if [[ -z "$wallet_pass" ]]; then
                     warn "Passphrase cannot be empty."; continue
@@ -1038,14 +1052,15 @@ _cmd_wallet_setup_for_net() {
             fi
             echo ""
         fi
-        mkdir -p "$wallet_dir" || { error "Could not create $wallet_dir."; wallet_pass=""; return 0; }
+        mkdir -p "$wallet_dir" || { error "Could not create $wallet_dir."; wallet_pass=""; _cmd_pause; return 0; }
 
         if [[ "$mode" == "2" ]]; then
             # RECOVER — stdin is deliberately NOT piped here. grin-wallet prompts
-            # for the passphrase and the recovery phrase on the real terminal, so
-            # the mnemonic is typed straight into grin-wallet and never passes
-            # through this script or any file it controls.
-            info "Running grin-wallet init -hr — enter your passphrase, then the recovery phrase."
+            # for the recovery phrase, then a password, on the real terminal, so the
+            # mnemonic is typed straight into grin-wallet and never passes through
+            # this script or any file it controls. Its phrase> prompt echoes, so the
+            # order must be stated: a passphrase typed there stays on screen.
+            info "Running grin-wallet init -hr — recovery phrase FIRST, then a new password."
             echo ""
             ( cd "$wallet_dir" && "$wallet_bin" $net_flag init -hr ) || true
             echo ""
@@ -1071,10 +1086,10 @@ _cmd_wallet_setup_for_net() {
                 # Without the 600 pre-create, tee would write the mnemonic into a
                 # file at the default umask. Stop rather than risk it.
                 error "Could not create $tmp_init (mode 600) — init not run."
-                wallet_pass=""; return 0
+                wallet_pass=""; _cmd_pause; return 0
             fi
             _CMD_TMP_INIT="$tmp_init"
-            trap '_cmd_trap_cleanup' INT TERM
+            trap '_cmd_trap_cleanup' INT TERM HUP
             # printf is a bash BUILTIN — it forks no process, so the passphrase
             # never appears in any argv, unlike the -p this replaced.
             # Two lines: grin-wallet asks to confirm, and a spare line is
@@ -1118,9 +1133,9 @@ _cmd_wallet_setup_for_net() {
             # directly) and an existing wallet with no saved copy. Either way we
             # do not know it, so ask — and VERIFY it opens the wallet before
             # writing it, so a typo can never be saved as the listener's key.
-            echo -ne "  Save the passphrase for unattended listener start? [Y/n]: "
+            echo -ne "  Save the passphrase for unattended listener start? [Y/n/0 skip]: "
             local want_pass; read -r want_pass || true
-            if [[ "${want_pass,,}" != "n" ]]; then
+            if [[ "${want_pass,,}" != "n" && "$want_pass" != "0" ]]; then
                 while true; do
                     echo -ne "    Wallet passphrase ${DIM}(0 to skip)${RESET}: "
                     read -rs wallet_pass; echo ""
@@ -1145,15 +1160,20 @@ _cmd_wallet_setup_for_net() {
                 read -r save_pass || true
             fi
             if [[ "$save_pass" == "0" ]]; then
-                _cmd_trap_cleanup; wallet_pass=""; return 1
+                _cmd_trap_cleanup; wallet_pass=""
+                _cmd_setup_cancelled "$_did_init"; return 1
             fi
             if [[ "${save_pass,,}" != "n" ]]; then
                 # umask before the redirect: chmod alone leaves a window where the
                 # file exists at the default mode with the secret already in it.
-                ( umask 077; printf '%s\n' "$wallet_pass" > "$pass_file" )
-                chmod 600 "$pass_file"
-                success "Saved → $pass_file  ${DIM}(mode 600)${RESET}"
-                _saved_pass="yes"
+                if ( umask 077; printf '%s\n' "$wallet_pass" > "$pass_file" ) \
+                    && chmod 600 "$pass_file" && [[ -s "$pass_file" ]]; then
+                    success "Saved → $pass_file  ${DIM}(mode 600)${RESET}"
+                    _saved_pass="yes"
+                else
+                    rm -f "$pass_file" 2>/dev/null || true
+                    error "Could not write $pass_file — the passphrase was NOT saved."
+                fi
             else
                 info "Passphrase not saved — the listener will ask for it every start."
             fi
@@ -1168,15 +1188,23 @@ _cmd_wallet_setup_for_net() {
             echo -ne "  Save seed phrase to ${BOLD}$(basename "$seed_file")${RESET}? ${DIM}(plaintext on this box)${RESET} [y/N/0 cancel]: "
             local save_seed; read -r save_seed || true
             if [[ "$save_seed" == "0" ]]; then
-                _cmd_trap_cleanup; wallet_pass=""; return 1
+                _cmd_trap_cleanup; wallet_pass=""
+                _cmd_setup_cancelled "$_did_init"; return 1
             fi
             if [[ "${save_seed,,}" == "y" ]]; then
                 local phrase=""
                 if phrase=$(_cmd_extract_seed "$tmp_init"); then
-                    ( umask 077; printf '%s\n' "$phrase" > "$seed_file" )
-                    chmod 600 "$seed_file"; phrase=""
-                    success "Saved → $seed_file  ${DIM}(mode 600)${RESET}"
-                    _saved_seed="yes"
+                    if ( umask 077; printf '%s\n' "$phrase" > "$seed_file" ) \
+                        && chmod 600 "$seed_file" && [[ -s "$seed_file" ]]; then
+                        success "Saved → $seed_file  ${DIM}(mode 600)${RESET}"
+                        _saved_seed="yes"
+                    else
+                        rm -f "$seed_file" 2>/dev/null || true
+                        error "Could not write $seed_file."
+                        error "  NOTHING was saved — copy the phrase off the screen above NOW."
+                        _saved_seed="failed"
+                    fi
+                    phrase=""
                 else
                     # Never write a file that claims to hold the seed but doesn't.
                     error "Could not find a 12/24-word phrase in the init output."
@@ -1209,11 +1237,12 @@ _cmd_wallet_setup_for_net() {
     echo -e "     ${YELLOW}Trade-off: no automatic Tor onion listener in this mode.${RESET}"
     echo ""
     echo -e "  ${DIM}Current: ${BOLD}$_mode_before${RESET}"
-    echo -ne "  Select [1/2, Enter = keep $_mode_before]: "
+    echo -ne "  Select [1/2/0 cancel, Enter = keep $_mode_before]: "
     local _msel; read -r _msel || true
     case "$_msel" in
         1) _mode="listen" ;;
         2) _mode="owner_api" ;;
+        0) wallet_pass=""; _cmd_setup_cancelled "$_did_init"; return 1 ;;
         *) ;;   # Enter or anything else keeps the current mode
     esac
     if [[ "$_mode" != "$_mode_before" ]]; then
@@ -1237,19 +1266,21 @@ _cmd_wallet_setup_for_net() {
     local node_secret=""
     _patch_node_dir=$(grin_live_node_dir "$net" 2>/dev/null || true)
     node_secret=$(grin_node_secret_path "$net" foreign 2>/dev/null || true)
-    if [[ -n "$node_secret" && -f "$node_secret" ]]; then
+    # A remote node must never receive this box's secret: grin-wallet sends it as
+    # Basic Auth to whichever node the toml names.
+    local _node_addr; _node_addr=$(_cmd_toml_get "$toml_file" check_node_api_http_addr)
+    if [[ -n "$_node_addr" ]] && ! _cmd_addr_is_local "$_node_addr"; then
+        _did_patch="remote"
+    elif [[ -n "$node_secret" && -f "$node_secret" ]]; then
         _cmd_set_toml_key "$toml_file" "node_api_secret_path" "\"$node_secret\"" || true
         _did_patch="$node_secret"
     fi
 
-    # Pin BOTH listen ports, regardless of the active mode. grin-wallet init
-    # writes MAINNET defaults into the toml regardless of --testnet — for
-    # api_listen_port and owner_api_listen_port alike (059_lib_wallet.sh:709
-    # records the same; the pool pins api_listen_port for exactly this reason).
-    # Unpinned, menu option 3 ("Both") would put the two networks' listeners on
-    # one port — 3415 for two `listen` wallets, 3420 for two `owner_api` ones.
-    # Pinning the inactive mode's port too costs nothing and means switching
-    # modes later never needs a second toml pass.
+    # Pin BOTH listen ports, regardless of the active mode. grin-wallet init writes
+    # the mainnet owner_api_listen_port even under --testnet, so unpinned, menu
+    # option 3 ("Both") would put two `owner_api` wallets on 3420. Pinning the
+    # inactive mode's port too costs nothing and means switching modes later never
+    # needs a second toml pass.
     local _owner_port _p_ok=""; _owner_port=$(_cmd_owner_port "$net")
     if _cmd_set_toml_key "$toml_file" "api_listen_port" "$_listen_port"; then
         _p_ok="$_listen_port"
@@ -1266,10 +1297,16 @@ _cmd_wallet_setup_for_net() {
     if [[ "$_mode" == "owner_api" ]]; then
         _cmd_set_toml_key "$toml_file" "owner_api_include_foreign" "true" || true
     fi
-    # 24/7 listener: grin-wallet's default of 32 rotated logs is more depth than
-    # this ever needs. Replace-only — log_max_files lives under [logging].
+    # Debug on both sinks (grin-wallet defaults: Info to file, Warning to stdout) so
+    # a failed receive or send can be diagnosed from the log or the tmux pane. Debug
+    # fills each file faster, so keep 10 rotated logs, not the default 32, to bound
+    # the disk a 24/7 listener can use. Replace-only — these keys live under [logging].
     local _did_logs="no"
-    if _cmd_replace_toml_key "$toml_file" "log_max_files" "5"; then _did_logs="yes"; fi
+    if _cmd_replace_toml_key "$toml_file" "log_max_files" "10" \
+        && _cmd_replace_toml_key "$toml_file" "file_log_level" "\"Debug\"" \
+        && _cmd_replace_toml_key "$toml_file" "stdout_log_level" "\"Debug\""; then
+        _did_logs="yes"
+    fi
 
     # Register for Script 089 backups (this dir can hold a plaintext seed).
     if _cmd_register_wallet_dir "$net"; then _did_reg="yes"; fi
@@ -1288,7 +1325,10 @@ _cmd_wallet_setup_for_net() {
         info "Checks skipped — the '$tmux_name' listener already holds the wallet db."
     elif [[ $know_pass -eq 1 ]]; then
         _addr=$(_cmd_address "$net" "$wallet_pass" || true)
-        if [[ -n "$_addr" ]]; then
+        if [[ -n "$_addr" ]] && ! _cmd_addr_matches_net "$net" "$_addr"; then
+            error "Wrong network: $_addr is not a $net address. Do not hand it out."
+            error "  F) Fix network on this wallet's screen corrects it."
+        elif [[ -n "$_addr" ]]; then
             success "Wallet address: ${BOLD}$_addr${RESET}"
         else
             warn "Could not read the wallet address — wrong passphrase, or the wallet is damaged."
@@ -1348,7 +1388,9 @@ _cmd_wallet_setup_for_net() {
         failed) echo -e "  ${RED}✘${RESET}  4. Seed phrase           ${RED}NOT saved — phrase not found in output${RESET}" ;;
         *)      echo -e "  $_skip  4. Seed phrase           ${DIM}not saved${RESET}" ;;
     esac
-    if [[ "$_did_patch" != "no" ]]; then
+    if [[ "$_did_patch" == "remote" ]]; then
+        echo -e "  $_skip  5. Node secret           ${DIM}skipped — wallet uses a remote node${RESET}"
+    elif [[ "$_did_patch" != "no" ]]; then
         echo -e "  $_tick  5. Node secret patched  ${DIM}node_api_secret_path → $_did_patch${RESET}"
     else
         echo -e "  ${YELLOW}!${RESET}  5. Node secret           ${YELLOW}not found (node dir: ${_patch_node_dir:-unresolved}) — edit $toml_file${RESET}"
@@ -1358,8 +1400,8 @@ _cmd_wallet_setup_for_net() {
         echo -e "      ${DIM}Transporter-capable. No automatic Tor onion in this mode.${RESET}"
     fi
     if [[ "$_did_ports" != "no" ]]; then
-        local _logs_note="log_max_files = 5"
-        [[ "$_did_logs" == "yes" ]] || _logs_note="log_max_files unchanged"
+        local _logs_note="log_max_files = 10, log levels Debug"
+        [[ "$_did_logs" == "yes" ]] || _logs_note="[logging] not fully patched"
         echo -e "  $_tick  6. Ports pinned         ${DIM}api/owner_api_listen_port = $_did_ports, $_logs_note${RESET}"
     else
         echo -e "  ${YELLOW}!${RESET}  6. Ports                 ${YELLOW}could not patch $toml_file${RESET}"
@@ -1377,9 +1419,9 @@ _cmd_wallet_setup_for_net() {
         echo -e "  $_skip  8. Listener              ${DIM}not started${RESET}"
     fi
     if [[ "$_did_reg" == "yes" ]]; then
-        echo -e "  $_tick  9. Backup registered    ${DIM}089 will include $wallet_dir${RESET}"
+        echo -e "  $_tick  9. Backup registered    ${DIM}backups will include $wallet_dir${RESET}"
     else
-        echo -e "  ${YELLOW}!${RESET}  9. Backup registration   ${YELLOW}failed — 089 will NOT back this wallet up${RESET}"
+        echo -e "  ${YELLOW}!${RESET}  9. Backup registration   ${YELLOW}failed — backups will NOT include this wallet${RESET}"
     fi
     echo ""
     if [[ -n "$_addr" ]]; then
@@ -1395,7 +1437,7 @@ _cmd_wallet_setup_for_net() {
     if [[ "$_saved_pass" == "yes" ]]; then
         echo -e "  ${DIM}  restart listener:  tmux new -d -s $tmux_name $(_cmd_launcher "$net")${RESET}"
     fi
-    echo -e "  ${DIM}  or: L) Listener on the CMD Wallet screen — start · stop · restart${RESET}"
+    echo -e "  ${DIM}  or: 1) Listener on this wallet's screen — start · stop · restart${RESET}"
     echo ""
     echo -ne "  ${DIM}Press Enter to return to menu...${RESET}"
     read -r || true
@@ -1423,7 +1465,25 @@ _cmd_start_listener() {
     tmux_name=$(_cmd_tmux_name "$net"); pass_file=$(_cmd_pass_file "$net")
     port=$(_cmd_mode_port "$net");      launcher=$(_cmd_launcher "$net")
 
-    [[ -x "$bin" ]] || { error "No grin-wallet binary for $net — run setup first."; return 0; }
+    [[ -x "$bin" ]] || { error "No grin-wallet binary for $net — install it from B) grin-wallet binary."; return 0; }
+    # Without a toml in its working dir grin-wallet falls back to ~/.grin, which is
+    # a different wallet.
+    [[ -f "$(_cmd_toml "$net")" ]] || { error "No grin-wallet.toml in $dir — not started."; return 0; }
+    # Ours, so not the port guard's "ANOTHER process"; a second start would only
+    # fight it for the port and the wallet.
+    if ! tmux has-session -t "$tmux_name" 2>/dev/null && [[ -n "$(_cmd_wallet_pids "$net")" ]]; then
+        error "grin-wallet is already running in $dir outside tmux — Stop on the Listener screen clears it."
+        return 0
+    fi
+
+    # A wallet on the other chain must not come up looking healthy: it binds this
+    # network's port and hands out an address nobody on this network can pay.
+    if ! _cmd_net_ok "$net"; then
+        error "Not started — this $net wallet is configured for the wrong network:"
+        local _p; while IFS= read -r _p; do error "  $_p"; done <<<"$(_cmd_net_problems "$net")"
+        error "  F) Fix network on this wallet's screen corrects it."
+        return 0
+    fi
 
     # Passphrase source. Saved file → a PERSISTENT launcher that can be re-run
     # forever. No saved file → a one-shot temp copy the launcher unlinks as it
@@ -1439,8 +1499,12 @@ _cmd_start_listener() {
             p=""; info "Listener not started."; return 0
         fi
         src="$dir/.listen_pass_$$"
-        ( umask 077; printf '%s\n' "$p" > "$src" )
-        chmod 600 "$src"; p=""
+        if ! ( umask 077; printf '%s\n' "$p" > "$src" ) || ! chmod 600 "$src"; then
+            p=""; rm -f "$src" 2>/dev/null || true
+            error "Could not write $src — listener not started."
+            return 0
+        fi
+        p=""
         one_shot=1
         warn "Passphrase not saved — this listener cannot be restarted unattended."
     fi
@@ -1508,103 +1572,10 @@ _cmd_start_listener() {
     return 0
 }
 
-# ─── N) Nuke — wipe one network's CMD wallet for a fresh test ───────────────
-# One screen, every answer collected before anything is touched. Testnet is
-# deleted; mainnet is moved to /opt/grin/cmdwallet/.retired/ (see
-# _cmd_retire_wallet). Only this wallet's OWN processes are stopped — a foreign
-# holder of 3415/3420 is still never killed.
-_cmd_nuke_menu() {
-    clear
-    echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${RED} CMD Wallet — Nuke (reset for a fresh wallet)${RESET}"
-    echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo ""
-    echo -e "  ${DIM}Stops the listener and removes the wallet: toml, wallet_data/, tor/,${RESET}"
-    echo -e "  ${DIM}saved passphrase + seed, logs. Testnet is DELETED; mainnet is MOVED to${RESET}"
-    echo -e "  ${DIM}/opt/grin/cmdwallet/.retired/ so real GRIN can never be lost by a mis-key.${RESET}"
-    echo ""
-    echo -ne "  Which network? [1 mainnet / 2 testnet / 0 cancel]: "
-    local sel net; read -r sel || true
-    case "$sel" in
-        1) net="mainnet" ;;
-        2) net="testnet" ;;
-        *) return 0 ;;
-    esac
-
-    local dir tmux_name; dir=$(_cmd_dir "$net"); tmux_name=$(_cmd_tmux_name "$net")
-    echo ""
-    if [[ ! -d "$dir" ]]; then
-        info "No $net CMD wallet at $dir — nothing to remove."
-        echo -ne "\n  Press Enter to return..."; read -r || true; return 0
-    fi
-
-    echo -e "  ${DIM}─── $(_cmd_net_label "$net") ─────────────────────────────────────────${RESET}"
-    echo -e "  Wallet dir   : $dir"
-    if _cmd_has_seed "$net"; then
-        echo -e "  Wallet       : ${BOLD}initialized${RESET}"
-    else
-        echo -e "  Wallet       : ${DIM}no wallet_data/wallet.seed${RESET}"
-    fi
-    if tmux has-session -t "$tmux_name" 2>/dev/null; then
-        echo -e "  Listener     : ${YELLOW}running${RESET} ${DIM}(tmux: $tmux_name) — will be stopped${RESET}"
-    else
-        echo -e "  Listener     : ${DIM}not running${RESET}"
-    fi
-    if [[ -f "$(_cmd_seed_file "$net")" ]]; then
-        echo -e "  Saved seed   : ${DIM}$(_cmd_seed_file "$net")${RESET}"
-    elif [[ "$net" == "mainnet" ]] && _cmd_has_seed "$net"; then
-        echo -e "  Saved seed   : ${YELLOW}none on this box — make sure you hold the phrase${RESET}"
-    fi
-    echo ""
-    _cmd_warn_transporter_bound "$net"
-
-    local keep_bin="y"
-    if [[ -x "$(_cmd_wallet_bin "$net")" ]]; then
-        echo -ne "  Keep the grin-wallet binary, so setup skips the download? [Y/n]: "
-        read -r keep_bin || true
-    fi
-    local scope="nuke"
-    [[ "${keep_bin,,}" == "n" ]] && scope="all"
-
-    echo ""
-    echo -ne "  ${BOLD}${RED}Nuke the $net CMD wallet?${RESET} [y/N]: "
-    local go; read -r go || true
-    if [[ "${go,,}" != "y" ]]; then
-        info "Cancelled — nothing was changed."
-        echo -ne "\n  Press Enter to return..."; read -r || true; return 0
-    fi
-    if ! _cmd_confirm_mainnet "$net"; then
-        echo -ne "\n  Press Enter to return..."; read -r || true; return 0
-    fi
-    echo ""
-
-    if ! _cmd_retire_wallet "$net" "$scope"; then
-        echo -ne "\n  Press Enter to return..."; read -r || true; return 0
-    fi
-    # The registry entry points 089 at the dir. Setup re-registers on the next run.
-    _cmd_unregister_wallet_dir "$net" \
-        || warn "Could not remove the backup registry entry — edit /opt/grin/conf/grin_wallets_location.conf."
-
-    if [[ -n "$CMD_RETIRED_TO" ]]; then
-        success "Mainnet CMD wallet moved → ${BOLD}$CMD_RETIRED_TO${RESET}"
-        echo -e "         ${DIM}Restore: stop the listener, then move its contents back into $dir${RESET}"
-        echo -e "         ${DIM}Purge  : rm -rf $CMD_RETIRED_TO   (only once you are sure it holds nothing)${RESET}"
-    else
-        success "Testnet CMD wallet removed."
-    fi
-    if [[ "$scope" == "nuke" ]]; then
-        echo -e "         ${DIM}grin-wallet binary kept in $dir${RESET}"
-    fi
-    echo -e "         ${DIM}Set up a fresh one with option $([[ "$net" == "mainnet" ]] && echo 1 || echo 2) on the previous screen.${RESET}"
-    echo -ne "\n  Press Enter to return..."; read -r || true
-    return 0
-}
-
-# ─── L) Listener — start · stop · restart without the setup flow ─────────────
-# Setup (1/2) was the only way to (re)start a listener, and it walks binary,
-# init, passphrase, mode and toml prompts before it gets there — a dozen keys per
-# restart in a test loop. This screen adds no second way to do anything; it calls
-# the same primitives:
+# ─── Listener — start · stop · restart without the setup flow ────────────────
+# The setup flow walks passphrase, mode and toml steps before it reaches the
+# listener — a dozen keys per restart in a test loop. This screen adds no second
+# way to do anything; it calls the same primitives:
 #   Start    _cmd_start_listener  (same passphrase source, port guard, launcher)
 #   Stop     _cmd_stop_wallet     (the session + every grin-wallet whose cwd is
 #                                  the wallet dir; a foreign port holder is never
@@ -1612,7 +1583,7 @@ _cmd_nuke_menu() {
 #   Restart  Stop, then Start — NOT the setup flow's kill-session-and-wait. Stop
 #            waits on the wallet's own PIDs, so the new listener never races the
 #            dying one for the wallet's LMDB lock.
-# It changes no config: mode, ports and the toml stay setup's job.
+# It changes no config: mode, ports and the toml stay Configure's job.
 
 # grin-wallet init writes an absolute log_file_path into [logging]; fall back to
 # its default location if the toml was hand-edited.
@@ -1623,8 +1594,8 @@ _cmd_log_path() {
     echo "${p:-$(_cmd_dir "$1")/grin-wallet.log}"
 }
 
-# One status line. Same port-verified logic as the 05C screen, plus the case that
-# screen cannot see: a grin-wallet started by hand from listen.sh, outside tmux.
+# One status line, verified against the port so a dead listener in a live session
+# shows, plus the case tmux cannot see: a grin-wallet started by hand from listen.sh.
 # Start would then fail the port guard ("held by ANOTHER process") with no hint
 # that the holder is this very wallet — Stop clears it.
 _cmd_listener_state() {
@@ -1672,7 +1643,7 @@ _cmd_listener_menu() {
         echo -e "  tmux       : ${DIM}$tmux_name${RESET}"
         if ! _cmd_has_seed "$net"; then
             echo ""
-            warn "No wallet in $dir — run setup ($([[ "$net" == "mainnet" ]] && echo 1 || echo 2) on the previous screen) first."
+            warn "No wallet in $dir — 3) Add on the previous screen creates one."
         fi
         echo ""
         echo -e "  ${GREEN}1${RESET}) Start"
@@ -1688,7 +1659,7 @@ _cmd_listener_menu() {
         case "$sel" in
             1)
                 if ! _cmd_has_seed "$net"; then
-                    error "No wallet to listen for — run setup first."
+                    error "No wallet to listen for — Add on the previous screen creates one."
                 elif tmux has-session -t "$tmux_name" 2>/dev/null; then
                     info "Already running — use 3) Restart to cycle it."
                 elif _cmd_listener_running "$net"; then
@@ -1706,7 +1677,11 @@ _cmd_listener_menu() {
                 ;;
             3)
                 if ! _cmd_has_seed "$net"; then
-                    error "No wallet to listen for — run setup first."
+                    error "No wallet to listen for — Add on the previous screen creates one."
+                elif ! _cmd_net_ok "$net"; then
+                    # Checked before the stop: _cmd_start_listener would refuse
+                    # anyway, leaving a stopped listener the operator asked to cycle.
+                    error "Wrong network — F) Fix network on the previous screen first."
                 else
                     _cmd_listener_running "$net" || info "Not running — starting it."
                     # rc 1 = a process survived TERM and KILL; starting now would
@@ -1742,122 +1717,6 @@ _cmd_listener_menu() {
             *) echo -e "  ${RED}Invalid option.${RESET}"; sleep 1; continue ;;
         esac
         echo -ne "\n  Press Enter to continue..."; read -r || true
-    done
-}
-
-cmd_wallet_run() {
-    while true; do
-        clear
-        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "${BOLD}${CYAN} 05C) GRIN WALLET QUICK SETUP${RESET}"
-        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo ""
-        echo -e "  ${DIM}Download, init or recover, then start a listener — for direct CLI use,${RESET}"
-        echo -e "  ${DIM}testing, or as the wallet behind the Script 093 Transporter agent.${RESET}"
-        echo -e "  ${DIM}Setup asks which mode: 'listen' (Foreign 3415/13415, receive-only, Tor${RESET}"
-        echo -e "  ${DIM}onion automatic) or 'owner_api' (Owner v3 + Foreign on 3420/13420, can${RESET}"
-        echo -e "  ${DIM}also SEND, no automatic Tor). The passphrase is fed on stdin, never via${RESET}"
-        echo -e "  ${DIM}-p, so it never appears in ps/cmdline.${RESET}"
-        echo -e "  ${DIM}Stored in /opt/grin/cmdwallet/<net>/ — independent of other services.${RESET}"
-        echo ""
-
-        # Status
-        local _any=0
-        for _net in mainnet testnet; do
-            local _dir="/opt/grin/cmdwallet/$_net"
-            local _tmux="grin_${_net}_cmd_wallet"
-            if [[ -f "$_dir/grin-wallet.toml" ]]; then
-                _any=1
-                # Show the MODE, not just up/down: "listening" alone cannot tell an
-                # operator whether the Transporter agent can drive this wallet.
-                local _m _mp
-                _m=$(_cmd_mode "$_net"); _mp=$(_cmd_mode_port "$_net")
-                if tmux has-session -t "$_tmux" 2>/dev/null; then
-                    # A session alone does NOT prove the recorded mode is the one
-                    # running. Switching mode writes .listen_mode immediately (the
-                    # launcher reads it), but the restart prompt can be declined —
-                    # leaving a `listen` process up while this line claims
-                    # owner_api, and the agent then hits connection-refused on a
-                    # port nothing ever bound. Verifying the port catches that, and
-                    # equally a listener that died inside a surviving tmux session.
-                    if gnc_get_pid_on_port "$_mp" >/dev/null 2>&1; then
-                        echo -e "  ${GREEN}●${RESET} ${BOLD}${_net}${RESET}  ${GREEN}listening${RESET}  ${DIM}${_m} :${_mp} · tmux: $_tmux${RESET}"
-                    else
-                        echo -e "  ${YELLOW}▲${RESET} ${BOLD}${_net}${RESET}  ${YELLOW}session up, port ${_mp} not bound${RESET}  ${DIM}mode ${_m} — restart it${RESET}"
-                    fi
-                else
-                    echo -e "  ${DIM}○ ${_net}  installed · not listening · mode ${_m}${RESET}"
-                fi
-            fi
-        done
-        [[ $_any -eq 0 ]] && echo -e "  ${DIM}No cmd wallet installed yet.${RESET}"
-        echo ""
-
-        echo -e "  ${GREEN}1${RESET}) Mainnet  ${DIM}(real GRIN)${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Testnet  ${DIM}(tGRIN — no monetary value)${RESET}"
-        echo -e "  ${GREEN}3${RESET}) Both"
-        echo ""
-        echo -e "  ${GREEN}B${RESET}) grin-wallet binary  ${DIM}(update · roll back · verify)${RESET}"
-        echo -e "  ${GREEN}L${RESET}) Listener            ${DIM}(start · stop · restart · recent output)${RESET}"
-        echo -e "  ${RED}N${RESET}) Nuke wallet         ${DIM}(stop + remove one network's wallet, for a fresh test)${RESET}"
-        echo -e "  ${RED}0${RESET}) Back"
-        echo ""
-        echo -ne "${BOLD}Select [1/2/3/B/L/N/0]: ${RESET}"
-
-        local sel; read -r sel || true
-        case "$sel" in
-            1) _cmd_wallet_setup_for_net "mainnet" || true ;;
-            2) _cmd_wallet_setup_for_net "testnet" || true ;;
-            b|B)
-                echo ""
-                echo -ne "  Which network? [1 mainnet / 2 testnet / 0 cancel]: "
-                local _bnet; read -r _bnet || true
-                case "$_bnet" in
-                    1) _cmd_binary_menu "mainnet" || true ;;
-                    2) _cmd_binary_menu "testnet" || true ;;
-                    *) : ;;
-                esac
-                ;;
-            l|L)
-                # Straight in when only one network has a wallet: this screen is
-                # for quick test loops, where the extra key is pure friction.
-                local _lnet="" _has_m=0 _has_t=0
-                [[ -f "$(_cmd_toml mainnet)" ]] && _has_m=1
-                [[ -f "$(_cmd_toml testnet)" ]] && _has_t=1
-                if [[ $_has_m -eq 0 && $_has_t -eq 0 ]]; then
-                    echo ""
-                    info "No CMD wallet yet — set one up with 1 or 2 first."
-                    sleep 2
-                elif [[ $_has_m -eq 1 && $_has_t -eq 0 ]]; then
-                    _lnet="mainnet"
-                elif [[ $_has_t -eq 1 && $_has_m -eq 0 ]]; then
-                    _lnet="testnet"
-                else
-                    echo ""
-                    echo -ne "  Which network? [1 mainnet / 2 testnet / 0 cancel]: "
-                    local _lsel; read -r _lsel || true
-                    case "$_lsel" in
-                        1) _lnet="mainnet" ;;
-                        2) _lnet="testnet" ;;
-                        *) : ;;
-                    esac
-                fi
-                if [[ -n "$_lnet" ]]; then _cmd_listener_menu "$_lnet" || true; fi
-                ;;
-            n|N) _cmd_nuke_menu || true ;;
-            3)
-                local _ok=0
-                _cmd_wallet_setup_for_net "mainnet" && _ok=1 || true
-                if [[ $_ok -eq 1 ]]; then
-                    echo ""
-                    echo -e "${DIM}  ─── Now setting up testnet... ──────────────────────${RESET}"
-                    sleep 2
-                    _cmd_wallet_setup_for_net "testnet" || true
-                fi
-                ;;
-            0|"") return 0 ;;
-            *) echo -e "\n  ${RED}Invalid option.${RESET}"; sleep 1 ;;
-        esac
     done
 }
 

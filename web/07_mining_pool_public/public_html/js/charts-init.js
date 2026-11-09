@@ -355,7 +355,18 @@
     const scaleData = data.concat(lineData.filter(v => v != null));
 
     const valueScale = () => yAxis(scaleData, valueFmt, { zeroBase: true });
-    const catScale = () => horizontal ? { grid: { display: false } } : xAxis(canvas, labels);
+    // Horizontal: every category keeps its row (autoSkip would silently drop names) and a long
+    // name is cut to 22 characters on the axis; the tooltip title keeps the full label.
+    const catScale = () => horizontal ? {
+      grid: { display: false },
+      ticks: {
+        autoSkip: false,
+        callback: function (v) {
+          const l = String(this.getLabelForValue(v));
+          return l.length > 22 ? l.slice(0, 21) + '…' : l;
+        }
+      }
+    } : xAxis(canvas, labels);
     const tipLabel = (ctx) => {
       const v = horizontal ? ctx.parsed.x : ctx.parsed.y;
       if (v == null) return null;
@@ -435,6 +446,7 @@
   // Doughnut chart for categorical breakdowns (e.g. share quality valid/stale/reject).
   // `labels`+`data` parallel; opts.colors is a same-length slice colour array. Tooltips show
   // count + percent of total. Returns the Chart instance, or null if unavailable.
+  // opts.valueFmt(v) formats the tooltip value (defaults to a plain count).
   function renderDoughnutChart(canvasId, labels, data, opts) {
     opts = opts || {};
     const canvas = document.getElementById(canvasId);
@@ -443,6 +455,7 @@
     data = Array.isArray(data) ? data.map(Number) : [];
     const colors = Array.isArray(opts.colors) && opts.colors.length
       ? opts.colors : [accent(), '#d29922', '#f85149', '#58a6ff', '#a371f7'];
+    const valueFmt = typeof opts.valueFmt === 'function' ? opts.valueFmt : (v) => v.toLocaleString('en-US');
 
     // Percentages must come from the CURRENT slices — a captured total went stale on every
     // in-place update, so a re-rendered doughnut showed percentages of the previous window.
@@ -451,7 +464,7 @@
       const total = ds.reduce((a, b) => a + (Number(b) || 0), 0);
       const v = Number(ctx.parsed) || 0;
       const pct = total > 0 ? ((v / total) * 100).toFixed(1) + '%' : '0%';
-      return ctx.label + ': ' + v.toLocaleString('en-US') + ' (' + pct + ')';
+      return ctx.label + ': ' + valueFmt(v) + ' (' + pct + ')';
     };
 
     if (_charts[canvasId]) {
@@ -459,6 +472,7 @@
       ch.data.labels = labels;
       ch.data.datasets[0].data = data;
       ch.data.datasets[0].backgroundColor = colors;
+      ch.options.plugins.tooltip.callbacks.label = pctLabel;
       ch.update('none');
       return ch;
     }
@@ -853,6 +867,9 @@
   // Grouped (side-by-side) bar chart for multi-series buckets, e.g. credited vs sent per period.
   // `labels` = x categories; `datasets` = [{ label, data[], color }]; opts.valueFmt formats y-axis +
   // tooltips (defaults to integer). Returns the Chart instance or null if unavailable.
+  // opts.stacked = true stacks the series in one column per category (parts of one total, same
+  // unit): the value axis is scaled off the column SUMS, the tooltip skips zero parts and adds a
+  // "Total" footer. Without it the chart is the side-by-side grouped form, unchanged.
   function renderGroupedBarChart(canvasId, labels, datasets, opts) {
     opts = opts || {};
     const canvas = document.getElementById(canvasId);
@@ -860,6 +877,7 @@
     labels = Array.isArray(labels) ? labels : [];
     datasets = Array.isArray(datasets) ? datasets : [];
     const valueFmt = typeof opts.valueFmt === 'function' ? opts.valueFmt : fmtInt;
+    const stacked = !!opts.stacked;
     const palette = [accent(), '#58a6ff', '#d29922', '#a371f7'];
     const mk = (ds, i) => {
       const c = ds.color || palette[i % palette.length];
@@ -876,6 +894,16 @@
 
     const built = datasets.map(mk);
     const allValues = built.reduce(function (acc, d) { return acc.concat(d.data); }, []);
+    // Stacked columns reach the SUM of their parts, so that is what the axis must cover.
+    const columnSums = labels.map(function (_, i) {
+      return built.reduce(function (s, d) { return s + (Number(d.data[i]) || 0); }, 0);
+    });
+    const scaleValues = stacked ? columnSums : allValues;
+    const xScale = () => Object.assign(xAxis(canvas, labels), stacked ? { stacked: true } : {});
+    const yScale = () => Object.assign(yAxis(scaleValues, valueFmt, { zeroBase: true }), stacked ? { stacked: true } : {});
+    const tipLabel = (ctx) => ctx.dataset.label + ': ' + valueFmt(ctx.parsed.y);
+    const tipFilter = (item) => !stacked || Number(item.parsed.y) !== 0;
+    const tipFooter = (items) => (stacked && items.length ? 'Total: ' + valueFmt(columnSums[items[0].dataIndex] || 0) : '');
 
     if (_charts[canvasId]) {
       const ch = _charts[canvasId];
@@ -888,9 +916,11 @@
         else ch.data.datasets[i] = d;
       });
       ch.data.datasets.length = built.length;
-      ch.options.plugins.tooltip.callbacks.label = (ctx) => ctx.dataset.label + ': ' + valueFmt(ctx.parsed.y);
-      ch.options.scales.x = xAxis(canvas, labels);
-      ch.options.scales.y = yAxis(allValues, valueFmt, { zeroBase: true });
+      ch.options.plugins.tooltip.callbacks.label = tipLabel;
+      ch.options.plugins.tooltip.callbacks.footer = tipFooter;
+      ch.options.plugins.tooltip.filter = tipFilter;
+      ch.options.scales.x = xScale();
+      ch.options.scales.y = yScale();
       ch.update('none');
       return ch;
     }
@@ -904,9 +934,9 @@
         interaction: { intersect: false, mode: 'index' },
         plugins: {
           legend: { display: true, position: 'bottom', labels: { boxWidth: 12, padding: 12 } },
-          tooltip: { callbacks: { label: (ctx) => ctx.dataset.label + ': ' + valueFmt(ctx.parsed.y) } }
+          tooltip: { filter: tipFilter, callbacks: { label: tipLabel, footer: tipFooter } }
         },
-        scales: { x: xAxis(canvas, labels), y: yAxis(allValues, valueFmt, { zeroBase: true }) }
+        scales: { x: xScale(), y: yScale() }
       }
     });
     return _charts[canvasId];

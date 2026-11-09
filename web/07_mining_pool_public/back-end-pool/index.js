@@ -370,6 +370,7 @@ async function initializePool() {
     });
 
     blockMonitor = new BlockMonitor(config);
+    stratumServer.setChainReader(blockMonitor.grinNode);
     blockMonitor.start();
 
     // Node availability (design §20): the pool's own 30 s node probe + the node box's recorder
@@ -396,7 +397,7 @@ async function initializePool() {
 
     // Incentive system: prize pool, join bonus, jackpot, streaks, lottery. All no-ops unless
     // enabled in the admin panel. LotteryManager reuses the block monitor's node client for
-    // its verifiable draw seed.
+    // its draw seed.
     incentivesManager = new IncentivesManager(config);
     adsManager = new AdsManager(config);
     try {
@@ -448,11 +449,26 @@ async function initializePool() {
     lotteryManager = new LotteryManager(config, blockMonitor.grinNode);
     console.log(`[${new Date().toISOString()}] Incentives + lottery managers initialized`);
 
-    // Daily loyalty-streak roll-up (every 24h) and hourly lottery scheduler tick.
-    setInterval(() => {
-      try { incentivesManager.updateStreaks(); }
-      catch (e) { console.error(`[Incentives] streak update failed: ${e.message}`); }
-    }, 24 * 3600 * 1000);
+    // Loyalty streaks: at boot and hourly. Each run counts yesterday then today from
+    // hashrate_history and is idempotent, so a restart neither skips nor double-counts a day
+    // (IncentivesManager.updateStreaks). Read in 2 h slices of raw hashrate_history with a yield
+    // between them, so a catch-up after a deploy or an outage never blocks share intake for long.
+    // Then the hourly lottery scheduler tick.
+    const STREAK_SLICE_SECONDS = 2 * 3600;
+    const runStreaks = () => {
+      let updated = 0;
+      const step = () => {
+        try {
+          const r = incentivesManager.updateStreaks(undefined, STREAK_SLICE_SECONDS);
+          updated += r.updated;
+          if (!r.caughtUp) { setImmediate(step); return; }
+          if (updated) console.log(`[${new Date().toISOString()}] [Incentives] streaks advanced for ${updated} address(es)`);
+        } catch (e) { console.error(`[Incentives] streak update failed: ${e.message}`); }
+      };
+      step();
+    };
+    runStreaks();
+    setInterval(runStreaks, 3600 * 1000);
     setInterval(() => {
       // Reveal first, then commit: a draw commits to a seed block ~10 blocks ahead of the tip
       // and is only resolved once the chain reaches it (script07_security_audit_archive.md §I8), so every tick settles what
@@ -683,7 +699,8 @@ async function initializePool() {
       stratumServer,
       withdrawalScheduler,
       alertDelivery,
-      nodeAvailability
+      nodeAvailability,
+      lotteryManager
     }, db);
     alertMonitor.start();
     console.log(`[${new Date().toISOString()}] Alert monitor started`);
@@ -731,6 +748,12 @@ async function initializePool() {
 
 process.on('SIGINT', () => {
   console.log(`\n[${new Date().toISOString()}] Shutting down gracefully...`);
+  process.exit(0);
+});
+
+// systemd stops and restarts with SIGTERM. stop() logs any lost submits being forgotten.
+process.on('SIGTERM', () => {
+  if (stratumServer) stratumServer.stop();
   process.exit(0);
 });
 

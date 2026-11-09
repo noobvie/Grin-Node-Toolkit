@@ -117,6 +117,8 @@ def _save_community_nodes(data):
 # Edit 06_ecosystem_dev.json to add/remove development progress repos.
 # type: "http" (default) | "github" | "gitea" | "stock"
 # since: "Mon YYYY" string shown in UI, or null to omit
+# verified: true marks a service Grin forum members have traded on with real funds
+#           (UI shows a "Verified" badge); omit it for everything else
 
 def _load_json_sidecar(filename, required=False):
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
@@ -938,6 +940,7 @@ def _check_services(services, now, conn):
                 "url":         svc["url"],
                 "type":        svc.get("type", "http"),
                 "since":       svc.get("since"),
+                "verified":    svc.get("verified") is True,
                 "ok":          ok,
                 "status_code": code,
                 "response_ms": ms if ok else None,

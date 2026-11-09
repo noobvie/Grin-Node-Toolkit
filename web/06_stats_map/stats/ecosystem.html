@@ -476,6 +476,56 @@
   .svc-stock-ok      { color: var(--green);  font-weight: 700; font-size: 11px; }
   .svc-stock-out     { color: var(--orange); font-weight: 700; font-size: 11px; }
   .svc-stock-unknown { color: var(--muted);  font-size: 11px; }
+  .svc-verified {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 0 5px;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--green);
+    border: 1px solid var(--green);
+    border-radius: 4px;
+    vertical-align: 1px;
+    cursor: help;
+  }
+
+  /* Exchange-header caution tooltip: opens on hover, tap or keyboard focus. It drops
+     DOWN into the rows because .card clips anything that pokes out above it. */
+  .svc-tip {
+    position: relative;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 15px; height: 15px;
+    margin-left: 6px;
+    border: 1px solid var(--orange);
+    border-radius: 50%;
+    color: var(--orange);
+    font-size: 10px;
+    text-transform: none;
+    letter-spacing: 0;
+    cursor: help;
+    vertical-align: 1px;
+  }
+  .svc-tip-body {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px);
+    left: -8px;
+    z-index: 20;
+    width: min(300px, calc(100vw - 140px));
+    padding: 8px 10px;
+    background: var(--surface);
+    border: 1px solid var(--orange);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.5;
+    text-align: left;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+  }
+  .svc-tip:hover .svc-tip-body,
+  .svc-tip:focus .svc-tip-body,
+  .svc-tip:focus-within .svc-tip-body { display: block; }
 
   /* ── Collapsible hint panels ────────────────────────────────────────────── */
   .hint-btn {
@@ -1002,9 +1052,17 @@ function renderServices(services) {
 
   let html = '';
   for (const cat of cats) {
-    const catNote = cat === 'Development progress'
-      ? ' <span class="svc-cat-note">— last release / commit date</span>'
-      : '';
+    let catNote = '';
+    if (cat === 'Development progress') {
+      catNote = ' <span class="svc-cat-note">— last release / commit date</span>';
+    } else if (cat === 'Exchange') {
+      catNote = ' <span class="svc-tip" tabindex="0" role="note" aria-label="Exchange safety tip">!'
+        + '<span class="svc-tip-body"><strong>Trade carefully.</strong> A listing here is not an endorsement — '
+        + 'only exchanges marked <strong>Verified</strong> have been tested with real funds by Grin forum members, '
+        + 'and even those can change without warning. '
+        + 'Send a small test amount first, buy gradually rather than all at once, '
+        + 'and withdraw to your own wallet.</span></span>';
+    }
     html += `<div class="svc-category-header">${esc(cat)}${catNote}</div>`;
     for (const s of catMap[cat]) {
       const icon   = s.ok ? '<span class="status-ok">✓</span>' : '<span class="status-fail">✗</span>';
@@ -1013,6 +1071,9 @@ function renderServices(services) {
       const since  = cat === 'Development progress'
         ? (sinceText ? `<span class="svc-since">Online since ${esc(sinceText)}</span>` : '')
         : `<span class="svc-since">Online since ${sinceText ? esc(sinceText) : '—'}</span>`;
+      const verified = s.verified === true
+        ? '<span class="svc-verified" title="Tested with real trades by Grin forum members. An exchange can change without warning, so still start small.">✓ Verified</span>'
+        : '';
       const safeUrl = /^https?:\/\//i.test(s.url) ? s.url : '#';
       const host    = (() => { try { return new URL(s.url).hostname; } catch(_) { return s.url; } })();
 
@@ -1047,7 +1108,7 @@ function renderServices(services) {
 
       html += `<div class="svc-row">
   <span class="svc-status">${icon}</span>
-  <span class="svc-name">${esc(s.name)}</span>
+  <span class="svc-name">${esc(s.name)}${verified}</span>
   <a class="svc-url" href="${esc(safeUrl)}" target="_blank" rel="noopener" title="${esc(s.url)}">${esc(host)}</a>
   <span class="svc-meta">${metaContent}</span>
 </div>`;

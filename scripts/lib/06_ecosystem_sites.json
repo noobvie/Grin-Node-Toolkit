@@ -5,9 +5,11 @@
   {"category": "Explorer",    "name": "GrinScan.org mainnet",       "url": "https://grinscan.org/",                                "since": null},
   {"category": "Explorer",    "name": "GrinScan.org testnet",       "url": "https://test.grinscan.org/",                                "since": null},
 
-  {"category": "Exchange",    "name": "Gate.io",                    "url": "https://www.gate.com/trade/GRIN_USDT",                 "since": "Feb 2019"},
+  {"category": "Exchange",    "name": "Gate.io",                    "url": "https://www.gate.com/trade/GRIN_USDT",                 "since": "Feb 2019", "verified": true},
   {"category": "Exchange",    "name": "NoirTrade",                  "url": "https://noirtrade.com/trade?pair=GRIN_BTC",            "since": null},
-  {"category": "Exchange",    "name": "CexSwap",                    "url": "https://cexswap.cc/trade/GRIN-USDT",                   "since": null},
+  {"category": "Exchange",    "name": "CexSwap",                    "url": "https://cexswap.cc/trade/GRIN-USDT",                   "since": null, "verified": true},
+  {"category": "Exchange",    "name": "AnonKYC",                    "url": "https://anonkyc.com/trade/GRIN_USDT",                  "since": null},
+  {"category": "Exchange",    "name": "OrkoSwap",                   "url": "https://orkoswap.io/#trade/GRIN-USDT",                "since": null},
   {"category": "Exchange",    "name": "nonlogs.io",                 "url": "https://nonlogs.io/",                                 "since": null},
 
   {"category": "Wallet",      "name": "GRIM",                       "url": "https://gri.mw/",                                     "since": null},

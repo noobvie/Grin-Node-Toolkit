@@ -92,6 +92,16 @@ Grin Nostr Relay (Floonet) for Goblin wallet: https://relay.grin.money/
 > [LowEndBox](https://lowendbox.com) for deals.
 
 ```bash
+curl -fsSL https://grinnode.org/install | sudo bash
+```
+
+The installer ([`install.sh`](install.sh), also at https://grinnode.org/install.sh with its SHA256 at
+`install.sh.sha256`) installs `git` if needed, downloads the toolkit into `/opt/grin-node-toolkit` and
+starts the menu. Options go after `bash -s --`: `--dir PATH`, `--no-launch`, `--branch NAME`.
+
+Or by hand:
+
+```bash
 git clone https://github.com/noobvie/grin-node-toolkit.git
 cd grin-node-toolkit
 chmod +x grin-node-toolkit.sh scripts/*.sh

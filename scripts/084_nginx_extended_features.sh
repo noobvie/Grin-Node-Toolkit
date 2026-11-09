@@ -61,6 +61,8 @@ pause()   { echo ""; echo "Press Enter to continue..."; read -r; }
 source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
 # ui_ask() — the bandwidth screen's cancellable IP prompt (option 5).
 source "$SCRIPT_DIR/lib/ui_shared_helpers.sh"
+# fwh_* — block an IP through the active firewall (option 5).
+source "$SCRIPT_DIR/lib/firewall_shared_helpers.sh"
 
 # ─── Reserved Grin names (owned by script 02) ─────────────────────────────────
 RESERVED_PREFIXES=("fullmain" "prunemain" "prunetest")
@@ -601,6 +603,100 @@ ROTEOF
 # =============================================================================
 # Reads nginx access logs, so it lives with the rest of the nginx tooling
 # (hub 08 key 6 belongs to 086 Diagnostics).
+
+# Block <ip|cidr> on the active firewall (fwh_block_ip: above ufw's allow rules,
+# IPv6-aware, persistent) and add it to the shared block record, so Script 02's
+# IP Filtering → Unblock can lift it. Always returns 0 — the outcome is reported here.
+_bw_block_ip() {
+    local t="$1" c rc ssh_ip
+    fwh_validate_target "$t" || return 0
+
+    if ssh_ip="$(fwh_target_covers_ssh "$t")"; then
+        warn "$t covers $ssh_ip, the address of your current SSH session — blocking it locks you out."
+        echo -ne "${RED}Block it anyway? (type YES): ${RESET}"
+        read -r c
+        if [[ "$c" != "YES" ]]; then info "Cancelled."; return 0; fi
+    else
+        echo -ne "${RED}Block ALL traffic from $t? [y/N]: ${RESET}"
+        read -r c
+        if [[ "${c,,}" != "y" ]]; then info "Cancelled."; return 0; fi
+    fi
+
+    fwh_block_ip "$t"; rc=$?
+    case "$rc" in
+        0) success "Blocked $t"
+           log "[084] BLOCKED: $t" ;;
+        2) warn "$t is blocked now, but the block will be LOST at the next reboot (see above)."
+           log "[084] BLOCKED (not persistent): $t" ;;
+        *) error "$t was NOT blocked." ;;
+    esac
+    if (( rc != 1 )); then
+        if fwh_record_add "$t" "084 bandwidth consumers"; then
+            info "Recorded in $(fwh_record_file) — lift it with Script 02 → IP Filtering → Unblock."
+        else
+            warn "Blocked, but the record in $(fwh_record_file) was not written."
+        fi
+    fi
+    return 0
+}
+
+# Rate-limit <ip|cidr> with an iptables/ip6tables hashlimit rule on NEW
+# connections to ports 80/443 only (an established download is never counted).
+# Always returns 0 — the outcome is reported here.
+_bw_rate_limit_ip() {
+    local t="$1" fam tool name c backend
+    fwh_validate_target "$t" || return 0
+    fam="$(fwh_ip_family "$t")"
+    tool=iptables; [[ "$fam" == 6 ]] && tool=ip6tables
+    if ! command -v "$tool" &>/dev/null; then
+        warn "$tool not available — cannot add a rate-limit."
+        return 0
+    fi
+
+    # xt_hashlimit names are at most 15 characters, so derive a short stable one.
+    name="rl$(printf '%s' "$t" | md5sum | cut -c1-10)"
+
+    local -a spec=(INPUT -s "$t" -p tcp --syn -m multiport --dports 80,443
+        -m hashlimit --hashlimit-name "$name" --hashlimit-above 25/min
+        --hashlimit-burst 100 --hashlimit-mode srcip -j DROP)
+
+    echo -ne "${YELLOW}Rate-limit new web connections from $t (>25/min, burst 100 → DROP)? [y/N]: ${RESET}"
+    read -r c
+    if [[ "${c,,}" != "y" ]]; then info "Cancelled."; return 0; fi
+
+    if "$tool" -C "${spec[@]}" 2>/dev/null; then
+        info "The rate-limit rule for $t already exists — nothing added."
+    else
+        "$tool" -I "${spec[@]}" \
+            || { error "$tool: failed to add the rate-limit rule for $t"; return 0; }
+        success "Rate-limit rule added for $t (new connections to 80/443 above 25/min are dropped)"
+        log "[084] RATE-LIMITED via $tool hashlimit: $t"
+    fi
+
+    backend="$(fwh_detect)"
+    case "$backend" in
+        firewalld)
+            warn "firewalld is active: this raw $tool rule is NOT managed by firewalld and is not"
+            warn "saved by it — it can be lost at reboot or firewall reload. Re-run this action if so."
+            ;;
+        ufw)
+            # fwh_persist does not fit here: ufw restores only its own rules at boot, and
+            # iptables-persistent cannot be installed next to ufw (ufw Breaks: it).
+            info "ufw is active: the rule sits at INPUT position 1, ahead of ufw's chains — that is intended."
+            warn "It is NOT saved: ufw restores only its own rules at boot, so this rate-limit is LOST"
+            warn "at the next reboot. Re-run this action after a reboot if you still need it."
+            ;;
+        *)
+            fwh_persist "$fam" \
+                || warn "The rate-limit is live but will be LOST at the next reboot (see above)."
+            ;;
+    esac
+
+    info "To remove it later:"
+    echo -e "  ${YELLOW}$tool -D ${spec[*]}${RESET}"
+    return 0
+}
+
 show_bandwidth_consumers() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
@@ -700,45 +796,8 @@ show_bandwidth_consumers() {
         read -r action
 
         case "$action" in
-            1)
-                if command -v ufw &>/dev/null; then
-                    echo -ne "${RED}Block ALL traffic from $target_ip? [y/N]: ${RESET}"
-                    read -r c
-                    if [[ "${c,,}" == "y" ]]; then
-                        ufw deny from "$target_ip" to any \
-                            && success "UFW rule added: deny from $target_ip" \
-                            && log "[084] UFW BLOCKED: $target_ip"
-                    else
-                        info "Cancelled."
-                    fi
-                else
-                    warn "ufw not available."
-                    info "Equivalent iptables command:"
-                    echo -e "  ${YELLOW}iptables -I INPUT -s $target_ip -j DROP${RESET}"
-                fi
-                ;;
-            2)
-                if ! command -v iptables &>/dev/null; then
-                    warn "iptables not available."
-                else
-                    echo -ne "${YELLOW}Add hashlimit rate-limit for $target_ip? [y/N]: ${RESET}"
-                    read -r c
-                    if [[ "${c,,}" == "y" ]]; then
-                        # Allow up to 25 connections/min, burst 100
-                        iptables -I INPUT -s "$target_ip" \
-                            -m hashlimit \
-                            --hashlimit-name "rl_${target_ip//\./_}" \
-                            --hashlimit-above 25/min \
-                            --hashlimit-burst 100 \
-                            --hashlimit-mode srcip \
-                            -j DROP \
-                            && success "Rate-limit rule added for $target_ip (>25 conn/min → DROP)" \
-                            && log "[084] RATE-LIMITED via iptables hashlimit: $target_ip"
-                    else
-                        info "Cancelled."
-                    fi
-                fi
-                ;;
+            1) _bw_block_ip "$target_ip" || true ;;
+            2) _bw_rate_limit_ip "$target_ip" || true ;;
             0|*) info "Cancelled." ;;
         esac
     fi

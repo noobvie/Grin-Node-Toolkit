@@ -105,8 +105,14 @@ class OrphanDetector {
 
         if (verification.onChain) {
           // Money moves ONLY if the status claim landed — see confirmBlock/orphanBlock.
-          if (!this.confirmBlock(block.id)) continue;
-          this.incentives.payBlockFinderJackpot(block);
+          let claimed;
+          try {
+            claimed = this.confirmAndPayJackpot(block);
+          } catch (err) {
+            console.error(`[block ${block.id}] confirm rolled back, retried next sweep: ${err.message}`);
+            continue;
+          }
+          if (!claimed) continue;
           results.confirmed++;
           results.details.push({
             block_id: block.id,
@@ -164,6 +170,19 @@ class OrphanDetector {
     }
   }
 
+  // The confirm claim and the jackpot it makes due, as ONE transaction. A confirmed block is never
+  // revisited, so a confirm that committed without its jackpot decision (a throw, or the process
+  // dying in between) would lose that jackpot for good; rolled back together, the block stays
+  // 'immature' and the next sweep retries both. Returns confirmBlock's claim result; a throw from
+  // the jackpot propagates after the rollback.
+  confirmAndPayJackpot(block) {
+    return this.db.transaction(() => {
+      if (!this.confirmBlock(block.id)) return false;
+      this.incentives.payBlockFinderJackpot(block);
+      return true;
+    })();
+  }
+
   orphanBlock(blockId, reason = 'unknown') {
     try {
       const r = this.db.prepare(`
@@ -206,6 +225,26 @@ class OrphanDetector {
     try {
       const block = this.db.prepare('SELECT * FROM blocks WHERE id = ?').get(blockId);
       if (!block) return;
+
+      // Drop this block's pending jackpot and claw back one it was paid (idempotent; keyed to
+      // this block, not just its height — see IncentivesManager.reverseJackpot). First, so the
+      // early returns below never skip it.
+      if (this.incentives) {
+        this.incentives.reverseJackpot(block);
+      }
+
+      // The credits below are keyed by HEIGHT, and blocks.height is not UNIQUE. An orphaned block
+      // never has credits of its own (orphanBlock only leaves 'immature'; distribution pays only
+      // 'confirmed'), so when another pool block at this height is confirmed or paid, every
+      // credit at this height is THAT block's and reversing it would claw back the winner's
+      // payout. Keying credits by block id is the durable fix; this guard is the narrow one.
+      const settledSibling = this.db.prepare(`
+        SELECT id FROM blocks WHERE height = ? AND id != ? AND status IN ('confirmed', 'paid') LIMIT 1
+      `).get(block.height, block.id);
+      if (settledSibling) {
+        console.warn(`Orphaned block id=${block.id} shares height=${block.height} with settled block id=${settledSibling.id} — its credits are kept`);
+        return;
+      }
 
       // Reverse EXACTLY what was credited for this block, by reading back the original
       // balance_log credit rows (keyed by reference_type IN ('block','pool_fee') and
@@ -304,11 +343,6 @@ class OrphanDetector {
           }
         });
         reverse();
-      }
-
-      // Claw back any block-finder jackpot paid for this block (idempotent).
-      if (this.incentives) {
-        this.incentives.reverseJackpot(block.height);
       }
 
       console.log(`Reversed payouts for orphaned block height=${block.height} (${credits.length} credited address(es))`);

@@ -261,7 +261,7 @@ _gwi_fetch_impl() {
         | jq -r '.assets[] | select(.name | test("linux-x86_64\\.tar\\.gz$"; "i")) | .browser_download_url' \
         | head -1)
     sum_url=$(echo "$release_json" \
-        | jq -r '.assets[] | select(.name | test("linux-x86_64\\.tar\\.gz\\.(sha256sum|sha256)$"; "i")) | .browser_download_url' \
+        | jq -r '.assets[] | select(.name | test("linux-x86_64(\\.tar\\.gz)?[-.]sha256(sum)?(\\.txt)?$"; "i")) | .browser_download_url' \
         | head -1)
 
     if [[ -z "$tar_url" || "$tar_url" == "null" ]]; then
@@ -285,7 +285,9 @@ _gwi_fetch_impl() {
         local tmp_sum="$tmp_dir/grin-wallet.sha256"
         if wget -q -O "$tmp_sum" "$sum_url"; then
             local expected actual
-            expected=$(awk '{print $1; exit}' "$tmp_sum" 2>/dev/null | tr -d '[:space:]')
+            # Releases publish BSD-style "SHA2-256(<file>)= <hex>" (older: "SHA256(...)"),
+            # so take the digest by its shape, not by column.
+            expected=$(grep -oiE '[0-9a-f]{64}' "$tmp_sum" 2>/dev/null | head -1 | tr 'A-F' 'a-f')
             actual=$(sha256sum "$tmp_tar" 2>/dev/null | awk '{print $1}')
             if [[ -n "$expected" && -n "$actual" ]]; then
                 if [[ "$expected" == "$actual" ]]; then

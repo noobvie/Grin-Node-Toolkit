@@ -60,11 +60,14 @@ module.exports = function createAdminIncentivesRoutes(ctx, guards) {
       // in; prizes · jackpots · join bonuses · streaks out) + current balance + recent 25 rows.
       // `balance`/`ledger` kept for backward-compat with the existing panel wiring.
       const statement = incentivesManager.prizePoolStatement(25);
+      // jackpots_waiting = { count, amount }: jackpots due at maturity that the prize pool could
+      // not yet cover. Admin only — kept out of `statement`, which the public report shares.
       res.json({
         success: true,
         balance: statement.balance,
         ledger: statement.recent,
         statement,
+        jackpots_waiting: incentivesManager.pendingJackpotSummary(),
       });
     } catch (err) {
       res.status(500).json({ error: 'Failed to load prize pool' });

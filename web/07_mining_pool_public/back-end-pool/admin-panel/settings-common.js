@@ -1123,6 +1123,15 @@ if (document.currentScript && document.currentScript.getAttribute('data-section'
         if (d && latest()) {
           const bal = document.getElementById('prize-pool-balance');
           if (bal) bal.textContent = (d.balance || 0).toFixed(4);
+          const jw = document.getElementById('pp-jackpots-waiting');
+          const waiting = d.jackpots_waiting || { count: 0, amount: 0 };
+          if (jw) {
+            jw.hidden = !(waiting.count > 0);
+            jw.textContent = waiting.count > 0
+              ? `${waiting.count} block-finder jackpot${waiting.count === 1 ? '' : 's'} waiting: ${(waiting.amount || 0).toFixed(4)} GRIN. ` +
+                'They are paid oldest first as soon as the prize pool can cover each one.'
+              : '';
+          }
           const led = document.getElementById('prize-pool-ledger');
           if (led) led.innerHTML = (d.ledger || []).slice(0, 8).map(e =>
             `${escapeHtmlSafe(new Date(e.created_at * 1000).toLocaleString())} — ${escapeHtmlSafe(e.event_type)} ${(e.amount).toFixed(4)} (${escapeHtmlSafe(e.reference_type)})`

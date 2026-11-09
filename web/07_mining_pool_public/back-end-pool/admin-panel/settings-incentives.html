@@ -48,6 +48,7 @@
             <div class="helper-text">
               <strong>Prize pool balance:</strong> <span id="prize-pool-balance">…</span> GRIN
             </div>
+            <div class="helper-text" id="pp-jackpots-waiting" hidden></div>
             <div class="helper-text" id="prize-pool-breakdown" style="margin-top:.5rem;">
               <strong>Where it comes from · where it goes</strong> (lifetime)
               <div id="prize-pool-flows" style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-top:.35rem;">
@@ -129,8 +130,8 @@
           </div>
           <div class="form-group">
             <label for="jackpot_amount">Jackpot amount (GRIN)</label>
-            <input type="number" id="jackpot_amount" name="jackpot_amount" min="0" step="0.01" value="0">
-            <div class="helper-text">Credited when the block matures; clawed back automatically if the block is orphaned.</div>
+            <input type="number" id="jackpot_amount" name="jackpot_amount" min="0" max="59.99" step="0.01" value="0">
+            <div class="helper-text">Must be below 60 GRIN (one block reward). Credited when the block matures. If the prize pool is short then, it waits and is paid oldest first once the pool can cover it (the amount is fixed at maturity). Clawed back automatically if the block is orphaned.</div>
           </div>
         </div>
 

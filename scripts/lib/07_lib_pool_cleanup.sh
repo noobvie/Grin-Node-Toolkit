@@ -161,9 +161,9 @@ pool_cleanup() {
     #     Edge: GW_DIR + GW_WG_CONF (wg-grinpool). Central: WG_* from 07_lib_pool_regions.sh (network-aware:
     #     wg-grinpool / wg-grinpool-tn). Bring down + remove whichever is present.
     if [[ -d "$GW_DIR" || -f "$GW_WG_CONF" || -f "$WG_CONF" || -d "$WG_DIR_CONF" ]]; then
-        echo -ne "${BOLD}3b)${RESET} Remove gateway app + WireGuard tunnels (edge $GW_WG_IFACE / central $WG_IFACE)? [Y/n]: "
+        echo -ne "${BOLD}3b)${RESET} Remove gateway app + WireGuard tunnels (edge $GW_WG_IFACE / central $WG_IFACE)? [y/N]: "
         read -r a || true
-        if [[ "${a,,}" != "n" ]]; then
+        if [[ "${a,,}" == "y" || "${a,,}" == "yes" ]]; then
             local ifc
             for ifc in "$GW_WG_IFACE" "$WG_IFACE"; do
                 wg-quick down "$ifc" 2>/dev/null || true
@@ -215,9 +215,9 @@ pool_cleanup() {
     # 5) Cron jobs + logrotate + backup wrapper + wallet listeners/watchdog/autostart.
     #    The wallet SEED dir is kept (it holds coinbase funds) — we only stop the
     #    runtime listeners and remove their watchdog + @reboot autostart.
-    echo -ne "${BOLD}5)${RESET} Remove cron + logrotate + wrapper + stop wallet listeners? [Y/n]: "
+    echo -ne "${BOLD}5)${RESET} Remove cron + logrotate + wrapper + stop wallet listeners? [y/N]: "
     read -r a || true
-    if [[ "${a,,}" != "n" ]]; then
+    if [[ "${a,,}" == "y" || "${a,,}" == "yes" ]]; then
         rm -f "$cron_backup" "$cron_vacuum" "$backup_wrapper" "$logrotate_conf" "$POOL_ADMIN_RESET_BIN" \
             || { error "Could not remove the cron / logrotate / wrapper files."; return 1; }
         # De-root artifacts (§13.9): scoped sudoers + pairing helper — but ONLY
@@ -239,9 +239,9 @@ pool_cleanup() {
     echo ""
 
     # 6) JSON configs (pool + satellite + gateway + pre-rename legacy grin_pool.json)
-    echo -ne "${BOLD}6)${RESET} Remove configs ($POOL_CONF, $SAT_CONF, $GW_CONF)? [Y/n]: "
+    echo -ne "${BOLD}6)${RESET} Remove configs ($POOL_CONF, $SAT_CONF, $GW_CONF)? [y/N]: "
     read -r a || true
-    if [[ "${a,,}" != "n" ]]; then
+    if [[ "${a,,}" == "y" || "${a,,}" == "yes" ]]; then
         rm -f "$POOL_CONF" "$SAT_CONF" "$GW_CONF" "/opt/grin/conf/grin_pool.json" \
             || { error "Could not remove the pool/gateway JSON configs."; return 1; }
         success "Configs removed."
@@ -287,5 +287,6 @@ pool_cleanup() {
     success "Public-pool cleanup complete."
     echo -e "  ${BOLD}${GREEN}Kept:${RESET} node + chain data · grin-server.toml (stratum config as-is)"
     echo -e "        wallet dir + seed · pool backups ($backup_dir)"
-    echo -e "  ${DIM}Ready for a fresh install — pick a mode and run Install again.${RESET}"
+    echo -e "  ${DIM}A group you answered No to is still on disk; re-run Z to remove it.${RESET}"
+    echo -e "  ${DIM}Pick a mode and run Install again.${RESET}"
 }

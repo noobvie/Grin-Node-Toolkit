@@ -102,6 +102,10 @@ const { MIN_WITHDRAWAL_FEE } = require('./config');
 // the draw worth a miner's while, so neither limit may reach it. Also guards against a typo draining
 // the prize pool in one draw.
 const GIVEAWAY_GRIN_LIMIT = 60;
+// The block-finder jackpot's ceiling, the same block reward. IncentivesManager queues a jackpot the
+// prize pool cannot cover and pays the queue strictly oldest first, so a jackpot set by mistake to
+// more than the prize pool will ever hold would stall every jackpot behind it.
+const JACKPOT_GRIN_LIMIT = GIVEAWAY_GRIN_LIMIT;
 
 // Own-property membership tests for the settings schema. `defaults[section]` and
 // `key in defaults[section]` both walk Object.prototype, so `constructor`, `toString`,
@@ -1419,7 +1423,12 @@ PASS      any-password-you-choose</code>
         donor_banner_slots: intRange('donor_banner_slots', 0, 10),
         donor_name_change_days: intRange('donor_name_change_days', 0, 90),
         join_bonus_amount: nonNeg('join_bonus_amount'),
-        jackpot_amount: nonNeg('jackpot_amount'),
+        // Below one block reward — see JACKPOT_GRIN_LIMIT.
+        jackpot_amount: (val) => {
+          const n = nonNeg('jackpot_amount')(val);
+          if (n >= JACKPOT_GRIN_LIMIT) throw new Error(`jackpot_amount must be below ${JACKPOT_GRIN_LIMIT} GRIN (one block reward)`);
+          return n;
+        },
         streak_bonus_per_week_percent: percent('streak_bonus_per_week_percent'),
         streak_max_percent: percent('streak_max_percent'),
         lottery_pot_share_weighted_percent: percent('lottery_pot_share_weighted_percent'),
@@ -2067,3 +2076,4 @@ PASS      any-password-you-choose</code>
 module.exports = PoolSettings;
 module.exports.stratumPauseBanners = stratumPauseBanners;
 module.exports.GIVEAWAY_GRIN_LIMIT = GIVEAWAY_GRIN_LIMIT;
+module.exports.JACKPOT_GRIN_LIMIT = JACKPOT_GRIN_LIMIT;

@@ -118,7 +118,7 @@ class IncentivesManager {
       dormant: 'Abandoned balances', jackpot_reversal: 'Orphaned-block clawbacks',
     };
     const OUT_LABELS = {
-      prize_award: 'Prizes & lottery', jackpot: 'Block-finder jackpots',
+      prize_award: 'Operator awards', lottery: 'Lottery & daily giveaway', jackpot: 'Block-finder jackpots',
       join_bonus: 'Join bonuses', streak: 'Loyalty streaks',
     };
     const inflow = {}; const outflow = {};
@@ -166,13 +166,14 @@ class IncentivesManager {
   // kept in the schema but read by nothing.
 
   // Streak multiplier as a fraction (e.g. 0.03 for +3%). Returns 0 if the streak is stale
-  // (the address didn't mine today or yesterday) or streaks are disabled.
+  // (the address didn't mine today or yesterday) or streaks are disabled. A last_active_day after
+  // today was written under a clock that ran ahead; it is stale too, never a streak kept alive.
   streakMultiplier(address, s = this.settingsView()) {
     if (!flag(s.streak_enabled)) return 0;
     const row = this.db.prepare('SELECT streak_days, last_active_day FROM miner_incentives WHERE grin_address = ?').get(address);
     if (!row || !row.last_active_day) return 0;
     const today = Math.floor(Date.now() / 1000 / SECONDS_PER_DAY);
-    if (row.last_active_day < today - 1) return 0; // streak broken
+    if (row.last_active_day < today - 1 || row.last_active_day > today) return 0; // streak broken
     const weeks = Math.floor(row.streak_days / 7);
     if (weeks <= 0) return 0;
     const pct = Math.min(weeks * s.streak_bonus_per_week_percent, s.streak_max_percent);
@@ -279,7 +280,13 @@ class IncentivesManager {
   }
 
   // ─── Block-finder jackpot ──────────────────────────────────────────────────
-  // Flat bonus to block.found_by, paid when the block matures. Idempotent per block height.
+  // Flat bonus to block.found_by, due when the block matures (both maturity paths call this
+  // right after their confirmBlock claim). If the prize pool cannot cover it, or older jackpots
+  // are already waiting, it is recorded in jackpot_pending with the amount in force NOW and
+  // payPendingJackpots pays it later — a confirmed block is never revisited, so skipping it
+  // here would lose that jackpot for good. Idempotent per block: a credit already on the ledger
+  // (address + height) or a pending row (keyed by block id) makes a repeat call a no-op.
+  // Returns true only when it paid now.
   payBlockFinderJackpot(block) {
     const s = this.settingsView();
     if (!flag(s.incentives_enabled) || !flag(s.jackpot_enabled)) return false;
@@ -288,64 +295,224 @@ class IncentivesManager {
     const address = block && block.found_by;
     if (!address || RESERVED_ADDRESSES.includes(address)) return false;
 
-    const already = this.db.prepare(`
-      SELECT 1 FROM balance_log
-      WHERE grin_address = ? AND reference_type = 'jackpot' AND reference_id = ? AND event_type = 'credit' LIMIT 1
-    `).get(address, block.height);
-    if (already) return false;
-
-    const tx = this.db.transaction(() => {
-      if (!this.debitPrizePool(amount, 'jackpot', block.height)) return false;
-      this._move(address, amount, 'credit', 'jackpot', block.height);
-      return true;
-    });
-    return tx();
+    const outcome = this.db.transaction(() => {
+      if (this._jackpotCredited(address, block.height)) return 'already';
+      // A jackpot that matures while others wait joins the back of the queue, so a top-up
+      // pays them in maturity order rather than to whichever block happens to mature next.
+      const queued = this.db.prepare('SELECT 1 FROM jackpot_pending LIMIT 1').get();
+      if (!queued && this.debitPrizePool(amount, 'jackpot', block.height)) {
+        this._move(address, amount, 'credit', 'jackpot', block.height);
+        return 'paid';
+      }
+      const r = this.db.prepare(`
+        INSERT OR IGNORE INTO jackpot_pending (block_id, block_height, grin_address, amount)
+        VALUES (?, ?, ?, ?)
+      `).run(block.id, block.height, address, amount);
+      return r.changes ? 'pending' : 'already';
+    })();
+    if (outcome === 'pending') {
+      const waiting = this.pendingJackpotSummary();
+      console.log(`[${new Date().toISOString()}] [jackpot] block ${block.height} (id ${block.id}): ` +
+        `${amount} GRIN to ${address} is PENDING — prize pool holds ${r9(this.prizePoolBalance())} GRIN, ` +
+        `${waiting.count} jackpot(s) waiting (${waiting.amount} GRIN)`);
+    }
+    return outcome === 'paid';
   }
 
-  // Claw back a block-finder jackpot when its block is orphaned. Idempotent.
-  reverseJackpot(blockHeight) {
+  _jackpotCredited(address, height) {
+    return !!this.db.prepare(`
+      SELECT 1 FROM balance_log
+      WHERE grin_address = ? AND reference_type = 'jackpot' AND reference_id = ? AND event_type = 'credit' LIMIT 1
+    `).get(address, height);
+  }
+
+  // Pay waiting jackpots oldest first while the prize pool covers each one, and only while
+  // incentives and the jackpot are both switched on (a switched-off jackpot keeps its queue for
+  // when it is switched back on). Strict FIFO: the first jackpot the prize pool cannot cover
+  // stops the sweep. Letting smaller, newer jackpots past it would let a steady stream of them
+  // keep the oldest waiting indefinitely, and the public promise is "oldest first".
+  // Each payment is one transaction with deleting its row, in the same ledger shape as a jackpot
+  // paid at maturity; the credit check inside it turns a row whose credit already landed into a
+  // delete, never a second payment.
+  // Called from the block monitor's tick and after a manual top-up.
+  payPendingJackpots() {
+    const out = { paid: 0, dropped: 0, waiting: 0 };
+    const rows = this.db.prepare(`
+      SELECT p.block_id, p.block_height, p.grin_address, p.amount, b.status AS block_status
+      FROM jackpot_pending p LEFT JOIN blocks b ON b.id = p.block_id
+      ORDER BY p.created_at ASC, p.block_id ASC
+    `).all();
+    if (!rows.length) return out;
+    const s = this.settingsView();
+    if (!flag(s.incentives_enabled) || !flag(s.jackpot_enabled)) { out.waiting = rows.length; return out; }
+
+    for (let i = 0; i < rows.length; i++) {
+      const p = rows[i];
+      // reverseJackpot deletes the row when its block orphans; this catches a row it missed.
+      if (p.block_status === 'orphaned') {
+        this.db.prepare('DELETE FROM jackpot_pending WHERE block_id = ?').run(p.block_id);
+        out.dropped++;
+        console.log(`[${new Date().toISOString()}] [jackpot] block ${p.block_height} (id ${p.block_id}) is orphaned — pending jackpot DROPPED`);
+        continue;
+      }
+      const result = this.db.transaction(() => {
+        if (!this.db.prepare('SELECT 1 FROM jackpot_pending WHERE block_id = ?').get(p.block_id)) return 'gone';
+        if (!this._jackpotCredited(p.grin_address, p.block_height)) {
+          if (!this.debitPrizePool(p.amount, 'jackpot', p.block_height)) return 'short';
+          this._move(p.grin_address, p.amount, 'credit', 'jackpot', p.block_height);
+        }
+        this.db.prepare('DELETE FROM jackpot_pending WHERE block_id = ?').run(p.block_id);
+        return 'paid';
+      })();
+      if (result === 'short') { out.waiting = rows.length - i; break; }
+      if (result === 'paid') {
+        out.paid++;
+        console.log(`[${new Date().toISOString()}] [jackpot] block ${p.block_height} (id ${p.block_id}): pending ${p.amount} GRIN PAID to ${p.grin_address}`);
+      }
+    }
+    return out;
+  }
+
+  // Jackpots waiting for the prize pool — admin panel only (a count and a total, no addresses).
+  pendingJackpotSummary() {
+    const row = this.db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS amt FROM jackpot_pending').get();
+    return { count: row.n, amount: r9(row.amt) };
+  }
+
+  // A block that orphans: drop its pending jackpot, and claw back the jackpot IT earned.
+  // The ledger keys a jackpot by height (reference_id) and blocks.height is not UNIQUE, so a
+  // credit at this height may belong to another pool block there that matured. A credit is this
+  // block's only if it went to this block's finder and no OTHER block at this height by that
+  // finder is confirmed or paid — otherwise orphaning the losing block would take back the
+  // winner's jackpot. Idempotent: a reversal row already on the ledger skips the credit.
+  reverseJackpot(block) {
+    if (!block) return;
+    const dropped = this.db.prepare('DELETE FROM jackpot_pending WHERE block_id = ?').run(block.id);
+    if (dropped.changes) {
+      console.log(`[${new Date().toISOString()}] [jackpot] block ${block.height} (id ${block.id}) orphaned — pending jackpot DROPPED`);
+    }
     const credits = this.db.prepare(`
       SELECT grin_address, amount FROM balance_log
       WHERE reference_type = 'jackpot' AND reference_id = ? AND event_type = 'credit'
-    `).all(blockHeight);
+    `).all(block.height);
     for (const c of credits) {
-      if (c.grin_address === PRIZE_POOL) continue; // skip the funding-side debit's mirror
+      if (c.grin_address !== block.found_by) continue;
+      const sibling = this.db.prepare(`
+        SELECT id FROM blocks
+        WHERE height = ? AND id != ? AND found_by = ? AND status IN ('confirmed', 'paid') LIMIT 1
+      `).get(block.height, block.id, c.grin_address);
+      if (sibling) {
+        console.log(`[${new Date().toISOString()}] [jackpot] block ${block.height} (id ${block.id}) orphaned — ` +
+          `jackpot kept: it belongs to block id ${sibling.id} at the same height`);
+        continue;
+      }
       const reversed = this.db.prepare(`
         SELECT 1 FROM balance_log
         WHERE grin_address = ? AND reference_type = 'jackpot' AND reference_id = ? AND event_type = 'reversal' LIMIT 1
-      `).get(c.grin_address, blockHeight);
+      `).get(c.grin_address, block.height);
       if (reversed) continue;
       const tx = this.db.transaction(() => {
-        this._move(c.grin_address, -c.amount, 'reversal', 'jackpot', blockHeight);
-        this.creditPrizePool(c.amount, 'jackpot_reversal', blockHeight);
+        this._move(c.grin_address, -c.amount, 'reversal', 'jackpot', block.height);
+        this.creditPrizePool(c.amount, 'jackpot_reversal', block.height);
       });
       tx();
     }
   }
 
-  // ─── Loyalty streak daily updater ──────────────────────────────────────────
-  // Bumps streak_days for every address that submitted a valid share today (UTC). Run daily.
-  updateStreaks() {
-    const today = Math.floor(Date.now() / 1000 / SECONDS_PER_DAY);
-    const dayStart = today * SECONDS_PER_DAY;
-    // Bounded to the day on BOTH sides: a one-sided range lets SQLite walk the whole
-    // address-leading index to get DISTINCT for free (scripts/test-shares-plans.js).
-    const active = this.db.prepare('SELECT DISTINCT grin_address FROM shares WHERE created_at >= ? AND created_at < ?')
-      .all(dayStart, dayStart + SECONDS_PER_DAY);
-    let updated = 0;
+  // ─── Loyalty streak updater ────────────────────────────────────────────────
+  // A UTC day counts for an address if it mined with work that day, read from hashrate_history
+  // (the same activity source as lottery eligibility) or, for a completed day already rolled up,
+  // from its per-address daily rollup miner_hashrate_daily (gps_seconds > 0 exactly when the day
+  // had a sample with work). Raw shares are not usable here: retention keeps only confirm depth +
+  // PPLNS window + margin blocks of them (~31 h on mainnet, ~9 h on testnet), so late in a day
+  // yesterday's early shares are already gone.
+  // Run at boot and hourly. Each run covers the persisted scan mark (a little before the last
+  // run) to now, never from before the start of YESTERDAY, and counts each day it covers in
+  // order — yesterday, then today — so a day with mining counts whenever the pool was up during
+  // it, including a miner that started after the last run of that day. Yesterday is read from
+  // the rollup once HashrateTracker.rollupMinerDays has rolled it (within a minute of midnight),
+  // so only today's raw rows are ever scanned and an hourly run reads about an hour of them.
+  // maxRawSeconds caps how much raw time one call reads (the scan mark then stops where it
+  // stopped and caughtUp is false): the first run after a deploy or an outage has up to a day of
+  // raw rows to read, ~1.3 s at 1000 miners in one synchronous call on the DB the stratum server
+  // shares, so index.js reads it in slices and yields to the event loop between them.
+  // Per address and day: a day at or before last_active_day is skipped (already counted; and
+  // last_active_day never moves backwards), the day after it extends the streak, anything later
+  // restarts it at 1. A last_active_day after today (written under a clock that ran ahead) is
+  // stale and restarts it too. Older days are not walked after a longer outage: with a whole day
+  // missing the streak restarts at 1 anyway. streakMultiplier reads the result.
+  static STREAK_SCAN_OVERLAP = 300;
+
+  updateStreaks(nowSec = Math.floor(Date.now() / 1000), maxRawSeconds = Infinity) {
+    const today = Math.floor(nowSec / SECONDS_PER_DAY);
+    const floor = (today - 1) * SECONDS_PER_DAY;
+    const mark = this._streakScanMark();
+    // A mark ahead of the clock (clock moved back, a restored backup) is not trusted: rescan
+    // from the floor, which is harmless because a counted day is skipped.
+    const from = mark > nowSec ? floor : Math.max(floor, mark - IncentivesManager.STREAK_SCAN_OVERLAP);
+    const rolledTo = this._minerDayRollupHorizon();
+    // Bounded on BOTH sides, like every hashrate_history range read, so it SEARCHes
+    // idx_hashrate_time for the window only (scripts/test-shares-plans.js pins the plan).
+    const activeIn = this.db.prepare(`
+      SELECT DISTINCT grin_address FROM hashrate_history
+      WHERE recorded_at >= ? AND recorded_at < ? AND hashrate_gps > 0`);
+    const activeOnRolledDay = this.db.prepare(
+      'SELECT grin_address FROM miner_hashrate_daily WHERE day = ? AND gps_seconds > 0');
+    const setStreak = this.db.prepare(
+      'UPDATE miner_incentives SET streak_days = ?, last_active_day = ?, updated_at = unixepoch() WHERE grin_address = ?');
+    let active = 0; let updated = 0;
+    let cursor = from; let budget = maxRawSeconds;
     const tx = this.db.transaction(() => {
-      for (const { grin_address } of active) {
-        if (RESERVED_ADDRESSES.includes(grin_address)) continue;
-        const row = this.incentiveRow(grin_address);
-        if (row.last_active_day === today) continue; // already counted today
-        const newDays = row.last_active_day === today - 1 ? row.streak_days + 1 : 1;
-        this.db.prepare('UPDATE miner_incentives SET streak_days = ?, last_active_day = ?, updated_at = unixepoch() WHERE grin_address = ?')
-          .run(newDays, today, grin_address);
-        updated++;
+      for (let day = Math.floor(from / SECONDS_PER_DAY); day <= today && budget > 0; day++) {
+        const dayStart = day * SECONDS_PER_DAY;
+        const start = Math.max(from, dayStart);
+        const rolled = day < today && dayStart + SECONDS_PER_DAY <= rolledTo;
+        const end = Math.min(nowSec + 1, dayStart + SECONDS_PER_DAY, rolled ? Infinity : start + budget);
+        if (start >= end) continue;
+        if (!rolled) budget -= end - start;
+        cursor = end;
+        const rows = rolled ? activeOnRolledDay.all(dayStart) : activeIn.all(start, end);
+        for (const { grin_address } of rows) {
+          if (RESERVED_ADDRESSES.includes(grin_address)) continue;
+          active++;
+          const row = this.incentiveRow(grin_address);
+          const last = row.last_active_day !== null && row.last_active_day <= today ? row.last_active_day : null;
+          if (last !== null && last >= day) continue;
+          const newDays = last === day - 1 ? row.streak_days + 1 : 1;
+          setStreak.run(newDays, day, grin_address);
+          updated++;
+        }
       }
+      // The mark moves in the SAME transaction as the updates it covers, so a crash leaves both
+      // unchanged and the next run repeats the window.
+      this.db.prepare(`
+        INSERT INTO pool_config (section, key, value, value_type)
+        VALUES ('_state', 'streak_scan_mark', ?, 'string')
+        ON CONFLICT(section, key) DO UPDATE SET value = excluded.value
+      `).run(String(Math.min(cursor, nowSec)));
     });
     tx();
-    return { active: active.length, updated };
+    return { active, updated, caughtUp: cursor > nowSec };
+  }
+
+  // HashrateTracker's miner_hashrate_daily horizon: the first UTC day (as a unix-second day start)
+  // NOT yet rolled up; every day before it is complete in the rollup. 0 = nothing rolled.
+  _minerDayRollupHorizon() {
+    try {
+      const row = this.db.prepare(
+        "SELECT value FROM pool_config WHERE section = '_state' AND key = 'miner_hashrate_day_horizon'").get();
+      const v = row ? parseInt(row.value, 10) : 0;
+      return Number.isFinite(v) && v > 0 ? v : 0;
+    } catch (e) { return 0; }
+  }
+
+  _streakScanMark() {
+    try {
+      const row = this.db.prepare(
+        "SELECT value FROM pool_config WHERE section = '_state' AND key = 'streak_scan_mark'").get();
+      const v = row ? parseInt(row.value, 10) : 0;
+      return Number.isFinite(v) && v > 0 ? v : 0;
+    } catch (e) { return 0; }
   }
 
   // Manual operator top-up of the prize bucket (accounting only — real GRIN must be in wallet).
@@ -357,6 +524,11 @@ class IncentivesManager {
     // debitPrizePool()'s `prizePoolBalance() < amount` guard is then off for good.
     if (!Number.isFinite(amt) || amt <= 0) throw new Error('top-up amount must be a positive, finite number');
     this.creditPrizePool(amt, 'topup', 0);
+    // A top-up is usually made to cover waiting jackpots: pay them now rather than on the block
+    // monitor's next tick. The top-up itself has already landed, so a failure here only defers
+    // them to that tick. The returned balance is after any payment.
+    try { this.payPendingJackpots(); }
+    catch (e) { console.error(`[jackpot] pending sweep after top-up failed: ${e.message}`); }
     return this.prizePoolBalance();
   }
 

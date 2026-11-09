@@ -84,6 +84,22 @@
  },
  {
   "method": "get",
+  "path": "/api/public/incentives/overview",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
+  "path": "/api/public/incentives/history",
+  "chain": [
+   "rateLimiter.middleware('public')"
+  ],
+  "handler": "anon"
+ },
+ {
+  "method": "get",
   "path": "/api/public/page/:key",
   "chain": [
    "rateLimiter.middleware('public')"

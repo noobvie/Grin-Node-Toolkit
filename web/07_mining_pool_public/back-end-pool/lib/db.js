@@ -897,6 +897,21 @@ function createSchema() {
 
     `CREATE INDEX IF NOT EXISTS idx_balance_log_address ON balance_log(grin_address, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_balance_log_time ON balance_log(created_at DESC)`,
+    // Fortune-board history rows across all addresses (lib/incentives-public.js lists jackpot,
+    // join-bonus and award credits from the whole raw window and checks jackpot reversals; without
+    // it both scan every raw ledger row). PARTIAL on purpose: without ANALYZE a full
+    // (reference_type, event_type, …) index outvotes idx_balance_log_address on per-address
+    // 'block' reads and walks every block credit instead. A partial index is only used by a query
+    // that repeats its WHERE term verbatim (same IN list, same order — HISTORY_REF_TYPES_SQL in
+    // incentives-public.js), so no other plan moves. Streak is left out: its credits are the bulk
+    // of all bonus rows and history never lists them.
+    `CREATE INDEX IF NOT EXISTS idx_balance_log_history ON balance_log(event_type, created_at)
+       WHERE reference_type IN ('jackpot', 'join_bonus', 'prize_award')`,
+    // The same for the fortune-board lifetime totals' raw half (created_at >= the rollup horizon,
+    // BONUS_REF_TYPES_SQL, streak included). Without it that read walks every raw row since the
+    // horizon, which is the whole raw window while the rollup is not running.
+    `CREATE INDEX IF NOT EXISTS idx_balance_log_bonus ON balance_log(event_type, created_at)
+       WHERE reference_type IN ('jackpot', 'join_bonus', 'prize_award', 'streak')`,
 
     // Daily rollup of balance_log — one row per (UTC day, address, event_type, reference_type),
     // written by lib/ledger-rollup.js from the retention pass BEFORE raw rows are pruned
@@ -916,6 +931,14 @@ function createSchema() {
     )`,
 
     `CREATE INDEX IF NOT EXISTS idx_bld_address ON balance_log_daily(grin_address, day)`,
+    // Fortune-board rows across all addresses, partial for the same reason as
+    // idx_balance_log_history. idx_bld_bonus: the lifetime totals (BONUS_REF_TYPES_SQL, streak
+    // included; read once per rollup horizon). idx_bld_history: the history list
+    // (HISTORY_REF_TYPES_SQL, no streak). Without them each walks the whole rollup.
+    `CREATE INDEX IF NOT EXISTS idx_bld_bonus ON balance_log_daily(event_type, day)
+       WHERE reference_type IN ('jackpot', 'join_bonus', 'prize_award', 'streak')`,
+    `CREATE INDEX IF NOT EXISTS idx_bld_history ON balance_log_daily(event_type, day)
+       WHERE reference_type IN ('jackpot', 'join_bonus', 'prize_award')`,
 
     `CREATE TABLE IF NOT EXISTS withdrawal_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1150,6 +1173,19 @@ function createSchema() {
       donor_censor_by INTEGER DEFAULT NULL
     )`,
 
+    // Block-finder jackpots that fell due at maturity while the prize pool could not cover them
+    // (IncentivesManager.payBlockFinderJackpot). Keyed by block id, so recording is idempotent per
+    // block and an orphan drops exactly its own row; amount is the jackpot in force at maturity.
+    // payPendingJackpots pays them oldest first and deletes each row in the same transaction.
+    // Not a liability in reconciliation: the GRIN stays in the prize_pool balance until paid.
+    `CREATE TABLE IF NOT EXISTS jackpot_pending (
+      block_id INTEGER PRIMARY KEY,
+      block_height INTEGER NOT NULL,
+      grin_address TEXT NOT NULL,
+      amount REAL NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
     // ─── Donor profiles (design §18.4, §18.12) — name + banner + link ────────────────────
     // A request LOG, not columns: every submission is a row and every decision a status change,
     // so history and audit come free. The two PARTIAL unique indexes are the "one pending + one
@@ -1225,6 +1261,9 @@ function createSchema() {
 
     `CREATE INDEX IF NOT EXISTS idx_lottery_winners_draw ON lottery_winners(draw_id)`,
     `CREATE INDEX IF NOT EXISTS idx_lottery_winners_address ON lottery_winners(grin_address, created_at DESC)`,
+    // Newest-first pages of the fortune-board history (lib/incentives-public.js), so a page reads
+    // about a page of winners instead of sorting them all.
+    `CREATE INDEX IF NOT EXISTS idx_lottery_winners_time ON lottery_winners(created_at)`,
 
     // Frozen entry set for a committed draw — written at COMMIT time, before the seed block
     // exists. Two jobs (script07_security_audit_archive.md §I8):

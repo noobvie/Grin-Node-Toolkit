@@ -1136,13 +1136,13 @@
 
   // ── Incentives: prize pool + recent fortune-board winners ───────────────────
   // Lightweight hooks so any public page can surface incentive info without its own
-  // fetch. The full paginated fortune board (fortune-board.html) calls the dedicated
-  // /api/public/lottery/winners endpoint instead.
+  // fetch. The fortune board (fortune-board.html) reads /api/public/incentives/* itself and
+  // uses only the donation-address hook below.
   function applyIncentives(inc) {
     // Prize-pool size hook.
     document.querySelectorAll('[data-brand="prize-pool"]').forEach(function (el) {
       if (inc.enabled && typeof inc.prize_pool_grin === 'number') {
-        // Every current hook is a placard tile (donate, fortune-board), so it takes the tile
+        // Every current hook is a placard tile (donate), so it takes the tile
         // rule from js/num-format.js — short figure, exact tooltip, the ツ unit the tiles beside
         // it use (this one alone said "GRIN"). A page that does not load num-format keeps the
         // exact figure.
@@ -1160,7 +1160,7 @@
       }
     });
 
-    // Upcoming contest campaigns teaser (e.g. the fortune board). Fed by inc.lottery.campaigns
+    // Upcoming contest campaigns teaser (no page carries the hook today). Fed by inc.lottery.campaigns
     // (scheduled, not-yet-drawn) from /api/public/branding → LotteryManager.nextScheduled().
     var campaigns = (inc.lottery && inc.lottery.campaigns) || [];
     var fmtUtc = function (sec) {

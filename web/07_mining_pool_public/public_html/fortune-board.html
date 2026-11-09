@@ -6,18 +6,19 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="robots" content="index, follow, max-image-preview:large">
     <meta name="author" content="GRINIUM Mining Pool">
-    <title>Fortune Board — Lottery Winners | GRINIUM Mining Pool</title>
-    <meta name="description" content="Public lottery winner history — every prize the pool has paid, with the seed block of each draw. Prize totals, pot split and monthly trends.">
-    <meta name="keywords" content="grin lottery winners, mining pool prizes, fortune board, draw seed block, prize pool transparency">
+    <title>Fortune Board — Prizes &amp; Bonuses | GRINIUM Mining Pool</title>
+    <meta name="description" content="Every prize and bonus the pool pays to miners: daily giveaway, prize draws, block-finder jackpot, loyalty streak and join bonus. What is on offer now, how to qualify, and everything paid so far.">
+    <meta name="keywords" content="grin mining pool prizes, mining bonuses, fortune board, lottery winners, block finder jackpot, loyalty streak, prize pool transparency">
     <meta property="og:type" content="website">
-    <meta property="og:title" content="Fortune Board — Lottery Winners | GRINIUM">
-    <meta property="og:description" content="Public lottery winner history — every prize paid, with the seed block of each draw.">
+    <meta property="og:title" content="Fortune Board — Prizes &amp; Bonuses | GRINIUM">
+    <meta property="og:description" content="What the pool gives miners on top of block rewards, how to qualify, and every prize and bonus paid so far.">
     <meta property="og:url" content="https://pool.grin.money/fortune-board.html">
     <meta property="og:site_name" content="GRINIUM Mining Pool">
     <meta property="og:image" content="https://pool.grin.money/images/og-image.svg">
     <meta property="og:locale" content="en_US">
     <meta name="twitter:card" content="summary">
-    <meta name="twitter:title" content="Fortune Board — Lottery Winners">
+    <meta name="twitter:title" content="Fortune Board — Prizes &amp; Bonuses">
+    <meta name="twitter:description" content="What the pool gives miners on top of block rewards, and every prize and bonus paid so far.">
     <meta name="twitter:image" content="https://pool.grin.money/images/twitter-card.svg">
     <link rel="canonical" href="https://pool.grin.money/fortune-board.html">
     <meta name="theme-color" content="#07090c">
@@ -28,8 +29,8 @@
     {
       "@context": "https://schema.org",
       "@type": "WebPage",
-      "name": "GRINIUM Mining Pool — Fortune Board",
-      "description": "Public lottery winner history with draw seed blocks",
+      "name": "Fortune Board — Prizes & Bonuses",
+      "description": "Prizes and bonuses the pool pays to miners, how to qualify, and every prize and bonus paid so far",
       "url": "https://pool.grin.money/fortune-board.html",
       "isPartOf": { "@type": "WebSite", "name": "GRINIUM Mining Pool", "url": "https://pool.grin.money" }
     }
@@ -41,26 +42,68 @@
     <link rel="stylesheet" href="/css/themes.css">
     <link rel="stylesheet" href="/css/reactor.css">
     <style>
-        /* Winner-history toolbar (search + pot filter), sitting inside the P-03 panel body. */
+        /* Section heading between the placard and the chart deck. */
+        .fb-section-title { font-family: var(--mono, monospace); font-size: 15px; letter-spacing: .06em; margin: 18px 0 10px; color: var(--text); }
+        .fb-state { color: var(--text-dim); font-size: 13px; margin: 0; }
+        .fb-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+        .fb-failed { color: var(--warn); font-size: 13px; margin: 10px 0 0; }
+        .fb-table-note { font-size: 12.5px; color: var(--text-dim); margin: 8px 0 0; }
+        /* The doughnut's legend sits under the ring; give it room on a phone. */
+        @media (max-width: 600px) { .chart-wrap--kinds canvas { height: 320px; } }
+
+        /* What's on offer: one card per live incentive; one column at phone width. */
+        .fb-offers { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); }
+        .fb-offer {
+            min-width: 0; padding: 14px 16px; border-radius: 8px;
+            background: var(--bg-elev); border: 1px solid var(--border);
+            font-size: 13px; line-height: 1.55; color: var(--text-dim);
+            display: flex; flex-direction: column;
+        }
+        .fb-offer p { margin: 0 0 8px; overflow-wrap: anywhere; }
+        .fb-offer-title { font-size: 15px; margin: 0 0 8px; color: var(--text); }
+        .fb-offer-how b, .fb-offer-paid b { color: var(--text); }
+        .fb-offer-note { font-size: 12.5px; }
+        .fb-offer-list { margin: 0 0 8px; padding-left: 18px; }
+        .fb-offer-list li { margin-bottom: 6px; overflow-wrap: anywhere; }
+        .fb-offer-paid { margin-top: auto !important; padding-top: 8px; border-top: 1px solid var(--border); }
+        .fb-offer-cover { font-size: 12px; color: var(--text-mute); margin-bottom: 0 !important; }
+
+        /* P-03 breakdown under the in/out bars. */
+        .fb-flows { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); margin-top: 12px; }
+        .fb-flow-head { font-family: var(--mono, monospace); font-size: 12px; letter-spacing: .06em; color: var(--text); margin-bottom: 6px; }
+        .fb-flow-list { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+        .fb-flow-list li { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--border); }
+        .fb-flow-list b { font-family: var(--mono, monospace); font-weight: 600; color: var(--text); white-space: nowrap; }
+        .fb-flows-balance { font-size: 13px; color: var(--text-dim); margin: 10px 0 0; }
+        .chart-wrap--flows canvas { height: 140px; }
+
+        /* Reward-history toolbar (search + type filter). */
         .fb-toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
         .fb-toolbar input, .fb-toolbar select {
-            font: inherit; font-size: 13px;
-            background: var(--panel-2, rgba(255,255,255,.04)); color: var(--text, #e6edf3);
-            border: 1px solid var(--border, rgba(255,255,255,.10)); border-radius: 6px; padding: 8px 11px;
+            font: inherit; font-size: 13px; max-width: 100%;
+            background: var(--bg-elev); color: var(--text);
+            border: 1px solid var(--border); border-radius: 6px; padding: 8px 11px;
         }
-        .fb-toolbar input { flex: 1; min-width: 220px; }
-        .fb-count { color: var(--text-mute, #6b7480); font-family: var(--mono, monospace); font-size: 11px; letter-spacing: .06em; margin-left: auto; }
-        .fb-amount { color: var(--accent, #7cb342); font-weight: 600; }
-        .fb-seed { color: var(--text-mute, #6b7480); font-family: var(--mono, monospace); font-size: 11px; }
-        .pot-tag {
-            display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; letter-spacing: .04em;
-            background: var(--panel-2, rgba(255,255,255,.06)); border: 1px solid var(--border, rgba(255,255,255,.10));
+        .fb-toolbar input { flex: 1 1 200px; min-width: 0; }
+        .fb-count { color: var(--text-mute); font-family: var(--mono, monospace); font-size: 11px; letter-spacing: .06em; margin-left: auto; }
+        .fb-amount { color: var(--accent); font-weight: 600; white-space: nowrap; }
+        .fb-seed { color: var(--text-mute); font-family: var(--mono, monospace); font-size: 11px; }
+        .fb-addr, .fb-when { font-family: var(--mono, monospace); font-size: 12px; white-space: nowrap; }
+        .fb-tag {
+            display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; letter-spacing: .04em; white-space: nowrap;
+            background: var(--bg-elev); border: 1px solid var(--border);
         }
+        .fb-tag--warn { color: var(--warn); border-color: var(--warn); }
+        .fb-clawed .fb-amount { color: var(--text-mute); text-decoration: line-through; }
+        .fb-privacy { font-size: 12.5px; color: var(--text-dim); margin: 12px 0 0; }
+
         .donate-code {
             display: block; font-family: var(--mono, ui-monospace, monospace); font-size: 12px; word-break: break-all;
-            background: var(--panel-2, rgba(255,255,255,.04)); border: 1px solid var(--border, rgba(255,255,255,.10));
-            border-radius: 6px; padding: 10px 12px; margin-top: 8px; color: var(--text, #e6edf3);
+            background: var(--bg-elev); border: 1px solid var(--border);
+            border-radius: 6px; padding: 10px 12px; margin-top: 8px; color: var(--text);
         }
+        .fb-donate p { margin: 0 0 6px; font-size: 13px; color: var(--text-dim); }
+        .fb-donate a { color: var(--accent); text-decoration: underline; }
     </style>
 </head>
 <body>
@@ -82,110 +125,131 @@
         <!-- ═══ Operator strip: heading + audit note ═══ -->
         <div class="deck-head">
             <div>
-                <h1>🎉 Fortune Board</h1>
-                <div class="sub">Every prize the pool has ever paid &middot; each draw seeded from a Grin block hash you can look up <span class="dim">(all times UTC)</span></div>
-                <div class="sub">The seed block is public, but the entry list is not, so a draw cannot be recomputed from outside.</div>
+                <h1><span aria-hidden="true">🎉</span> Fortune Board — Prizes &amp; Bonuses</h1>
+                <div class="sub">What the pool gives miners on top of block rewards &middot; how to qualify &middot; everything paid so far <span class="dim">(all times UTC)</span></div>
+                <div class="sub">Each draw is seeded from a Grin block hash you can look up. The seed block is public, but the entry list is not, so a draw cannot be recomputed from outside.</div>
             </div>
         </div>
 
-        <!-- ═══ Spec placard: headline figures ═══ -->
-        <div class="placard figures" aria-label="Lottery headline figures">
-            <span class="tone-gold"><i>Prize pool</i><b data-brand="prize-pool">—</b></span>
-            <span><i>Total prizes paid</i><b id="fb-total-prizes">—</b></span>
-            <span class="tone-info"><i>Draws held</i><b id="fb-draws">—</b></span>
-            <span class="tone-ok"><i>Unique winners</i><b id="fb-unique">—</b></span>
-        </div>
-
-        <!-- ═══ Upcoming contests (branding.js hook; hidden until campaigns exist) ═══
-             h2, not h3: this sits between the page h1 and the P-01… panel h2s below, so an
-             h3 here made the document jump h1 → h3 → h2. It is a peer of the panels. -->
-        <div class="settings-section" data-brand-show="campaigns" style="display:none;margin-top:14px;">
-            <h2 style="margin-bottom:.5rem;">🏆 Upcoming Contests</h2>
-            <div data-brand="upcoming-campaigns"></div>
-        </div>
-
-        <!-- ═══ Daily giveaway rules (fortune-board.js; hidden while it is off) ═══ -->
-        <div class="panel" id="fb-daily" style="display:none;margin:14px 0;"><span class="screws"></span>
-            <h2 class="panel-title">🎁 Daily giveaway</h2>
+        <!-- Shown instead of everything below when the operator runs no incentives. -->
+        <div class="panel" id="fb-off" style="display:none;"><span class="screws"></span>
             <div class="panel-body">
-                <p class="dim" id="fb-daily-text" style="margin:0;font-size:13px;"></p>
+                <p class="fb-state">This pool is not running any prizes or bonuses right now.</p>
             </div>
         </div>
 
-        <div class="deck">
+        <div id="fb-live">
+        <!-- ═══ Spec placard: headline figures (overview) ═══ -->
+        <div class="placard figures" aria-label="Prizes and bonuses headline figures">
+            <span class="tone-gold"><i>Prize pool</i><b id="fb-prize-pool">—</b></span>
+            <span><i>Total given to miners</i><b id="fb-total-given">—</b></span>
+            <span class="tone-ok"><i>Miners rewarded</i><b id="fb-miners">—</b></span>
+            <span class="tone-info"><i>Draws held</i><b id="fb-draws">—</b></span>
+        </div>
+        <p class="fb-failed" id="fb-overview-failed" style="display:none;">Could not load these figures. Reload the page to try again.</p>
+        <!-- One polite status line for load / fail announcements (fortune-board.js announce()). -->
+        <p class="fb-sr" id="fb-status" role="status" aria-live="polite"></p>
+
+        <!-- ═══ What's on offer (fortune-board-offers.js; one card per live incentive) ═══ -->
+        <h2 class="fb-section-title">What's on offer</h2>
+        <div id="fb-offers">
+            <p class="fb-state">Loading what's on offer…</p>
+        </div>
+
+        <div class="deck" style="margin-top:16px;">
 
             <div class="deck-row half">
-                <!-- ═══ P-01 · PRIZES PAID OVER TIME ═══ -->
+                <!-- ═══ P-01 · GIVEN PER MONTH ═══ -->
                 <div class="panel"><span class="screws"></span>
-                    <h2 class="panel-title"><span class="tag">P-01</span> Prizes paid over time <span class="right">GRIN per month</span></h2>
+                    <h2 class="panel-title"><span class="tag">P-01</span> Given per month <span class="right">GRIN by kind</span></h2>
                     <div class="panel-body chart-wrap">
-                        <canvas id="fb-chart-prizes" aria-label="GRIN paid in prizes per month" role="img"></canvas>
-                        <div class="chart-empty" id="fb-empty-prizes">NO PRIZES PAID YET</div>
+                        <canvas id="fb-chart-monthly" aria-label="GRIN given to miners per month, by kind" role="img"></canvas>
+                        <div class="chart-empty" id="fb-empty-monthly" style="display:flex;">LOADING…</div>
                     </div>
                 </div>
 
-                <!-- ═══ P-02 · POT SPLIT ═══ -->
+                <!-- ═══ P-02 · GIVEN BY KIND ═══ -->
                 <div class="panel"><span class="screws"></span>
-                    <h2 class="panel-title"><span class="tag">P-02</span> Prize split by pot <span class="right">GRIN per pot</span></h2>
-                    <div class="panel-body chart-wrap">
-                        <canvas id="fb-chart-pots" aria-label="GRIN awarded by pot type" role="img"></canvas>
-                        <div class="chart-empty" id="fb-empty-pots">NO PRIZES PAID YET</div>
+                    <h2 class="panel-title"><span class="tag">P-02</span> Given by kind <span class="right">GRIN, all time</span></h2>
+                    <div class="panel-body chart-wrap chart-wrap--kinds">
+                        <canvas id="fb-chart-kinds" aria-label="GRIN given to miners by kind" role="img"></canvas>
+                        <div class="chart-empty" id="fb-empty-kinds" style="display:flex;">LOADING…</div>
                     </div>
                 </div>
             </div>
 
-            <!-- ═══ P-03 · PRIZES BY EVENT ═══ -->
+            <!-- ═══ P-03 · PRIZE POOL IN VS OUT ═══ -->
             <div class="panel"><span class="screws"></span>
-                <h2 class="panel-title"><span class="tag">P-03</span> Prizes by event <span class="right">top events &amp; campaigns · GRIN awarded</span></h2>
+                <h2 class="panel-title"><span class="tag">P-03</span> Prize pool in vs out <span class="right">GRIN, all time</span></h2>
+                <div class="panel-body">
+                    <div class="chart-wrap chart-wrap--flows">
+                        <canvas id="fb-chart-flows" aria-label="GRIN paid into and out of the prize pool" role="img"></canvas>
+                        <div class="chart-empty" id="fb-empty-flows" style="display:flex;">LOADING…</div>
+                    </div>
+                    <div class="fb-flows" id="fb-flows-detail" style="display:none;"></div>
+                    <p class="fb-flows-balance" id="fb-flows-balance"></p>
+                    <p class="fb-flows-balance">"Total given to miners" above can differ from "Paid out": operator awards may be funded directly rather than from the prize pool, and the total given is net of clawed-back jackpots.</p>
+                </div>
+            </div>
+
+            <!-- ═══ P-04 · PRIZES BY EVENT (hidden when no draw has paid) ═══ -->
+            <div class="panel" id="fb-events-panel"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">P-04</span> Prizes by event <span class="right">top draws &amp; contests · GRIN awarded</span></h2>
                 <div class="panel-body chart-wrap">
-                    <canvas id="fb-chart-events" aria-label="GRIN awarded per event or campaign" role="img"></canvas>
-                    <div class="chart-empty" id="fb-empty-events">NO PRIZES PAID YET</div>
+                    <canvas id="fb-chart-events" aria-label="GRIN awarded per draw event or contest" role="img"></canvas>
+                    <div class="chart-empty" id="fb-empty-events" style="display:flex;">LOADING…</div>
                 </div>
             </div>
 
-            <!-- ═══ P-04 · WINNER HISTORY ═══ -->
+            <!-- ═══ P-05 · REWARD HISTORY ═══ -->
             <div class="panel"><span class="screws"></span>
-                <h2 class="panel-title"><span class="tag">P-04</span> Winner history
-                    <span class="right">winner · amount · draw seed block</span></h2>
+                <h2 class="panel-title"><span class="tag">P-05</span> Reward history
+                    <span class="right">miner · amount · date · draw seed or block</span></h2>
                 <div class="panel-body">
                     <div class="fb-toolbar">
-                        <!-- aria-label, not placeholder alone: a placeholder is not an
-                             accessible name and vanishes on focus. Its sibling select
-                             already had one. -->
-                        <input id="fb-search" type="search" aria-label="Search winners by address, event, or seed hash" placeholder="🔍 Search winner address, event, or seed hash…" autocomplete="off">
-                        <select id="fb-pot" aria-label="Filter by pot type">
-                            <option value="">All pots</option>
-                            <option value="a">Share-weighted</option>
-                            <option value="b">Equal chance</option>
-                            <option value="d">Daily giveaway</option>
+                        <input id="fb-search" type="search" data-action="search-history" aria-label="Search loaded rewards by address, event, seed hash or block" placeholder="🔍 Search address, event, seed hash or block…" autocomplete="off">
+                        <select id="fb-kind" data-action="filter-history" aria-label="Filter by reward type">
+                            <option value="">All types</option>
+                            <option value="lottery">Prize draws</option>
+                            <option value="giveaway">Daily giveaway</option>
+                            <option value="jackpot">Block-finder jackpot</option>
+                            <option value="join_bonus">Join bonus</option>
+                            <option value="award">Operator award</option>
                         </select>
                         <span id="fb-count" class="fb-count"></span>
                     </div>
                     <div class="table-wrap">
                         <table class="data-table">
                             <thead>
-                                <tr><th>Event</th><th>Winner</th><th>Pot</th><th class="num">Amount</th><th>Date</th><th>Draw seed</th></tr>
+                                <tr><th>Type</th><th>Miner</th><th class="num">Amount</th><th>Date</th><th>Details</th></tr>
                             </thead>
-                            <tbody id="winners-body">
-                                <tr><td colspan="6">Loading…</td></tr>
+                            <tbody id="fb-history-body">
+                                <tr><td colspan="5">Loading…</td></tr>
                             </tbody>
                         </table>
                     </div>
                     <div class="pager" id="fb-pager" style="display:none;align-items:center;justify-content:center;gap:14px;margin-top:16px;">
-                        <button class="btn sm" id="more-btn" data-action="load-winners">Load more</button>
+                        <button class="btn sm" id="fb-more" type="button" data-action="load-history">Load more</button>
+                    </div>
+                    <p class="fb-table-note">Rows older than about 60 days are daily totals; clawbacks there are counted in the totals above.</p>
+                    <p class="fb-privacy">Loyalty streak bonuses are shown as totals only, to keep each miner's earnings private.</p>
+                </div>
+            </div>
+
+            <!-- ═══ P-06 · DONATE TO THE PRIZE POOL ═══ -->
+            <div class="panel fb-donate"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">P-06</span> Donate to the prize pool</h2>
+                <div class="panel-body">
+                    <p>Prizes and bonuses are paid from the prize pool; operator awards may also be funded directly by the operator. Top the prize pool up for every miner, or give a slice of your payouts and join the donor league, on the <a href="donate.html">Donate page</a>.</p>
+                    <!-- branding.js shows this once the operator has published a donation address. -->
+                    <div data-brand-show="donation" style="display:none;">
+                        <p>Or send GRIN straight to the pool's Slatepack address:</p>
+                        <code class="donate-code" data-brand="donation-address"></code>
                     </div>
                 </div>
             </div>
 
-            <!-- ═══ P-05 · DONATE TO THE PRIZE POOL (branding.js hook; hidden until configured) ═══ -->
-            <div class="panel" data-brand-show="donation" style="display:none;"><span class="screws"></span>
-                <h2 class="panel-title"><span class="tag">P-05</span> Donate to the prize pool</h2>
-                <div class="panel-body">
-                    <p class="dim" style="margin:0 0 4px;font-size:13px;">Top up the prize pool for every miner. Send GRIN to the pool's Slatepack address:</p>
-                    <code class="donate-code" data-brand="donation-address"></code>
-                </div>
-            </div>
-
+        </div>
         </div>
     </main>
 
@@ -194,6 +258,7 @@
     <script defer src="/js/vendor/chart.umd.min.js"></script>
     <script defer src="/js/charts-init.js"></script>
     <script defer src="/js/num-format.js"></script>
+    <script defer src="/js/pages/fortune-board-offers.js"></script>
     <script defer src="/js/pages/fortune-board.js"></script>
     <script src="/js/public-shell.js"></script>
     <script src="/js/public-theme.js"></script>

@@ -815,5 +815,61 @@ console.log('\n[forms] a form holding a password field never falls back to GET')
     loginForms.length === 3 && loginForms.every((a) => /\bmethod="post"/i.test(a)), loginForms.join(' | '));
 }
 
+// ─── Fortune board incentives feeds (lib/incentives-public.js) ──────────────────────────────────
+// The history LIST carries addresses, so it masks each one: a full address exactly like the lottery winners
+// feed it sits beside. A streak credit is gross × a published percent, so a per-address streak
+// row publishes that miner's per-block earnings: streak is aggregate-only — no history branch
+// reads it, and kind=streak is refused before the read model runs. Behaviour is pinned in
+// scripts/test-incentives-public.js; this pins the source facts it rests on.
+console.log('\n[incentives] the fortune-board feeds mask addresses, never list streak rows, and stay on `public`');
+{
+  const ipSrc = fs.readFileSync(path.join(APP, 'lib/incentives-public.js'), 'utf8');
+  const lotterySrc = fs.readFileSync(path.join(APP, 'lib/lottery.js'), 'utf8');
+  const overviewRoute = routeSrc('get', '/api/public/incentives/overview');
+  const historyRoute = routeSrc('get', '/api/public/incentives/history');
+  for (const [name, src] of [['overview', overviewRoute], ['history', historyRoute]]) {
+    ok(`${name}: on the public rate-limit bucket`, /rateLimiter\.middleware\('public'\)/.test(src));
+    ok(`${name}: Cache-Control public, max-age=60`, /'Cache-Control', 'public, max-age=60'/.test(src));
+    ok(`${name}: a failure answers a fixed message, never err.message`,
+      /res\.status\(500\)\.json\(\{ error: '[^']+' \}\)/.test(src) && !/err\.message/.test(src));
+    ok(`${name}: gated on incentivesManager.enabled()`, /incentivesManager\.enabled\(\)/.test(src));
+  }
+  // mask(): ONE helper for every history address. A full address keeps winnerHistory's 10 + 4
+  // (so the two feeds match row for row); a short or odd value — a test row, a malformed import —
+  // keeps at most a third, so no value is ever sent whole.
+  const { mask } = require(path.join(APP, 'lib/incentives-public.js'));
+  const FULL = 'grin1' + 'q'.repeat(54) + 'zz9x';
+  ok('mask: a full address is masked exactly as LotteryManager.winnerHistory does',
+    mask(FULL) === `${FULL.slice(0, 10)}…${FULL.slice(-4)}` && /a\.slice\(0, 10\)\}…\$\{a\.slice\(-4\)\}/.test(lotterySrc));
+  ok('mask: a short address is never returned whole', mask('shortaddr12345') !== 'shortaddr12345' &&
+    !mask('shortaddr12345').includes('shortaddr') && mask('abcdefghij1234567890') !== 'abcdefghij1234567890');
+  ok('mask: empty and null stay empty', mask('') === '' && mask(null) === '' && mask(undefined) === '');
+  ok('every history row address goes through mask()', /address: mask\(r\.addr\)/.test(ipSrc) && !/address: (r\.addr|trunc)/.test(ipSrc));
+  const unionFn = ipSrc.slice(ipSrc.indexOf('  static historyArms('), ipSrc.indexOf('  static parseCursor('));
+  const histTerm = (ipSrc.match(/const HISTORY_REF_TYPES_SQL = "([^"]+)";/) || [])[1];
+  ok('the history types are exactly jackpot, join_bonus, prize_award (no streak)',
+    histTerm === "reference_type IN ('jackpot', 'join_bonus', 'prize_award')", histTerm);
+  ok('history reads no streak rows: both ledger branches use HISTORY_REF_TYPES_SQL, never the streak-bearing term',
+    unionFn.length > 500 && (unionFn.match(/\.\$\{HISTORY_REF_TYPES_SQL\}/g) || []).length === 3 &&
+    !/BONUS_REF_TYPES_SQL|'streak'/.test(unionFn.replace(/\/\/[^\n]*/g, '')));
+  ok('every history branch excludes the reserved addresses (a pool_fee / prize_pool credit is never listed)',
+    (unionFn.match(/grin_address NOT IN \(\$\{marks\}\)/g) || []).length === 3);
+  ok('the history route refuses a malformed cursor with 400 before reading',
+    /if \(!IncentivesPublic\.parseCursor\(before\)\) \{\s*return res\.status\(400\)/.test(historyRoute));
+  ok('HISTORY_KINDS has no streak',
+    /const HISTORY_KINDS = \['lottery', 'giveaway', 'jackpot', 'join_bonus', 'award'\];/.test(ipSrc));
+  ok('the history route refuses any kind outside HISTORY_KINDS before reading',
+    /!IncentivesPublic\.HISTORY_KINDS\.includes\(kind\)\) \{\s*return res\.status\(400\)/.test(historyRoute));
+  const givenFn = ipSrc.slice(ipSrc.indexOf('  given(s, nowSec)'), ipSrc.indexOf('  // ─── overview'));
+  ok('given() returns aggregates only — no address field reaches its result',
+    givenFn.length > 500 && /return \{\s*total_grin:/.test(givenFn) &&
+    !/address:|grin_address:/.test(givenFn.slice(givenFn.lastIndexOf('return {'))));
+  ok('pool_flows drops the per-event ledger rows (prizePoolStatement(0), recent not copied)',
+    /prizePoolStatement\(0\)/.test(ipSrc) && /pool_flows: \{ in: st\.in, out: st\.out, balance: st\.balance \}/.test(ipSrc));
+  ok('both api-docs rows say streak bonuses are totals only / never listed',
+    /totals only/.test(routeMeta('GET /api/public/incentives/overview')) &&
+    /never listed/.test(routeMeta('GET /api/public/incentives/history')));
+}
+
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

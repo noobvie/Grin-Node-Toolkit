@@ -276,12 +276,18 @@ for (const [re, label] of FORBIDDEN) {
 // `…html#inline0`). The 21st is the P-09 link column's `dp-link-lines`: every string in it goes
 // through dpLine() → escHtml, and no URL is in it — the live link is an <a> whose href is set as a
 // property, and this tab's own pending URL is a textContent node (design §18.12).
+//
+// fortune-board 7 + fortune-board-offers 2: the history tbody (loading / empty / no-match / rows /
+// failed), the P-03 in/out lists, the offers failed sentence, and the offer cards (rendered or
+// "none running"). Every server string goes through FbOffers.esc(); seed and block links come
+// from Explorer.link, which escapes its own URL and label.
 const INNER_HTML = {
   'public_html/js/pages/api-docs.js': 4,
   'public_html/js/pages/blocks.js': 8,
   'public_html/js/pages/blog.js': 3,
   'public_html/js/pages/donate.js': 5,
-  'public_html/js/pages/fortune-board.js': 5,
+  'public_html/js/pages/fortune-board.js': 7,
+  'public_html/js/pages/fortune-board-offers.js': 2,
   'public_html/js/ads.js': 1,
   'public_html/js/api.js': 1,
   'public_html/js/branding.js': 7,

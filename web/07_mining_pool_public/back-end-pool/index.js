@@ -449,11 +449,26 @@ async function initializePool() {
     lotteryManager = new LotteryManager(config, blockMonitor.grinNode);
     console.log(`[${new Date().toISOString()}] Incentives + lottery managers initialized`);
 
-    // Daily loyalty-streak roll-up (every 24h) and hourly lottery scheduler tick.
-    setInterval(() => {
-      try { incentivesManager.updateStreaks(); }
-      catch (e) { console.error(`[Incentives] streak update failed: ${e.message}`); }
-    }, 24 * 3600 * 1000);
+    // Loyalty streaks: at boot and hourly. Each run counts yesterday then today from
+    // hashrate_history and is idempotent, so a restart neither skips nor double-counts a day
+    // (IncentivesManager.updateStreaks). Read in 2 h slices of raw hashrate_history with a yield
+    // between them, so a catch-up after a deploy or an outage never blocks share intake for long.
+    // Then the hourly lottery scheduler tick.
+    const STREAK_SLICE_SECONDS = 2 * 3600;
+    const runStreaks = () => {
+      let updated = 0;
+      const step = () => {
+        try {
+          const r = incentivesManager.updateStreaks(undefined, STREAK_SLICE_SECONDS);
+          updated += r.updated;
+          if (!r.caughtUp) { setImmediate(step); return; }
+          if (updated) console.log(`[${new Date().toISOString()}] [Incentives] streaks advanced for ${updated} address(es)`);
+        } catch (e) { console.error(`[Incentives] streak update failed: ${e.message}`); }
+      };
+      step();
+    };
+    runStreaks();
+    setInterval(runStreaks, 3600 * 1000);
     setInterval(() => {
       // Reveal first, then commit: a draw commits to a seed block ~10 blocks ahead of the tip
       // and is only resolved once the chain reaches it (script07_security_audit_archive.md §I8), so every tick settles what

@@ -8,7 +8,7 @@
 # What it does, in order:
 #   1. checks it runs as root on Linux with apt-get or dnf
 #   2. installs git and CA certificates if they are missing
-#   3. clones https://github.com/noobvie/Grin-Node-Toolkit into /opt/grin-node-toolkit
+#   3. clones https://github.com/noobvie/Grin-Node-Toolkit into /root/grin-node-toolkit
 #      (an existing toolkit folder there is left untouched)
 #   4. starts the toolkit menu (./grin-node-toolkit.sh)
 #
@@ -24,7 +24,13 @@
 set -euo pipefail
 
 REPO_URL="https://github.com/noobvie/Grin-Node-Toolkit.git"
-DEFAULT_DIR="/opt/grin-node-toolkit"
+# Where a toolkit set up by hand (`git clone` as root) usually is, and the
+# default Mass Deploy (081) expects on fleet servers. Fixed, not $HOME: under
+# sudo, HOME can still be the calling user's home.
+DEFAULT_DIR="/root/grin-node-toolkit"
+# `git clone <repo URL>` with no folder name gives a capitalised folder; such
+# an install is found and reused, not duplicated.
+CASED_DIR="/root/Grin-Node-Toolkit"
 ENTRY="grin-node-toolkit.sh"
 
 if [[ -t 1 ]]; then
@@ -46,7 +52,7 @@ Grin Node Toolkit installer
   curl -fsSL https://grinnode.org/install | sudo bash -s -- [options]
 
 Options:
-  --dir PATH     install directory (default /opt/grin-node-toolkit;
+  --dir PATH     install directory (default /root/grin-node-toolkit;
                  also: curl … | sudo GRIN_TOOLKIT_DIR=PATH bash)
   --branch NAME  branch to clone (default main)
   --no-launch    install only, do not start the menu
@@ -55,13 +61,15 @@ EOF
 }
 
 parse_args() {
-    INSTALL_DIR="${GRIN_TOOLKIT_DIR:-$DEFAULT_DIR}"
+    INSTALL_DIR="${GRIN_TOOLKIT_DIR:-}"
+    DIR_GIVEN="no"
+    [[ -n "$INSTALL_DIR" ]] && DIR_GIVEN="yes"
     BRANCH="main"
     LAUNCH="yes"
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --dir)       [[ $# -ge 2 ]] || die "--dir needs a path"; INSTALL_DIR="$2"; shift 2 ;;
-            --dir=*)     INSTALL_DIR="${1#--dir=}"; shift ;;
+            --dir)       [[ $# -ge 2 ]] || die "--dir needs a path"; INSTALL_DIR="$2"; DIR_GIVEN="yes"; shift 2 ;;
+            --dir=*)     INSTALL_DIR="${1#--dir=}"; DIR_GIVEN="yes"; shift ;;
             --branch)    [[ $# -ge 2 ]] || die "--branch needs a name"; BRANCH="$2"; shift 2 ;;
             --branch=*)  BRANCH="${1#--branch=}"; shift ;;
             --no-launch) LAUNCH="no"; shift ;;
@@ -69,6 +77,13 @@ parse_args() {
             *)           die "Unknown option: $1 (try --help)" ;;
         esac
     done
+
+    if [[ "$DIR_GIVEN" == "no" ]]; then
+        INSTALL_DIR="$DEFAULT_DIR"
+        if [[ ! -e "$DEFAULT_DIR" && -f "$CASED_DIR/$ENTRY" ]]; then
+            INSTALL_DIR="$CASED_DIR"
+        fi
+    fi
 
     # An absolute path with no "..", so a typo can never land the clone (and the
     # later chmod) somewhere unexpected.
@@ -127,10 +142,16 @@ install_packages() {
     # covers install, but `apt-get update` ignores it for the lists lock, so
     # retry that one for up to 5 minutes.
     if [[ "$PKG" == "apt" ]]; then
+        # A failure that is not the lock (one broken third-party repository, say)
+        # can still leave usable package lists, so after the retries we try the
+        # install anyway and let that be the step that fails.
         local tries=0
         until DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 update -q </dev/null; do
             tries=$((tries + 1))
-            [[ $tries -lt 30 ]] || die "apt-get update failed (still failing after 5 minutes)."
+            if [[ $tries -ge 30 ]]; then
+                warn "apt-get update still fails after 5 minutes — trying the install with the current package lists."
+                break
+            fi
             warn "apt-get update failed — another package job may hold the lock; retrying in 10 s ($tries/30)"
             sleep 10
         done

@@ -678,7 +678,8 @@ step_remove_install_dirs() {
     fi
 
     # The toolkit running this cleanup can match the /opt scan itself (a checkout at
-    # /opt/grin-node-toolkit, 081's default remote path), so that exact path is kept.
+    # /opt/grin-node-toolkit, still found on servers set up with an earlier Mass
+    # Deploy default), so that exact path is kept.
     # A found path that only CONTAINS the toolkit (a checkout under /opt/grin) is still
     # deleted, because keeping it would keep the Grin data in it; a warning naming it
     # is printed before the confirm. Paths compare after readlink -f on both sides.

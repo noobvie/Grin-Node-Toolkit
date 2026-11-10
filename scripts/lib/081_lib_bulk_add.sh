@@ -20,7 +20,7 @@
 _GRIN_081_BULK_ADD_LOADED=1
 
 MDB_KEY="/root/.ssh/grin_deploy"
-MDB_TOOLKIT_PATH_DEFAULT="/opt/grin-node-toolkit"
+MDB_TOOLKIT_PATH_DEFAULT="/root/grin-node-toolkit"
 
 # _mdb_ensure_sshpass — install sshpass if missing (EPEL on Rocky/Alma).
 _mdb_ensure_sshpass() {

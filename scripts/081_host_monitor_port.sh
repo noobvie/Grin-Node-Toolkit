@@ -714,7 +714,7 @@ _md_load_conf() {
         _md_ports+=("${_port:-22}")
         _md_users+=("${_user:-root}")
         _md_keys+=("${_key:-}")
-        _md_paths+=("${_path:-/opt/grin-node-toolkit}")
+        _md_paths+=("${_path:-/root/grin-node-toolkit}")
     done < "$MASS_DEPLOY_CONF"
     if [[ ${#_md_labels[@]} -eq 0 ]]; then
         warn "No servers in mass_deploy.conf. Use Manage Servers to add."
@@ -870,8 +870,8 @@ _md_add_server() {
     fi
     echo -ne "  SSH key [$_key_default]: "; read -r _key
     [[ -z "$_key" ]] && _key="$_key_default"
-    echo -ne "  Toolkit path [/opt/grin-node-toolkit]: "; read -r _path
-    [[ -z "$_path" ]] && _path="/opt/grin-node-toolkit"
+    echo -ne "  Toolkit path [/root/grin-node-toolkit]: "; read -r _path
+    [[ -z "$_path" ]] && _path="/root/grin-node-toolkit"
 
     echo ""
     info "Testing connection to $_user@$_host:$_port ..."

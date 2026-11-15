@@ -1104,6 +1104,10 @@ enhance_nginx_config() {
         limit_rate \$${bw_var};"
     fi
     
+    # `http2 on;` vs `listen … http2` depends on the nginx version on this box.
+    local listen_443
+    listen_443="$(nginx_http2_listen)"
+
     # Create enhanced config with HSTS
     cat > "$NGINX_CONF" << EOF
 # HTTP - Redirect all traffic to HTTPS
@@ -1118,9 +1122,7 @@ server {
 
 # HTTPS - Main file server
 server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
+$listen_443
     server_name $DOMAIN;
 
     # SSL certificate (managed by Certbot)
@@ -1165,18 +1167,20 @@ $bandwidth_config
 }
 EOF
     
-    # Test nginx config
-    if nginx -t &> /dev/null; then
+    # Test nginx config. Capture the output BEFORE restoring the backup: a
+    # second nginx -t after the restore only proves the OLD config is fine.
+    local ngx_out
+    if ngx_out=$(nginx -t 2>&1); then
         print_info "Enhanced Nginx configuration is valid"
         systemctl reload nginx
         print_info "Nginx reloaded with new configuration"
     else
-        print_error "Enhanced Nginx configuration test failed, restoring backup"
+        print_error "Enhanced Nginx configuration test failed, restoring backup. nginx -t said:"
+        printf '%s\n' "$ngx_out" | tail -n 5 >&2
         mv "$NGINX_CONF.backup" "$NGINX_CONF"
         if [[ "$bw_map_created" == "yes" ]]; then
             rm -f "$bw_map_file"
         fi
-        nginx -t
         exit 1
     fi
     

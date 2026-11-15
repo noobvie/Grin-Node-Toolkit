@@ -414,6 +414,17 @@
     font-style: normal;
   }
 
+  .ext-node-unverified-badge {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--orange);
+    border: 1px solid var(--orange);
+    border-radius: 4px;
+    padding: 0 4px;
+    font-style: normal;
+    white-space: nowrap;
+  }
+
   /* ── Ecosystem services table ────────────────────────────────────────────── */
   .svc-category-header {
     font-size: 12px;
@@ -489,43 +500,42 @@
     cursor: help;
   }
 
-  /* Exchange-header caution tooltip: opens on hover, tap or keyboard focus. It drops
-     DOWN into the rows because .card clips anything that pokes out above it. */
-  .svc-tip {
-    position: relative;
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 15px; height: 15px;
-    margin-left: 6px;
+  /* Exchange safety notice: always visible under the Exchange header. A hover
+     tooltip was too easy to miss on a list where people decide where to send money. */
+  .svc-callout {
+    margin: 2px 20px 8px 17px;
+    padding: 8px 12px;
     border: 1px solid var(--orange);
-    border-radius: 50%;
-    color: var(--orange);
-    font-size: 10px;
-    text-transform: none;
-    letter-spacing: 0;
-    cursor: help;
-    vertical-align: 1px;
-  }
-  .svc-tip-body {
-    display: none;
-    position: absolute;
-    top: calc(100% + 6px);
-    left: -8px;
-    z-index: 20;
-    width: min(300px, calc(100vw - 140px));
-    padding: 8px 10px;
-    background: var(--surface);
-    border: 1px solid var(--orange);
+    border-left-width: 3px;
     border-radius: 6px;
+    background: color-mix(in srgb, var(--orange) 8%, transparent);
     color: var(--text);
     font-size: 12px;
-    font-weight: 400;
     line-height: 1.5;
-    text-align: left;
-    box-shadow: 0 4px 14px rgba(0,0,0,0.35);
   }
-  .svc-tip:hover .svc-tip-body,
-  .svc-tip:focus .svc-tip-body,
-  .svc-tip:focus-within .svc-tip-body { display: block; }
+  .svc-callout-icon { color: var(--orange); font-weight: 700; margin-right: 4px; }
+
+  /* Per-entry caution (sites JSON "caution"): badge beside the name and the reason
+     printed on its own line under the row, no hover needed. */
+  .svc-row-caution { border-left: 3px solid var(--orange); padding-left: 17px; }
+  .svc-caution-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 0 5px;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--orange);
+    border: 1px solid var(--orange);
+    border-radius: 4px;
+    vertical-align: 1px;
+  }
+  .svc-caution-note {
+    padding: 0 20px 8px 41px;
+    border-left: 3px solid var(--orange);
+    color: var(--orange);
+    font-size: 12px;
+    line-height: 1.5;
+  }
 
   /* ── Collapsible hint panels ────────────────────────────────────────────── */
   .hint-btn {
@@ -1019,7 +1029,12 @@ function renderExternalNodes(data) {
         : '';
       const pm    = PROTO_META[proto];
       const protoBadge = pm ? ` <span class="ext-node-onion-badge">${pm.badge}</span>` : '';
-      const commBadge  = node.community ? ` <span class="ext-node-community-badge">community</span>` : '';
+      // Submissions go live instantly; until the operator verifies one it carries
+      // a visible warning rather than looking like a curated node.
+      const commBadge  = !node.community ? ''
+        : node.verified === true
+          ? ` <span class="ext-node-community-badge">community</span>`
+          : ` <span class="ext-node-unverified-badge" title="Added through the public submit form. The site operator has not checked who runs it.">⚠ user submitted · not verified</span>`;
       const badge = protoBadge + commBadge;
       let sep = '';
       if (pm && proto !== lastProto) {
@@ -1055,15 +1070,16 @@ function renderServices(services) {
     let catNote = '';
     if (cat === 'Development progress') {
       catNote = ' <span class="svc-cat-note">— last release / commit date</span>';
-    } else if (cat === 'Exchange') {
-      catNote = ' <span class="svc-tip" tabindex="0" role="note" aria-label="Exchange safety tip">!'
-        + '<span class="svc-tip-body"><strong>Trade carefully.</strong> A listing here is not an endorsement — '
-        + 'only exchanges marked <strong>Verified</strong> have been tested with real funds by Grin forum members, '
-        + 'and even those can change without warning. '
-        + 'Send a small test amount first, buy gradually rather than all at once, '
-        + 'and withdraw to your own wallet.</span></span>';
     }
     html += `<div class="svc-category-header">${esc(cat)}${catNote}</div>`;
+    if (cat === 'Exchange') {
+      html += '<div class="svc-callout" role="note"><span class="svc-callout-icon">⚠</span>'
+        + '<strong>Trade carefully.</strong> A listing here is not an endorsement — '
+        + 'only exchanges marked <strong>✓ Verified</strong> have been tested with real funds by Grin forum members, '
+        + 'and even those can change without warning. '
+        + 'Send a small test amount first, buy gradually rather than all at once, '
+        + 'and withdraw to your own wallet.</div>';
+    }
     for (const s of catMap[cat]) {
       const icon   = s.ok ? '<span class="status-ok">✓</span>' : '<span class="status-fail">✗</span>';
       const ms     = s.ok && s.response_ms != null ? `<span class="svc-ms">${s.response_ms}ms</span>` : '<span class="svc-ms svc-down">—</span>';
@@ -1074,6 +1090,8 @@ function renderServices(services) {
       const verified = s.verified === true
         ? '<span class="svc-verified" title="Tested with real trades by Grin forum members. An exchange can change without warning, so still start small.">✓ Verified</span>'
         : '';
+      const caution = typeof s.caution === 'string' && s.caution.trim() ? s.caution.trim() : '';
+      const cautionBadge = caution ? '<span class="svc-caution-badge">⚠ Caution</span>' : '';
       const safeUrl = /^https?:\/\//i.test(s.url) ? s.url : '#';
       const host    = (() => { try { return new URL(s.url).hostname; } catch(_) { return s.url; } })();
 
@@ -1106,12 +1124,13 @@ function renderServices(services) {
         ? `${ms}${extra || since}`
         : `${ms}${extra || since}${renew}`;
 
-      html += `<div class="svc-row">
+      html += `<div class="svc-row${caution ? ' svc-row-caution' : ''}">
   <span class="svc-status">${icon}</span>
-  <span class="svc-name">${esc(s.name)}${verified}</span>
+  <span class="svc-name">${esc(s.name)}${verified}${cautionBadge}</span>
   <a class="svc-url" href="${esc(safeUrl)}" target="_blank" rel="noopener" title="${esc(s.url)}">${esc(host)}</a>
   <span class="svc-meta">${metaContent}</span>
 </div>`;
+      if (caution) html += `<div class="svc-caution-note" role="note">⚠ ${esc(caution)}</div>`;
     }
   }
   el.innerHTML = html;

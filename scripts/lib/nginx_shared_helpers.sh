@@ -160,6 +160,32 @@ nginx_test_reload() {
 }
 
 # ═════════════════════════════════════════════════════════════════════════════
+# HTTP/2 listen lines, spelled the way THIS box's nginx understands
+# ═════════════════════════════════════════════════════════════════════════════
+# Usage: nginx_http2_listen [indent]   → prints the 443 listen lines
+# `http2 on;` only exists from nginx 1.25.1; before that it is an "unknown
+# directive" and nginx -t fails (Ubuntu 24.04 ships 1.24, Debian 12 1.22).
+# From 1.25.1 the old `listen … ssl http2` still works but warns on every
+# reload. So ask the binary rather than guess. `|| true` on the substitution:
+# with nginx absent the pipeline exits 127 under the caller's pipefail.
+nginx_http2_listen() {
+    local ind="${1:-    }" v major minor patch _rest
+    v=$( { nginx -v 2>&1 || true; } | sed -n 's|.*nginx/\([0-9.]*\).*|\1|p' ) || true
+    # _rest soaks up a 4th part (1.25.3.1) so `patch` stays a plain number;
+    # anything non-numeric reads as 0 → the old spelling, which every version accepts.
+    IFS=. read -r major minor patch _rest <<< "${v:-0.0.0}"
+    [[ "$major" =~ ^[0-9]+$ ]] || major=0
+    [[ "$minor" =~ ^[0-9]+$ ]] || minor=0
+    [[ "$patch" =~ ^[0-9]+$ ]] || patch=0
+    if (( major > 1 )) || (( major == 1 && minor > 25 )) \
+       || (( major == 1 && minor == 25 && patch >= 1 )); then
+        printf '%slisten 443 ssl;\n%slisten [::]:443 ssl;\n%shttp2 on;\n' "$ind" "$ind" "$ind"
+    else
+        printf '%slisten 443 ssl http2;\n%slisten [::]:443 ssl http2;\n' "$ind" "$ind"
+    fi
+}
+
+# ═════════════════════════════════════════════════════════════════════════════
 # ENABLE / DISABLE a site
 # ═════════════════════════════════════════════════════════════════════════════
 # Usage: nginx_enable_site <conf_path> <symlink_name>

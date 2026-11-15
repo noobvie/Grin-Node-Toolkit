@@ -66,6 +66,10 @@ SEED_PORTS = {"mainnet": 3414, "testnet": 13414}
 
 # ── RDAP fallback for domains with no RDAP support (e.g. .mw ccTLD) ──────────
 # Edit 06_domains_exceptions.json (same directory) to update dates on renewal.
+# A hand-typed date only proves what was true when someone typed it, so a manual
+# expiry that has already passed is never shown as "expired": _manual_fallback()
+# drops it (the page shows "—") and logs a WARN asking for the file to be updated.
+# Only a live RDAP/whois answer may report a domain as expired.
 
 def _date_to_ts(s):
     """Convert YYYY-MM-DD string to UTC midnight timestamp."""
@@ -88,6 +92,23 @@ def _load_whois_fallback():
         return {}
 
 WHOIS_FALLBACK = _load_whois_fallback()
+_STALE_WARNED  = set()
+
+def _manual_fallback(reg, now):
+    """(expiry_ts, registered_ts) from 06_domains_exceptions.json; expiry_ts is None
+    when the domain is not listed or its hand-typed expiry is already in the past."""
+    fb = WHOIS_FALLBACK.get(reg)
+    if not fb:
+        return None, None
+    expiry_ts = fb.get("expiry_ts")
+    if expiry_ts is not None and expiry_ts <= now:
+        if reg not in _STALE_WARNED:
+            _STALE_WARNED.add(reg)
+            print(f"[WARN] 06_domains_exceptions.json: {reg} expiry "
+                  f"{datetime.fromtimestamp(expiry_ts, tz=timezone.utc):%Y-%m-%d} has passed — "
+                  f"ignored; check the registry and update the file", file=sys.stderr)
+        expiry_ts = None
+    return expiry_ts, fb.get("registered_ts")
 
 # ── Community node I/O ─────────────────────────────────────────────────────────
 
@@ -119,6 +140,8 @@ def _save_community_nodes(data):
 # since: "Mon YYYY" string shown in UI, or null to omit
 # verified: true marks a service Grin forum members have traded on with real funds
 #           (UI shows a "Verified" badge); omit it for everything else
+# caution: "<one sentence>" marks an entry the community has raised concerns about;
+#          the UI shows a "Caution" badge and prints the sentence under the row
 
 def _load_json_sidecar(filename, required=False):
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
@@ -254,9 +277,9 @@ def _check_seed_host(host, port, now, conn):
     expiry_ts     = whois_row[0] if whois_row else None
     registered_ts = whois_row[1] if whois_row else None
     if expiry_ts is None:
-        fb = WHOIS_FALLBACK.get(_registrable_domain(host), {})
-        expiry_ts     = fb.get("expiry_ts")
-        registered_ts = registered_ts or fb.get("registered_ts")
+        fb_exp, fb_reg = _manual_fallback(_registrable_domain(host), now)
+        expiry_ts     = fb_exp
+        registered_ts = registered_ts or fb_reg
     expiry_str, expiry_days, registered_str = _format_expiry(expiry_ts, registered_ts, now)
 
     try:
@@ -373,10 +396,13 @@ def _fetch_whois_expiry_raw(registrable):
     Used when RDAP is unavailable. Returns (expiry_ts, reason)."""
     import subprocess
     import re as _re
+    # The bare "expire:" alternative is the CZ.NIC FRED layout used by the .mw
+    # registry (whois.nic.mw: "expire:       13.11.2027").
     _EXPIRY_RE = _re.compile(
         r"(?:registry expiry date|expir(?:y|ation|es?|ed) date"
-        r"|paid-till|renewal(?:\s+date)?|valid(?:\s+until)?)\s*[:\s]\s*(\S+)",
-        _re.IGNORECASE,
+        r"|paid-till|renewal(?:\s+date)?|valid(?:\s+until)?"
+        r"|^\s*expire(?=\s*:))\s*[:\s]\s*(\S+)",
+        _re.IGNORECASE | _re.MULTILINE,
     )
     try:
         result = subprocess.run(
@@ -508,15 +534,21 @@ def cmd_whois(conn, force=False):
                     print("(whois fallback)", end=" ")
                 else:
                     reason = whois_reason
-            # Tier 3: both failed — use manual JSON fallback (e.g. .mw ccTLD)
-            if expiry_ts is None and reg in WHOIS_FALLBACK:
-                fb            = WHOIS_FALLBACK[reg]
-                expiry_ts     = fb.get("expiry_ts")
-                registered_ts = fb.get("registered_ts")
-                reason        = None
-                print("(manual fallback)", end=" ")
-            elif registered_ts is None and reg in WHOIS_FALLBACK:
-                registered_ts = WHOIS_FALLBACK[reg].get("registered_ts")
+            # Tier 3: both failed — use manual JSON fallback (e.g. .mw ccTLD),
+            # unless its date has passed or a live lookup already stored a later one.
+            fb_exp, fb_reg = _manual_fallback(reg, now)
+            if expiry_ts is None and fb_exp is not None:
+                stored = conn.execute(
+                    "SELECT expiry_ts FROM dns_seed_whois WHERE host=?", (host,)
+                ).fetchone()
+                if not (stored and stored[0] is not None and stored[0] >= fb_exp):
+                    expiry_ts = fb_exp
+                    reason    = None
+                    print("(manual fallback)", end=" ")
+            elif expiry_ts is None and WHOIS_FALLBACK.get(reg, {}).get("expiry_ts") is not None:
+                reason = f"{reason}; manual date in 06_domains_exceptions.json has passed"
+            if registered_ts is None:
+                registered_ts = fb_reg
             registrable_cache[reg] = (expiry_ts, registered_ts, reason)
             time.sleep(1)  # be polite to rdap.org between unique queries
 
@@ -553,6 +585,8 @@ def _check_external_nodes():
     """HTTP-check curated + community wallet-API nodes. Returns {mainnet:[…], testnet:[…]}."""
     result    = {net: [] for net in EXTERNAL_NODES}
     community = _load_community_nodes()
+    verified_urls = {n["url"].rstrip("/") for nodes in community.values() for n in nodes
+                     if n.get("verified") is True and isinstance(n.get("url"), str)}
 
     def _fetch_tip_height(base_url):
         """JSON-RPC call to /v2/foreign get_tip. Returns int or None."""
@@ -597,6 +631,9 @@ def _check_external_nodes():
         }
         if community_url:
             entry_dict["community"]      = True
+            # Only the operator sets "verified" in community_nodes.json; the submit
+            # form never writes it, so every new submission starts unverified.
+            entry_dict["verified"]       = community_url.rstrip("/") in verified_urls
             entry_dict["_community_url"] = community_url  # internal — stripped before return
         return net, entry_dict
 
@@ -941,6 +978,8 @@ def _check_services(services, now, conn):
                 "type":        svc.get("type", "http"),
                 "since":       svc.get("since"),
                 "verified":    svc.get("verified") is True,
+                "caution":     (svc["caution"].strip()[:300] or None)
+                               if isinstance(svc.get("caution"), str) else None,
                 "ok":          ok,
                 "status_code": code,
                 "response_ms": ms if ok else None,
@@ -962,9 +1001,9 @@ def _check_services(services, now, conn):
                         expiry_ts, registered_ts = row
                     # If not yet in DB, read from manual fallback (e.g. .mw ccTLD)
                     if expiry_ts is None:
-                        fb = WHOIS_FALLBACK.get(reg, {})
-                        expiry_ts     = fb.get("expiry_ts")
-                        registered_ts = registered_ts or fb.get("registered_ts")
+                        fb_exp, fb_reg = _manual_fallback(reg, now)
+                        expiry_ts     = fb_exp
+                        registered_ts = registered_ts or fb_reg
                     if not result.get("since") and registered_ts:
                         result["registered_str"] = datetime.fromtimestamp(
                             registered_ts, tz=timezone.utc

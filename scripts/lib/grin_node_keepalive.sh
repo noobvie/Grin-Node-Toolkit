@@ -171,6 +171,7 @@ _gnk_write_default_conf() {
   "stuck_checks": 2,
   "cooldown_min": 20,
   "post_restart_grace_min": 20,
+  "hold_max_age_min": 360,
   "external_refs": {
     "mainnet": [
       { "url": "https://api.grin.money/rest/height.json", "height_path": "height" },
@@ -367,6 +368,24 @@ check_net() {
     local net="$1"
     [[ "$(cfg_scalar "enabled.$net" false)" == "True" || "$(cfg_scalar "enabled.$net" false)" == "true" ]] || return 0
     gnc_resolve_node_dir "$net" >/dev/null 2>&1 || { wlog "$net not in instances conf — skipping."; return 0; }
+
+    # Stopped on purpose (gnc_hold_node, e.g. Script 03 compressing chain_data).
+    # gnc_start_node_tmux would refuse the restart anyway; skipping here keeps
+    # the recorder capture and the restart cooldown out of it. A hold past
+    # hold_max_age_min (default 360) is treated as a hung job: logged, then the
+    # normal checks run and may restart the node.
+    local held hold_max hrc=0
+    hold_max=$(cfg_scalar hold_max_age_min 360)
+    [[ "$hold_max" =~ ^[0-9]+$ ]] || hold_max=360
+    export GNC_HOLD_MAX_AGE_S=$(( hold_max * 60 ))
+    held=$(gnc_node_held "$net" 2>/dev/null) || hrc=$?
+    if (( hrc == 0 )); then
+        wlog "$net on hold — not checked ($held)"
+        return 0
+    fi
+    if (( hrc == 2 )); then
+        wlog "$net HOLD EXPIRED (older than ${hold_max} min, holder still alive — looks hung): $held — checking normally"
+    fi
 
     local now grace_min last_restart
     now=$(date -u +%s)

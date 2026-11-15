@@ -584,6 +584,21 @@ compress_chain_data() {
     if [ "${st[0]}" -ne 0 ] || [ "${st[1]}" -ne 0 ]; then
         rm -f "$tmp" "$tmpsum"
         log "ERROR: compression failed (tar=${st[0]} compressor=${st[1]}) — partial archive removed, published archive untouched"
+        # tar exit 1 = a file changed while it was read. Step 1 stopped the
+        # node, so a live node now means something started it mid-read.
+        if [ "${st[0]}" -eq 1 ] && is_grin_running; then
+            log "  Cause: grin is running again (PID $(get_pid_on_port "$GRIN_PORT")) — it was started after Step 1 and wrote to chain_data during the read. Check the node-sync watchdog log and any manual start."
+        fi
+        return 1
+    fi
+    # tar exit 0 is not enough on its own: tar only notices a change to the
+    # file it is reading at that moment. A node started mid-run (an expired
+    # hold, a manual start) that rewrote files tar had ALREADY passed leaves
+    # tar=0 and an archive whose lmdb and txhashset disagree. Step 1 stopped
+    # the node, so a node running now means the read cannot be trusted.
+    if is_grin_running; then
+        rm -f "$tmp" "$tmpsum"
+        log "ERROR: grin is running again (PID $(get_pid_on_port "$GRIN_PORT")) — it was started during compression, so the archive may be inconsistent and is discarded; published archive untouched"
         return 1
     fi
 
@@ -910,6 +925,12 @@ run_nginx_share_for_port() {
     validate_nginx_config
     preflight_disk_space || return 1
     clean_output_directory
+    # Hold the node BEFORE stopping it: the node-sync watchdog restarts a down
+    # node every 5 min, and a node that comes back mid-tar fails the run. The
+    # hold dies with the process running this function (the `( run_cron_nginx )`
+    # subshell on an interactive run), so an error_exit cannot leave it behind.
+    gnc_hold_node "$NETWORK_TYPE" "chain data share" \
+        || log "WARNING: could not place a node hold — the node-sync watchdog may restart grin mid-compression"
     stop_grin_node
     remove_old_txhashset
     remove_peer_directory
@@ -933,7 +954,12 @@ run_nginx_share_for_port() {
         log "Publish skipped for this run — restarting the node and leaving the published set as it was"
         _SHARE_RC=1
     fi
-    restart_grin_node
+    # Released only AFTER the restart: restart_grin_node launches through
+    # gnc_launch_node_session, which ignores holds, and holding until then
+    # stops the watchdog from launching a second copy in the same moment. A
+    # failed restart still releases, so the watchdog can retry the start.
+    restart_grin_node || true
+    gnc_release_node "$NETWORK_TYPE"
 
     if [ "${_SHARE_RC:-0}" -ne 0 ]; then
         log "=========================================="

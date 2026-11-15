@@ -26,7 +26,10 @@
 #   _gnc_node_run_cmd <dir> <bin> [cron]   the command a node's tmux pane runs
 #   gnc_autostart_heal_owner_chown    make @reboot node lines keep the node dir's groups
 #   gnc_launch_node_session <dir> <bin> <sess>   THE ONLY sanctioned node launcher
-#   gnc_start_node_tmux <network>     conf-resolved wrapper around the launcher
+#   gnc_hold_node <network> [reason]  "keep this node stopped" while the caller lives
+#   gnc_release_node <network>        drop the caller's own hold
+#   gnc_node_held <network> [max_s]   rc 0 live hold · 1 none · 2 live but past the age ceiling
+#   gnc_start_node_tmux <network>     conf-resolved wrapper around the launcher (refuses a held node)
 #   gnc_owner_get_status <network>    raw get_status JSON (Owner API, localhost)
 #   gnc_status_field <json> <path>    extract a dotted field from get_status JSON
 #   gnc_install_gtmux_helper          install /usr/local/bin/gtmux (view grin sessions)
@@ -66,6 +69,10 @@ GNC_INSTANCES_CONF="${GNC_INSTANCES_CONF:-/opt/grin/conf/grin_instances_location
 # Node event recorder state root (086 design §8.7). Markers are written only
 # when it exists, i.e. once the recorder has been installed.
 GNC_EVENTS_DIR="${GNC_EVENTS_DIR:-/opt/grin/node-events}"
+
+# Node holds (gnc_hold_node). tmpfs on purpose: a reboot clears every hold, so
+# the @reboot autostart is never blocked by a run that a reboot cut short.
+GNC_HOLD_DIR="${GNC_HOLD_DIR:-/run/grin-node-toolkit}"
 
 # Lightweight logging fallbacks — only defined if the caller hasn't already.
 # A cron watchdog wrapper sources this with no logging helpers in scope; an
@@ -652,6 +659,111 @@ gnc_autostart_heal_owner_chown() {
 }
 
 # -----------------------------------------------------------------------------
+# Node holds — "this node is stopped on purpose, do not start it".
+#
+# A caller that stops a node for a long job (Script 03 tars chain_data for
+# 10+ minutes) takes a hold first. gnc_start_node_tmux refuses a held node,
+# and that is the call the node-sync watchdog restarts through, so its */5
+# "node down" restart can no longer bring grin back mid-job. Without the hold
+# it did exactly that: the node rewrote lmdb under tar, tar exited 1 ("file
+# changed as we read it") and the run was thrown away.
+#
+# The hold names the caller's pid AND that pid's kernel start time, and it
+# counts only while that process is alive. A holder that crashes or is
+# SIGKILLed therefore releases its hold by dying; nothing ever has to clean up
+# after it, and a recycled pid cannot keep a stale hold alive.
+#
+# File: $GNC_HOLD_DIR/hold_<network>, one line:
+#   pid=<pid> start=<starttime ticks> ts=<epoch> by=<script> reason=<≤80 chars>
+#
+# gnc_launch_node_session (the raw launcher) does NOT check the hold. The
+# holder restarts the node through it while still holding, so the watchdog
+# cannot launch a second copy in the same moment, and an operator's
+# explicit start from Script 01 is a deliberate act.
+# -----------------------------------------------------------------------------
+
+# _gnc_pid_start <pid> — field 22 of /proc/<pid>/stat (start time in clock
+# ticks). The comm field may hold spaces or ')', so split after the LAST ')'.
+_gnc_pid_start() {
+    local s f
+    s=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+    s=${s##*) }
+    read -r -a f <<< "$s"
+    [[ "${f[19]:-}" =~ ^[0-9]+$ ]] || return 1
+    echo "${f[19]}"
+}
+
+# gnc_hold_node <network> [reason] — hold for the CALLING process ($BASHPID).
+# $BASHPID, not $$: Script 03's interactive run goes through `( run_cron_nginx )`,
+# where $$ is the menu that outlives the subshell, so an error_exit in the
+# subshell would leave a live hold behind. Call it directly, never inside
+# $(…) or a pipeline, or the hold dies with that inner subshell at once.
+# rc 1 when the hold cannot be written; the caller decides whether that matters.
+gnc_hold_node() {
+    local net="${1:-}" reason="${2:-}" me="$BASHPID" start by tmp
+    case "$net" in mainnet|testnet) ;; *) return 1 ;; esac
+    start=$(_gnc_pid_start "$me") || return 1
+    by="${GNC_STOP_BY:-$(basename "${BASH_SOURCE[${#BASH_SOURCE[@]}-1]:-$0}")}"
+    by=$(printf '%s' "$by" | tr -c 'A-Za-z0-9_.-' '_' | cut -c1-40)
+    reason=$(printf '%s' "$reason" | tr -c '[:print:]' ' ' | cut -c1-80)
+    mkdir -p -m 755 "$GNC_HOLD_DIR" 2>/dev/null || return 1
+    tmp=$(mktemp "$GNC_HOLD_DIR/.hold_${net}.XXXXXX" 2>/dev/null) || return 1
+    if printf 'pid=%s start=%s ts=%s by=%s reason=%s\n' \
+            "$me" "$start" "$(date -u +%s)" "${by:-unknown}" "$reason" > "$tmp" 2>/dev/null \
+        && chmod 644 "$tmp" 2>/dev/null \
+        && mv -f "$tmp" "$GNC_HOLD_DIR/hold_${net}" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$tmp" 2>/dev/null || true
+    return 1
+}
+
+# gnc_release_node <network> — remove the hold only if THIS process owns it,
+# so one job can never release a hold another job is still relying on. rc 0.
+gnc_release_node() {
+    local net="${1:-}" me="$BASHPID" f line
+    case "$net" in mainnet|testnet) ;; *) return 0 ;; esac
+    f="$GNC_HOLD_DIR/hold_${net}"
+    line=$(head -n 1 "$f" 2>/dev/null | head -c 512) || return 0
+    if [[ "$line" == "pid=$me "* ]]; then rm -f "$f" 2>/dev/null || true; fi
+    return 0
+}
+
+# gnc_node_held <network> [max_age_s] — is this node held?
+#   rc 0  held: the holder is alive and the hold is younger than max_age_s
+#   rc 1  not held: no hold, or its holder process is gone
+#   rc 2  EXPIRED: the holder is alive but the hold is older than max_age_s
+# rc 0 and rc 2 print the hold line (rc 2 adds " age=<s>s") on stdout.
+#
+# Why a ceiling: a holder that dies releases its hold, but one that HANGS (tar
+# blocked on a failing disk) would keep the node down indefinitely. Past the
+# ceiling the node is allowed to start again. That is safe even if the job is
+# still running: Script 03 discards its archive whenever grin is running once
+# tar finishes, and a failed run never touches the published archive.
+# max_age_s defaults to GNC_HOLD_MAX_AGE_S (6 h, above the longest archive-node
+# run); 0 disables the ceiling.
+GNC_HOLD_MAX_AGE_S="${GNC_HOLD_MAX_AGE_S:-21600}"
+gnc_node_held() {
+    local net="${1:-}" max="${2:-$GNC_HOLD_MAX_AGE_S}" f line pid start ts age
+    case "$net" in mainnet|testnet) ;; *) return 1 ;; esac
+    [[ "$max" =~ ^[0-9]+$ ]] || max=21600
+    f="$GNC_HOLD_DIR/hold_${net}"
+    line=$(head -n 1 "$f" 2>/dev/null | head -c 512) || return 1
+    pid=$(printf '%s\n' "$line" | sed -n 's/^pid=\([0-9][0-9]*\) .*/\1/p')
+    start=$(printf '%s\n' "$line" | sed -n 's/.* start=\([0-9][0-9]*\) .*/\1/p')
+    ts=$(printf '%s\n' "$line" | sed -n 's/.* ts=\([0-9][0-9]*\) .*/\1/p')
+    [[ -n "$pid" && -n "$start" && -n "$ts" ]] || return 1
+    [[ "$(_gnc_pid_start "$pid" 2>/dev/null)" == "$start" ]] || return 1
+    age=$(( $(date -u +%s) - ts ))
+    if (( max > 0 && age > max )); then
+        printf '%s age=%ss\n' "$line" "$age"
+        return 2
+    fi
+    printf '%s\n' "$line"
+    return 0
+}
+
+# -----------------------------------------------------------------------------
 # gnc_start_node_tmux <network> [wait_timeout=120]
 # Conf-resolved wrapper around gnc_launch_node_session. Returns 0 once the API
 # port is listening, else 1.
@@ -670,6 +782,16 @@ gnc_start_node_tmux() {
     }
     sess=$(_grin_session_name "$dir")
     port=$(gnc_node_api_port "$network")
+
+    local holder hrc=0
+    holder=$(gnc_node_held "$network") || hrc=$?
+    if (( hrc == 0 )); then
+        warn "Grin ($network) is on hold — not starting. Holder: $holder"
+        return 1
+    fi
+    if (( hrc == 2 )); then
+        warn "Grin ($network) hold is past its ${GNC_HOLD_MAX_AGE_S}s ceiling — starting anyway; that job looks hung. Holder: $holder"
+    fi
 
     gnc_launch_node_session "$dir" "$binary" "$sess" || return 1
 

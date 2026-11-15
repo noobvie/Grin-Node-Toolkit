@@ -45,3 +45,11 @@ toolkit stop from an outage. The pane command `_gnc_node_run_cmd`, used by the l
 **Do NOT** debug "node won't start" by running as root in the node dir — it works for root
 but leaves `root:root` files that re-break the `grin` user. Reproduce as the service user.
 
+
+**Long stops take a hold.** The node-sync watchdog (`*/5`) restarts any down node through
+`gnc_start_node_tmux`. A job that keeps a node stopped for minutes (Script 03 tarring chain_data)
+calls `gnc_hold_node <net> "<reason>"` before the stop and `gnc_release_node <net>` AFTER its own
+restart (no double launch). `gnc_start_node_tmux` refuses a held node and the watchdog skips it. The hold
+(`/run/grin-node-toolkit/hold_<net>`) names the caller's `$BASHPID` (not `$$` — 03 runs in a subshell) + kernel start time and counts only
+while that process lives, so a crashed job releases it by dying. `gnc_launch_node_session` does
+not check holds. A hold older than `hold_max_age_min` (watchdog JSON, default 360) is treated as a HUNG job: `gnc_node_held` returns 2 and the node may start; 03 then discards its archive because grin is running when tar ends. Without the hold, the 03 run fails with `tar=1` ("file changed as we read it").

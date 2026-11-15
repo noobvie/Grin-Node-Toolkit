@@ -563,11 +563,20 @@ rc_push_target() {
     ensure_package rsync rsync >/dev/null 2>&1 || true
     command -v rsync &>/dev/null || { _rc_fail "rsync is not installed"; return 1; }
 
-    local -a rs=(rsync -a --delete-after --partial-dir=.rsync-partial
+    # check_status_before_download.txt is excluded because THIS function owns
+    # the mirror's copy: "in progress" above, "completed" only after the
+    # manifest. Shipped by rsync, the producer's "Sync completed." note sorted
+    # ahead of grin_*.tar.gz and landed in the first seconds of a 17 GB upload.
+    #
+    # --delay-updates holds every updated file in the partial dir and renames
+    # them all into place at the end, so the new .sha256 and .tar.gz appear
+    # together instead of the small checksum landing ~15 min before its archive.
+    local -a rs=(rsync -a --delete-after --delay-updates --partial-dir=.rsync-partial
                  --timeout="$RC_RSYNC_TIMEOUT" --info=progress2
                  --exclude='.*' --exclude='index.html' --exclude='robots.txt'
                  --exclude='sitemap.xml' --exclude='grin-logo.svg'
-                 --exclude='mirrors.json' --exclude='chaindata.json')
+                 --exclude='mirrors.json' --exclude='chaindata.json'
+                 --exclude='check_status_before_download.txt')
 
     # Allow-list for --delete. The --exclude list above names the files we know
     # about, which protects those and nothing else: anything a mirror operator

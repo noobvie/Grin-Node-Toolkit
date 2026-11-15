@@ -318,6 +318,66 @@ clean_output_directory() {
     log "Output directory ready"
 }
 
+# Pre-flight: never stop a node other services depend on.
+#
+# Operator rule: the share is a side job. If anything else on this box is
+# using the node, the share is skipped for that network and grin keeps
+# running, with no override. Prints one line per dependent found; rc 0 = at
+# least one found (do NOT stop), rc 1 = none.
+#
+# Three signals, each one that a dependent cannot hide from:
+#   1. a toolkit service unit for this network is active (pool, explorers,
+#      wallet services). Units without a network in their name count for both.
+#   2. an ENABLED nginx vhost proxies to this node's API port, i.e. the node
+#      API is published (Script 04, api.grin.money style).
+#   3. a TCP connection is established on the node's own stratum port, i.e.
+#      miners (solo mining) are working against this node right now.
+# Monitors (event recorder, health/stats collectors, watchdogs) are not
+# dependents: they record the stop, they do not break because of it.
+share_node_dependents() {
+    local net="$1" found=1 u port toml sport f
+    local -a units
+    if [ "$net" = "testnet" ]; then
+        units=(grin-pool-manager-testnet grinscan-test grin-drop-test
+               grin-woo-wallet-test grin-woo-bridge-test grin-wallet-bridge-test
+               grin-accio-test grin-transporter-test grin-fidelius)
+    else
+        units=(grin-pool-manager grinscan-main grin-tiny-explorer grin-drop-main
+               grin-woo-wallet-main grin-woo-bridge-main grin-wallet-bridge-main
+               grin-accio-main grin-transporter-main grin-fidelius)
+    fi
+    if command -v systemctl &>/dev/null; then
+        for u in "${units[@]}"; do
+            if systemctl is-active --quiet "$u" 2>/dev/null; then
+                echo "service $u is running"; found=0
+            fi
+        done
+    fi
+
+    port=$(gnc_node_api_port "$net")
+    for f in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf; do
+        [ -f "$f" ] || continue
+        if grep -qE "^[[:space:]]*proxy_pass[[:space:]]+https?://(127\.0\.0\.1|localhost|\[::1\]):${port}([/;[:space:]]|$)" "$f" 2>/dev/null; then
+            echo "nginx vhost $(basename "$f") publishes the node API (port $port)"; found=0
+        fi
+    done
+
+    # The node's stratum port comes from its own toml; the default applies
+    # when the line is absent. Only established connections count, so a
+    # stratum server nobody is mining on does not block the share.
+    toml="${GRIN_CONFIG_FILE:-${GRIN_DIR:-}/grin-server.toml}"
+    sport=$(sed -n 's/^[[:space:]]*stratum_server_addr[[:space:]]*=[[:space:]]*"[^"]*:\([0-9][0-9]*\)".*/\1/p' "$toml" 2>/dev/null | head -n 1)
+    [ -n "$sport" ] || { [ "$net" = "testnet" ] && sport=13416 || sport=3416; }
+    if command -v ss &>/dev/null; then
+        local n
+        n=$(ss -Htn state established "( sport = :$sport )" 2>/dev/null | wc -l)
+        if [ "${n:-0}" -gt 0 ]; then
+            echo "$n miner connection(s) on the node's stratum port $sport"; found=0
+        fi
+    fi
+    return "$found"
+}
+
 # Step 1: graceful SIGTERM → SIGKILL if needed
 stop_grin_node() {
     log "Step 1: Stopping Grin node..."
@@ -922,6 +982,20 @@ run_nginx_share_for_port() {
     log "=========================================="
 
     display_configuration
+
+    # Before ANY step that changes something: Step 0 may clear the published
+    # set, and Step 1 stops grin. A skip here leaves the node, the published
+    # archive and its status note exactly as they were.
+    local _deps _d
+    if _deps=$(share_node_dependents "$NETWORK_TYPE"); then
+        log "Not stopping grin ($NETWORK_TYPE): other services depend on this node —"
+        while IFS= read -r _d; do log "  · $_d"; done <<< "$_deps"
+        log "=========================================="
+        log "Nginx share SKIPPED: $NETWORK_TYPE / $NODE_TYPE (node left running, published archive unchanged)"
+        log "=========================================="
+        return 0
+    fi
+
     validate_nginx_config
     preflight_disk_space || return 1
     clean_output_directory

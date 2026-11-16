@@ -14,7 +14,7 @@ const { cachedGatewayStatus, publicRegionStatus, refreshStratumProbes, stratumRt
 const { getHorizon: getLedgerRollupHorizon } = require('../lib/ledger-rollup');
 const { donorSettings } = require('../lib/donor-names');
 const { donorWall, liveDonations: donorLiveDonations } = require('../lib/donor-ledger');
-const { walletLink, poolUpDays } = require('../lib/service-uptime');
+const { walletUpDays } = require('../lib/service-uptime');
 
 module.exports = function createPoolRoutes(ctx, app) {
   const {
@@ -24,6 +24,7 @@ module.exports = function createPoolRoutes(ctx, app) {
   } = ctx;
   const router = express.Router();
   const currentExplorerKey = createCurrentExplorerKey(ctx);
+  const poolUpDays = () => (nodeAvailability ? nodeAvailability.poolUpDaysPublic() : null);
 
   router.get('/api/config/pool-info', rateLimiter.middleware('public'), (req, res) => {
     res.json({
@@ -114,9 +115,10 @@ module.exports = function createPoolRoutes(ctx, app) {
   let _poolStatusCache = { at: 0, body: null };
   let _poolStatusInflight = null;
   const buildPoolStatus = async () => {
-    // Every up_days below is the same §20.5 integer-or-null (lib/service-uptime.js for pool and
-    // wallet). payouts.frozen is the kill-switch as a bare boolean — never its reason or who set
-    // it; the account endpoint already returns the same flag as payouts_frozen.
+    // Every up_days below is the same §20.5 integer-or-null: the pool's from its heartbeat ledger
+    // (NodeAvailability.poolUpDaysPublic), the wallet's from its last unlock (lib/service-uptime.js).
+    // payouts.frozen is the kill-switch as a bare boolean — never its reason or who set it; the
+    // account endpoint already returns the same flag as payouts_frozen.
     const out = {
       pool: { ok: true, up_days: poolUpDays() },
       node: { reachable: false, state: 'offline', synced: false, peers: 0, height: 0, up_days: null },
@@ -153,8 +155,7 @@ module.exports = function createPoolRoutes(ctx, app) {
         out.wallet.reachable = true;
       }
     } catch (e) { /* wallet down → reachable stays false */ }
-    if (wallet && wallet.getBalance) walletLink.observe(out.wallet.reachable);
-    out.wallet.up_days = walletLink.upDays(out.wallet.reachable);
+    out.wallet.up_days = walletUpDays(out.wallet.reachable, config.network);
 
     try {
       if (withdrawalScheduler && typeof withdrawalScheduler.isFrozen === 'function') {

@@ -14,8 +14,8 @@
 //       for unknown — and that /api/pool/status can carry no timestamp;
 //   [6] the homepage lamp (public_html/js/reactor-dashboard.js): fmtUpDays run on its own for
 //       0 / 1 / 59 / 60 / 400 / 800 / null and the malformed values, plus the lamp wiring.
-//   [8] the pool + wallet uptime and payouts.frozen beside it (lib/service-uptime.js): the
-//       wallet clock's gap and 2-strike rules, null-not-0, and the Services-lamp wiring.
+//   [8] the pool + wallet uptime and payouts.frozen beside it: the wallet unlock stamp
+//       (lib/service-uptime.js) and its toolkit wiring, null-not-0, and the Services-lamp wiring.
 //
 // In-process only: listeners bind 127.0.0.1 on ephemeral ports and are closed; the DB is
 // :memory:; the fake /opt/grin/node-events lives in os.tmpdir() and is removed. Nothing is left
@@ -402,8 +402,14 @@ const quiet = () => {};
     // reachable-since = D0 + 5840 (end of the long pool gap, day 0 01:37); now = day 20 01:00 →
     // 19 whole days before today's 00:00 UTC.
     ok('source 2: stale recorder → the pool\'s own reachable-since (19 d)', ing.upDaysPublic(true) === 19, String(ing.upDaysPublic(true)));
+    // The homepage "Pool svc" lamp reads the pool's reachable-since alone, whatever the recorder says.
+    writeStatus({ updated: clock - 30, state: 'up', up_since: D0 - 5 * 86400 });
+    ok('Pool svc: poolUpDaysPublic is the pool\'s own reachable-since (19 d), never the recorder\'s',
+      ing.poolUpDaysPublic() === 19, String(ing.poolUpDaysPublic()));
+    writeStatus({ updated: clock - 500, state: 'up', up_since: D0 - 5 * 86400 });
     ing.lastVerdict = { at: Date.now(), kind: 'fail' };
     ok('source 2 is null while the pool\'s own probe is failing', ing.upDaysPublic(true) === null);
+    ok('Pool svc: null while the pool\'s own probe is failing', ing.poolUpDaysPublic() === null);
     fs.writeFileSync(path.join(nd, 'status.json'), '{"v":1,"net":"mainnet","updated":');
     ing._statusMemo = { at: 0, val: null };
     ok('a garbled status.json never throws out of upDaysPublic', ing.upDaysPublic(true) === null);
@@ -551,51 +557,63 @@ const quiet = () => {};
     // ───────────────────────────────────────────────────────────────────────────────────────────
     console.log('\n[8] pool + wallet uptime, payouts.frozen (lib/service-uptime.js)\n');
     {
-      const { ReachableSince, poolUpDays, MAX_GAP_S } = require(path.join(APP, 'lib/service-uptime.js'));
-      let t8 = D0 + 3600;
-      const w = new ReachableSince(() => t8);
-      ok('wallet: never observed → null', w.upDays(true) === null);
-      w.observe(true);
-      ok('wallet: up since today → 0, and only while reachable now', w.upDays(true) === 0 && w.upDays(false) === null);
-      const tick = (to, okNow) => { while (t8 < to) { t8 = Math.min(to, t8 + 60); w.observe(okNow); } };
-      tick(D0 + 3 * 86400 + 10, true);
-      ok('wallet: up since 01:00 on day 0, just past midnight of day 3 → 2 (understates, never overstates)',
-        w.upDays(true) === 2, String(w.upDays(true)));
-      tick(D0 + 4 * 86400 + 10, true);
-      ok('wallet: …one more midnight → 3', w.upDays(true) === 3, String(w.upDays(true)));
-      t8 += 60; w.observe(false);
-      t8 += 60; w.observe(true);
-      ok('wallet: ONE failed probe (a payout holding the owner lock) keeps the run', w.upDays(true) === 3);
-      t8 += 60; w.observe(false);
-      t8 += 60; w.observe(false);
-      ok('wallet: two strikes clear it', w.upDays(true) === null);
-      t8 += 60; w.observe(true);
-      ok('wallet: the next success restarts at 0', w.upDays(true) === 0);
-      const w2 = new ReachableSince(() => t8);
-      w2.observe(true);
-      t8 += 2 * 86400;
-      ok('wallet: silence past MAX_GAP_S is not vouched for → null', w2.upDays(true) === null);
-      w2.observe(true);
-      ok('wallet: …and the next success restarts the run, not resumes it', w2.upDays(true) === 0);
-      t8 += MAX_GAP_S; w2.observe(true);
-      ok('wallet: a gap of exactly MAX_GAP_S still continues', w2.since === t8 - MAX_GAP_S);
-      ok('pool: an integer ≥ 0 from process start', Number.isSafeInteger(poolUpDays()) && poolUpDays() >= 0);
+      const { unlockStampPath, readUnlockStamp, walletUpDays } = require(path.join(APP, 'lib/service-uptime.js'));
+      const t8 = D0 + 4 * 86400 + 10;   // just past midnight of day 4
+      const stampFile = path.join(tmp, 'wallet_unlocked_at');
+      const prevEnv = process.env.POOL_WALLET_UNLOCK_STAMP;
+      process.env.POOL_WALLET_UNLOCK_STAMP = stampFile;
+      try {
+        ok('wallet: no stamp → null, never 0', walletUpDays(true, 'mainnet', t8) === null);
+        fs.writeFileSync(stampFile, String(D0 + 3600) + '\n');
+        ok('wallet: unlocked 01:00 on day 0, just past midnight of day 4 → 3 (understates, never overstates)',
+          walletUpDays(true, 'mainnet', t8) === 3, String(walletUpDays(true, 'mainnet', t8)));
+        ok('wallet: not reachable now → null, whatever the stamp says', walletUpDays(false, 'mainnet', t8) === null);
+        fs.writeFileSync(stampFile, String(t8 - 60));
+        ok('wallet: unlocked a minute ago → 0', walletUpDays(true, 'mainnet', t8) === 0);
+        fs.writeFileSync(stampFile, String(t8 + 999));
+        ok('wallet: a stamp in the future is rejected', readUnlockStamp(stampFile, t8) === null);
+        for (const bad of ['', 'abc', '-5', '1.5', '1547510399', '12 34']) {
+          fs.writeFileSync(stampFile, bad);
+          if (readUnlockStamp(stampFile, t8) !== null) { ok(`wallet: garbled stamp ${JSON.stringify(bad)} → null`, false); }
+        }
+        ok('wallet: garbled or pre-genesis stamps → null', true);
+        fs.rmSync(stampFile, { force: true });
+        ok('wallet: an unreadable stamp never throws', walletUpDays(true, 'mainnet', t8) === null);
+      } finally {
+        if (prevEnv === undefined) delete process.env.POOL_WALLET_UNLOCK_STAMP;
+        else process.env.POOL_WALLET_UNLOCK_STAMP = prevEnv;
+      }
+      ok('wallet: the default stamp path is per network and matches the toolkit\'s pw_unlock_stamp',
+        unlockStampPath('mainnet') === '/opt/grin/lib/pubpool-mainnet-status/wallet_unlocked_at' &&
+        unlockStampPath('testnet') === '/opt/grin/lib/pubpool-testnet-status/wallet_unlocked_at' &&
+        unlockStampPath('bogus') === '/opt/grin/lib/pubpool-mainnet-status/wallet_unlocked_at');
+      const libSh = path.resolve(APP, '../../../scripts/lib/07_lib_pool_wallet.sh');
+      if (!fs.existsSync(libSh)) {
+        console.log('  SKIP  toolkit stamp wiring — no scripts/ beside a deployed app dir');
+      } else {
+        const sh = fs.readFileSync(libSh, 'utf8');
+        ok('toolkit: pw_unlock_stamp spells the same path',
+          sh.includes('pw_status_dir()     { echo "/opt/grin/lib/pubpool-$_PW_NET-status"; }') &&
+          sh.includes('pw_unlock_stamp()   { echo "$(pw_status_dir)/wallet_unlocked_at"; }'));
+        ok('toolkit: the helper stamps both OK outcomes, after printing OK',
+          sh.includes("console.log('OK opened'); stamp(); }") && sh.includes("console.log('OK already open'); stamp(); return;"));
+        ok('toolkit: boot, watchdog and manual unlock all pass the stamp',
+          sh.split('"$PASS_FILE" "$UNLOCK_STAMP"').length - 1 === 2 && sh.includes('"$(pw_pass_file)" "$(pw_unlock_stamp)"'));
+      }
 
       const indexSrc8 = readAppSource();
       const b0 = indexSrc8.indexOf('const buildPoolStatus = async () => {');
       const builder8 = indexSrc8.slice(b0, indexSrc8.indexOf(routeSource('get', '/api/pool/status')));
       // Plain substring checks — these are fixed spellings, not patterns.
-      ok('status: pool.up_days from poolUpDays(), wallet.up_days from the shared walletLink',
+      ok('status: pool.up_days from the heartbeat ledger, wallet.up_days from the unlock stamp',
         builder8.includes('pool: { ok: true, up_days: poolUpDays() }') &&
-        builder8.includes('out.wallet.up_days = walletLink.upDays(out.wallet.reachable);'));
+        indexSrc8.includes('const poolUpDays = () => (nodeAvailability ? nodeAvailability.poolUpDaysPublic() : null);') &&
+        builder8.includes('out.wallet.up_days = walletUpDays(out.wallet.reachable, config.network);'));
       ok('status: payouts.frozen defaults to null and is only ever a boolean',
         builder8.includes('payouts: { frozen: null }') &&
         builder8.includes('out.payouts.frozen = withdrawalScheduler.isFrozen() === true;'));
       ok('status: the cold-boot fallback carries the same shape',
         indexSrc8.includes('wallet: { reachable: false, up_days: null }, payouts: { frozen: null } });'));
-      const amSrc = fs.readFileSync(path.join(APP, 'lib/alert-monitor.js'), 'utf8');
-      ok('AlertMonitor feeds the same wallet clock on both outcomes',
-        amSrc.includes('walletLink.observe(false);') && amSrc.includes('walletLink.observe(true);'));
 
       const PAGE8 = path.resolve(APP, '../public_html/js/reactor-dashboard.js');
       if (!fs.existsSync(PAGE8)) {

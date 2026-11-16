@@ -11,6 +11,7 @@ const NodeAvailability = require('../../lib/node-availability');
 const DonorProfiles = require('../../lib/donor-profiles');
 const AlertMonitor = require('../../lib/alert-monitor');
 const GrinWalletVersion = require('../../lib/grin-wallet-version');
+const { unlockStampPath, readUnlockStamp } = require('../../lib/service-uptime');
 
 module.exports = function createAdminNodeRoutes(ctx, guards) {
   const { config, db, wallet, stratumServer, blockManager, minerManager, blockMonitor, rewardDistributor, walletTor, withdrawalScheduler, hashrateTracker, alertMonitor, retentionManager, nodeAvailability } = ctx;
@@ -199,7 +200,15 @@ module.exports = function createAdminNodeRoutes(ctx, guards) {
     const services = {};
 
     // pool_manager — this Node process
-    services.pool_manager = { status: 'ok', pid: process.pid, uptime: fmtUptime(process.uptime()) };
+    // `uptime` is this process since its last restart; `available` is what the homepage "Pool svc"
+    // lamp counts in whole days (poolReachableSince: short restarts kept, node outages reset it).
+    const nowSec = Math.floor(Date.now() / 1000);
+    let poolSince = null;
+    try { poolSince = nodeAvailability ? nodeAvailability.poolReachableSince() : null; } catch (_) { poolSince = null; }
+    services.pool_manager = {
+      status: 'ok', pid: process.pid, uptime: fmtUptime(process.uptime()),
+      available: poolSince === null ? null : fmtUptime(nowSec - poolSince),
+    };
 
     // grin_node
     try {
@@ -246,9 +255,13 @@ module.exports = function createAdminNodeRoutes(ctx, guards) {
       if (wallet && wallet.getBalance) {
         const summary = await wallet.getBalance();
         const info = Array.isArray(summary) ? summary[1] : (summary || {});
+        // The stamp the toolkit's unlock helper writes (lib/service-uptime.js), the same one the
+        // homepage "Wallet" lamp counts from.
+        const unlockedAt = readUnlockStamp(unlockStampPath(config.network), nowSec);
         services.grin_wallet = {
           status: 'ok',
-          spendable_balance: Number(info.amount_currently_spendable || 0) / 1e9
+          spendable_balance: Number(info.amount_currently_spendable || 0) / 1e9,
+          unlocked: unlockedAt === null ? null : fmtUptime(nowSec - unlockedAt)
         };
       } else {
         services.grin_wallet = { status: 'warning', message: 'wallet API not configured' };

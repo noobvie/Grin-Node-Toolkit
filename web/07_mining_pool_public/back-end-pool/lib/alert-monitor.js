@@ -14,7 +14,6 @@
 
 const { computeReconciliation, auditWalletSends, probeWalletIdentity } = require('./reconciliation');
 const { REVENUE_ADDRESS_HOLD_S } = require('./config');
-const { walletLink } = require('./service-uptime');
 
 // How long a confirmed payout keeps explaining a wallet drop (see checkMoneyIntegrity).
 const DRAIN_SETTLE_SECS = 6 * 3600;
@@ -583,7 +582,6 @@ class AlertMonitor {
       const summary = await this.wallet.getBalance();
       info = Array.isArray(summary) ? summary[1] : summary;
     } catch (err) {
-      walletLink.observe(false);   // the homepage "Wallet" lamp uptime (lib/service-uptime.js)
       await this.triggerAlert('wallet_offline', {
         level: 'critical',
         message: `Wallet unreachable: ${err.message}`,
@@ -592,7 +590,6 @@ class AlertMonitor {
       return;
     }
 
-    walletLink.observe(true);
     await this.resolveAlert('wallet_offline');
 
     if (this.enabledAlerts.wallet_balance_low) {

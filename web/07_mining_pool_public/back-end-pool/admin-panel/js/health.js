@@ -33,6 +33,8 @@ function escHtml(s) {
 function renderServiceDetail(svc) {
   const parts = [];
   if (svc.uptime    != null) parts.push('Uptime: ' + escHtml(svc.uptime));
+  if (svc.available != null) parts.push('Available: ' + escHtml(svc.available));
+  if (svc.unlocked  != null) parts.push('Unlocked: ' + escHtml(svc.unlocked));
   if (svc.pid       != null) parts.push('PID: ' + escHtml(svc.pid));
   if (svc.height    != null) parts.push('Height: ' + (window.Explorer ? Explorer.link('block', svc.height, svc.height) : escHtml(svc.height)));
   if (svc.synced    != null) parts.push('Synced: ' + (svc.synced ? 'Yes' : 'No'));

@@ -805,6 +805,16 @@ class NodeAvailability {
     } catch (_) { return null; }
   }
 
+  // The homepage "Pool svc" lamp (§20.5): poolReachableSince() in whole UTC days, the same figure
+  // admin → Node availability shows for "this pool's probe". It lives in the heartbeat ledger, so
+  // a pool restart shorter than GAP_RESET_S keeps the run, and a node outage resets it too.
+  poolUpDaysPublic() {
+    try {
+      const since = this.poolReachableSince();
+      return since === null ? null : upDaysFrom(since, this.now());
+    } catch (_) { return null; }
+  }
+
   static parseRange(r) {
     if (r === undefined || r === null || r === '') return { key: '30d', secs: RANGES['30d'] };
     return Object.prototype.hasOwnProperty.call(RANGES, r) ? { key: r, secs: RANGES[r] } : null;

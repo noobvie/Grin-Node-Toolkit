@@ -189,6 +189,12 @@ pw_script_dir()     { echo "/opt/grin/lib/pubpool-$_PW_NET"; }
 pw_launcher()       { echo "$(pw_script_dir)/listen-wallet.sh"; }       # tmux payload (owner_api, no -p)
 pw_unlock_helper()  { echo "$(pw_script_dir)/pool-wallet-unlock.js"; }  # ECDH open_wallet
 pw_boot_script()    { echo "$(pw_script_dir)/pool-wallet-boot.sh"; }    # start + wait + unlock
+# The unlock helper (root) stamps every successful open_wallet here; the backend (grinpool) reads it
+# for the homepage "Wallet" lamp uptime. Root-owned and world-readable: the stamp is only a time,
+# and grinpool must not be able to plant a link where root writes. The backend spells the same
+# path in back-end-pool/lib/service-uptime.js.
+pw_status_dir()     { echo "/opt/grin/lib/pubpool-$_PW_NET-status"; }
+pw_unlock_stamp()   { echo "$(pw_status_dir)/wallet_unlocked_at"; }
 
 # Resolve the wallet's own Owner/Foreign API secret files from grin-wallet.toml
 # (the Basic-Auth secrets the listener serves), falling back to the default names. grinpool owns
@@ -308,15 +314,18 @@ _pw_port_collision_check() {
 
 # ─── Generated files: listener + ECDH unlock helper + boot orchestrator ──────
 pw_write_launchers() {
-    local dir bin pass_file lf uj boot node_bin osec
+    local dir bin pass_file lf uj boot node_bin osec stamp
     dir=$(pw_wallet_dir); bin=$(pw_bin); pass_file=$(pw_pass_file)
     lf=$(pw_launcher); uj=$(pw_unlock_helper); boot=$(pw_boot_script)
-    osec=$(pw_owner_secret_path)
+    osec=$(pw_owner_secret_path); stamp=$(pw_unlock_stamp)
     node_bin="$(command -v node 2>/dev/null || echo node)"
     mkdir -p "$dir" || { error "Could not create $dir."; return 1; }
     mkdir -p "$(pw_script_dir)" || { error "Could not create $(pw_script_dir)."; return 1; }
     chown root:root "$(pw_script_dir)" 2>/dev/null || true
     chmod 700 "$(pw_script_dir)" || { error "Could not chmod $(pw_script_dir)."; return 1; }
+    mkdir -p "$(pw_status_dir)" || { error "Could not create $(pw_status_dir)."; return 1; }
+    chown root:root "$(pw_status_dir)" 2>/dev/null || true
+    chmod 755 "$(pw_status_dir)" || { error "Could not chmod $(pw_status_dir)."; return 1; }
 
     # Written beside the live files and moved in at the end, so a failed write cannot leave cron
     # running a partial script.
@@ -348,9 +357,18 @@ EOF
     #    Reads the owner secret + passphrase from FILES, never argv. open_wallet
     #    decrypts the seed into the listener's memory so build_coinbase works.
     #    The shared key is computeSecret() AS-IS — never sha256 it (see CLAUDE.md).
+    #    The optional 4th argument is the unlock stamp (pw_unlock_stamp). It is written after
+    #    the OK line, because pw_unlock reads success from the first word of the output.
     cat > "$uj.new" <<'NODE' || { error "Could not write $uj.new."; return 1; }
 const crypto = require('crypto'), fs = require('fs');
-const [ownerPort, secFile, passFile] = process.argv.slice(2);
+const [ownerPort, secFile, passFile, stampFile] = process.argv.slice(2);
+function stamp() {
+  if (!stampFile) return;
+  try {
+    fs.writeFileSync(stampFile + '.tmp', Math.floor(Date.now() / 1000) + '\n', { mode: 0o644 });
+    fs.renameSync(stampFile + '.tmp', stampFile);
+  } catch (e) { console.log('WARN unlock stamp not written: ' + e.message); }
+}
 const ownerUrl = 'http://127.0.0.1:' + ownerPort + '/v3/owner';
 const rf = f => fs.readFileSync(f, 'utf8').replace(/\r?\n$/, '');
 const headers = { 'Content-Type': 'application/json',
@@ -386,8 +404,8 @@ async function enc(sk, method, params) {
 }
 (async () => {
   const sk = await ecdh();
-  try { await enc(sk, 'open_wallet', { name:null, password: rf(passFile) }); console.log('OK opened'); }
-  catch (e) { if (/already.*(open|unlock)/i.test(e.message)) { console.log('OK already open'); return; } throw e; }
+  try { await enc(sk, 'open_wallet', { name:null, password: rf(passFile) }); console.log('OK opened'); stamp(); }
+  catch (e) { if (/already.*(open|unlock)/i.test(e.message)) { console.log('OK already open'); stamp(); return; } throw e; }
 })().catch(e => { console.log('ERR ' + e.message); process.exit(1); });
 NODE
     chmod 700 "$uj.new" || { error "Could not chmod $uj.new."; return 1; }
@@ -406,6 +424,7 @@ UNLOCK_JS="$uj"
 OWNER_SECRET="$osec"
 PASS_FILE="$pass_file"
 NODE_BIN="$node_bin"
+UNLOCK_STAMP="$stamp"
 EOF
     cat >> "$boot.new" <<'EOF' || { error "Could not write $boot.new."; return 1; }
 port_up(){ (exec 3<>"/dev/tcp/127.0.0.1/$OWNER_PORT") 2>/dev/null; }
@@ -415,11 +434,35 @@ fi
 for _ in $(seq 1 30); do port_up && break; sleep 1; done
 port_up || { echo "[boot] owner_api port $OWNER_PORT not up"; exit 1; }
 [[ -x "$NODE_BIN" ]] || NODE_BIN="$(command -v node 2>/dev/null || echo node)"
-"$NODE_BIN" "$UNLOCK_JS" "$OWNER_PORT" "$OWNER_SECRET" "$PASS_FILE"
+"$NODE_BIN" "$UNLOCK_JS" "$OWNER_PORT" "$OWNER_SECRET" "$PASS_FILE" "$UNLOCK_STAMP"
 EOF
     chmod 700 "$boot.new" || { error "Could not chmod $boot.new."; return 1; }
     mv -f "$lf.new" "$lf" && mv -f "$uj.new" "$uj" && mv -f "$boot.new" "$boot" \
         || { error "Could not move the wallet scripts into $(pw_script_dir)."; return 1; }
+}
+
+# A wallet that was unlocked before the unlock helper wrote stamps has none, and would get one only
+# at its next unlock, leaving the homepage "Wallet" lamp without an uptime until then. Seed it once
+# from the running listener's start time (the boot script unlocks within seconds of the start),
+# and only while build_coinbase proves the wallet is open. A real stamp is never overwritten.
+# Always rc 0: a missing stamp costs a blank uptime row, not a failed deploy.
+_pw_seed_unlock_stamp() {
+    local stamp pid age now
+    stamp=$(pw_unlock_stamp)
+    [[ -e "$stamp" ]] && return 0
+    pid=$(gnc_get_pid_on_port "$PW_OWNER_PORT" 2>/dev/null) || return 0
+    _pw_pid_is_ours "$pid" "$(pw_wallet_dir)" || return 0
+    pw_coinbase_probe >/dev/null 2>&1 || return 0
+    age=$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' ')
+    [[ "$age" =~ ^[0-9]+$ ]] || return 0
+    now=$(date +%s)
+    if printf '%s\n' "$((now - age))" > "$stamp.tmp" && chmod 644 "$stamp.tmp" && mv -f "$stamp.tmp" "$stamp"; then
+        info "Wallet unlock stamp seeded from the running listener's start time."
+    else
+        rm -f "$stamp.tmp" 2>/dev/null || true
+        warn "Could not write $stamp — the Wallet lamp shows no uptime until the next unlock."
+    fi
+    return 0
 }
 
 # Regenerate the wallet's scripts, and move a box off the older layout that kept them in the wallet
@@ -429,6 +472,7 @@ pw_refresh_scripts() {
     local dir old cron new
     [[ -f "$(pw_toml)" ]] || return 0
     pw_write_launchers || return 1
+    _pw_seed_unlock_stamp
     if [[ -x "$PW_WATCHDOG_BIN" ]]; then
         _pw_write_watchdog_bin || return 1
     fi
@@ -457,7 +501,7 @@ pw_unlock() {
     local out node_bin
     command -v node >/dev/null 2>&1 || { error "node not found — required to unlock the wallet (open_wallet ECDH)."; return 1; }
     node_bin="$(command -v node)"
-    out=$("$node_bin" "$(pw_unlock_helper)" "$PW_OWNER_PORT" "$(pw_owner_secret_path)" "$(pw_pass_file)" 2>&1) || true
+    out=$("$node_bin" "$(pw_unlock_helper)" "$PW_OWNER_PORT" "$(pw_owner_secret_path)" "$(pw_pass_file)" "$(pw_unlock_stamp)" 2>&1) || true
     if [[ "$out" == OK* ]]; then info "Wallet unlock: $out"; return 0; fi
     error "Wallet unlock failed: $out"; return 1
 }
@@ -993,9 +1037,10 @@ pw_autostart_disable() {
 _pw_write_watchdog_bin() {
     mkdir -p "$(dirname "$PW_WATCHDOG_BIN")" \
         || { error "Could not create $(dirname "$PW_WATCHDOG_BIN")."; return 1; }
-    local lf boot uj osec fsec pass_file node_bin
+    local lf boot uj osec fsec pass_file node_bin stamp
     lf=$(pw_launcher); boot=$(pw_boot_script); uj=$(pw_unlock_helper)
     osec=$(pw_owner_secret_path); fsec=$(pw_foreign_secret_path); pass_file=$(pw_pass_file)
+    stamp=$(pw_unlock_stamp)
     node_bin="$(command -v node 2>/dev/null || echo node)"
     cat > "$PW_WATCHDOG_BIN.new" <<EOF || { error "Could not write $PW_WATCHDOG_BIN.new."; return 1; }
 #!/bin/bash
@@ -1011,6 +1056,7 @@ OWNER_SECRET="$osec"
 FOREIGN_SECRET="$fsec"
 PASS_FILE="$pass_file"
 NODE_BIN="$node_bin"
+UNLOCK_STAMP="$stamp"
 EOF
     cat >> "$PW_WATCHDOG_BIN.new" <<'EOF' || { error "Could not write $PW_WATCHDOG_BIN.new."; return 1; }
 set -uo pipefail
@@ -1050,7 +1096,7 @@ grep -q '"output"' <<< "$probe" && exit 0           # open — nothing to do
 # don't open_wallet-spam every 5 min on an unrelated failure.
 grep -qiE 'not open|no wallet|lifecycle|open the wallet|NotOpen|doesn.t exist' <<< "$probe" || exit 0
 wlog "listener up on $OWNER_PORT but wallet LOCKED — re-running open_wallet."
-"$NODE_BIN" "$UNLOCK_JS" "$OWNER_PORT" "$OWNER_SECRET" "$PASS_FILE" >> "$LOG_FILE" 2>&1 \
+"$NODE_BIN" "$UNLOCK_JS" "$OWNER_PORT" "$OWNER_SECRET" "$PASS_FILE" "$UNLOCK_STAMP" >> "$LOG_FILE" 2>&1 \
     && wlog "re-unlock OK." || wlog "re-unlock FAILED."
 exit 0
 EOF

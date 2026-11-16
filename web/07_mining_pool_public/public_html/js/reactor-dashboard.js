@@ -374,8 +374,8 @@
   }
 
   // Pool + wallet uptime (/api/pool/status → pool.up_days / wallet.up_days, the same §20.5
-  // integer as the node's, from lib/service-uptime.js). Same short form as fmtUpDays; only the
-  // hover differs, and it names what was measured.
+  // integer as the node's: the pool's from its heartbeat ledger, the wallet's from its last
+  // unlock). Same short form as fmtUpDays; only the hover differs, and it names what was measured.
   function fmtSvcUp(days, subject, note) {
     var f = fmtUpDays(days);
     if (!f) return null;
@@ -623,7 +623,8 @@
       nodeHeight = (nodeOk && s.node.height) || nodeHeight;
 
       setLamp('an-pool', poolOk ? 'ok' : 'alarm', poolOk ? 'online' : 'offline');
-      var poolUp = poolOk ? fmtSvcUp(s.pool.up_days, 'Pool service running', 'since its last restart') : null;
+      var poolUp = poolOk ? fmtSvcUp(s.pool.up_days, 'Pool service running and reaching its node',
+        'a restart shorter than 15 minutes is not counted as a stop') : null;
       setLampRow('an-pool', poolUp && poolUp.short, poolUp && poolUp.long);
       // Uptime only on a synced node: while syncing, "· sync" already takes the lamp's second
       // line. It is its OWN line (.lamp-up, display:block), not an inline " · up 12 d": just
@@ -657,8 +658,8 @@
         setLamp('an-node', 'alarm', 'offline');
       }
       setLamp('an-wallet', walletOk ? 'ok' : 'alarm', walletOk ? 'unlocked' : 'offline');
-      var walletUp = walletOk ? fmtSvcUp(s.wallet.up_days, 'Pool wallet unlocked and reachable',
-        'as seen by the pool, which restarts this count when it restarts') : null;
+      var walletUp = walletOk ? fmtSvcUp(s.wallet.up_days, 'Pool wallet unlocked',
+        'since it was last unlocked') : null;
       setLampRow('an-wallet', walletUp && walletUp.short, walletUp && walletUp.long);
       payFrozen = s.payouts && typeof s.payouts.frozen === 'boolean' ? s.payouts.frozen : null;
       paintPayouts();

@@ -572,11 +572,11 @@ const quiet = () => {};
         ok('wallet: unlocked a minute ago → 0', walletUpDays(true, 'mainnet', t8) === 0);
         fs.writeFileSync(stampFile, String(t8 + 999));
         ok('wallet: a stamp in the future is rejected', readUnlockStamp(stampFile, t8) === null);
-        for (const bad of ['', 'abc', '-5', '1.5', '1547510399', '12 34']) {
+        const accepted = ['', 'abc', '-5', '1.5', '1547510399', '12 34'].filter((bad) => {
           fs.writeFileSync(stampFile, bad);
-          if (readUnlockStamp(stampFile, t8) !== null) { ok(`wallet: garbled stamp ${JSON.stringify(bad)} → null`, false); }
-        }
-        ok('wallet: garbled or pre-genesis stamps → null', true);
+          return readUnlockStamp(stampFile, t8) !== null;
+        });
+        ok('wallet: garbled or pre-genesis stamps → null', accepted.length === 0, JSON.stringify(accepted));
         fs.rmSync(stampFile, { force: true });
         ok('wallet: an unreadable stamp never throws', walletUpDays(true, 'mainnet', t8) === null);
       } finally {
@@ -599,6 +599,13 @@ const quiet = () => {};
           sh.includes("console.log('OK opened'); stamp(); }") && sh.includes("console.log('OK already open'); stamp(); return;"));
         ok('toolkit: boot, watchdog and manual unlock all pass the stamp',
           sh.split('"$PASS_FILE" "$UNLOCK_STAMP"').length - 1 === 2 && sh.includes('"$(pw_pass_file)" "$(pw_unlock_stamp)"'));
+        // Without these a start whose unlock never ran keeps the old stamp while the backend opens
+        // the wallet itself, and the lamp overstates.
+        ok('toolkit: both listener starters delete the stamp before a new session',
+          /rm -f "\$UNLOCK_STAMP"[^\n]*\n\s*SHELL=\/bin\/bash tmux new-session -d -s "\$TMUX_NAME"/.test(sh) &&
+          /rm -f "\$\(pw_unlock_stamp\)"[^\n]*\n\s*SHELL=\/bin\/bash tmux new-session -d -s "\$PW_TMUX_WALLET"/.test(sh));
+        ok('toolkit: the helper sets the stamp mode explicitly (a strict umask must not hide it)',
+          sh.includes("fs.chmodSync(stampFile + '.tmp', 0o644);"));
       }
 
       const indexSrc8 = readAppSource();

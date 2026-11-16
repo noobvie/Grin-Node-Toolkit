@@ -3298,11 +3298,17 @@ rows: title / state / detail. The node was first; the other three follow it.
     successful `open_wallet`, both `OK opened` and `OK already open`. The boot script, the
     watchdog's re-unlock and the menu's manual unlock all pass the path, and every listener start
     goes through one of them. A pool restart leaves the stamp alone; a grin-wallet restart moves it.
+  - Both listener starters (the boot script and `pw_listener_start`) delete the stamp before they
+    start a new listener. Otherwise a start whose unlock never ran (port slow to open, helper
+    failed) would keep the old stamp while the backend opens the wallet itself, and the lamp
+    would overstate.
+  - The helper sets the stamp's mode with an explicit `chmod 0644`, so a strict root umask
+    cannot hide it from `grinpool`.
   - The directory is root-owned 755. The helper runs as root, and the wallet dir belongs to
     `grinpool`, so a stamp there would let `grinpool` plant a link that root writes through.
   - `pw_refresh_scripts` (Install and Deploy) seeds a missing stamp once, from the running
-    listener's start time, and only while `build_coinbase` proves the wallet is open. It never
-    overwrites a stamp.
+    listener's start time plus 60 s (so it errs toward understating), and only while
+    `build_coinbase` proves the wallet is open. It never overwrites a stamp.
   - Not reachable right now → null, whatever the stamp says. A missing, garbled, future or
     pre-genesis stamp → null.
 - *Admin → Health* shows the same two times beside the process uptime: `Available:` on the pool

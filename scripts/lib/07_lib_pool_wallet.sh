@@ -365,7 +365,8 @@ const [ownerPort, secFile, passFile, stampFile] = process.argv.slice(2);
 function stamp() {
   if (!stampFile) return;
   try {
-    fs.writeFileSync(stampFile + '.tmp', Math.floor(Date.now() / 1000) + '\n', { mode: 0o644 });
+    fs.writeFileSync(stampFile + '.tmp', Math.floor(Date.now() / 1000) + '\n');
+    fs.chmodSync(stampFile + '.tmp', 0o644);   // explicit: a strict root umask would hide it from grinpool
     fs.renameSync(stampFile + '.tmp', stampFile);
   } catch (e) { console.log('WARN unlock stamp not written: ' + e.message); }
 }
@@ -429,6 +430,9 @@ EOF
     cat >> "$boot.new" <<'EOF' || { error "Could not write $boot.new."; return 1; }
 port_up(){ (exec 3<>"/dev/tcp/127.0.0.1/$OWNER_PORT") 2>/dev/null; }
 if ! tmux has-session -t "=$TMUX_NAME" 2>/dev/null; then
+    # A new listener invalidates the last unlock time. If the unlock below never runs, the backend
+    # may still open the wallet itself, and an old stamp would then overstate the uptime.
+    rm -f "$UNLOCK_STAMP" || echo "[boot] could not remove $UNLOCK_STAMP"
     SHELL=/bin/bash tmux new-session -d -s "$TMUX_NAME" "$LAUNCHER"
 fi
 for _ in $(seq 1 30); do port_up && break; sleep 1; done
@@ -443,8 +447,9 @@ EOF
 
 # A wallet that was unlocked before the unlock helper wrote stamps has none, and would get one only
 # at its next unlock, leaving the homepage "Wallet" lamp without an uptime until then. Seed it once
-# from the running listener's start time (the boot script unlocks within seconds of the start),
-# and only while build_coinbase proves the wallet is open. A real stamp is never overwritten.
+# from the running listener's start time plus 60 s (the unlock follows the start within seconds,
+# and the margin keeps the seed on the understating side), and only while build_coinbase proves
+# the wallet is open. A real stamp is never overwritten.
 # Always rc 0: a missing stamp costs a blank uptime row, not a failed deploy.
 _pw_seed_unlock_stamp() {
     local stamp pid age now
@@ -456,7 +461,7 @@ _pw_seed_unlock_stamp() {
     age=$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' ')
     [[ "$age" =~ ^[0-9]+$ ]] || return 0
     now=$(date +%s)
-    if printf '%s\n' "$((now - age))" > "$stamp.tmp" && chmod 644 "$stamp.tmp" && mv -f "$stamp.tmp" "$stamp"; then
+    if printf '%s\n' "$((now - age + 60))" > "$stamp.tmp" && chmod 644 "$stamp.tmp" && mv -f "$stamp.tmp" "$stamp"; then
         info "Wallet unlock stamp seeded from the running listener's start time."
     else
         rm -f "$stamp.tmp" 2>/dev/null || true
@@ -599,6 +604,8 @@ pw_listener_start() {
         info "Pool wallet listener already running (session '$PW_TMUX_WALLET')."
     else
         info "Starting combined pool wallet listener (Owner+Foreign) on $PW_OWNER_PORT..."
+        # Same rule as the boot script: a new listener invalidates the last unlock time.
+        rm -f "$(pw_unlock_stamp)" || { error "Could not remove $(pw_unlock_stamp)."; return 1; }
         SHELL=/bin/bash tmux new-session -d -s "$PW_TMUX_WALLET" "$(pw_launcher)" \
             || { error "Failed to start tmux session '$PW_TMUX_WALLET'."; return 1; }
         if ! gnc_wait_for_port "$PW_OWNER_PORT" 20 2; then

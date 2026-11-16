@@ -56,7 +56,10 @@ pool_cleanup() {
     local hdr_common="/etc/nginx/snippets/script07-${POOL_SERVICE}-headers.conf"
     local hdr_page="/etc/nginx/snippets/script07-${POOL_SERVICE}-page-headers.conf"
     local hdr_admin="/etc/nginx/snippets/script07-${POOL_SERVICE}-admin-headers.conf"
-    local backup_dir="/opt/grin/backups/${POOL_SERVICE}"
+    # The engine writes every product's archives into ONE shared dir, so name the pool's files
+    # by pattern — the dir itself also holds solo / drop / toolkit backups.
+    local backup_label="${PBK_BACKUP_DIR:-/opt/grin/backups}/grin_${PBK_PRODUCT:-pubpool}_backup_* + _dbsnap_*"
+    local cron_dbsnap="${PDS_CRON:-/etc/cron.d/${POOL_SERVICE}-dbsnap}"
     local f2b_filter="/etc/fail2ban/filter.d/grin-pool-login.conf"
     local f2b_jail="/etc/fail2ban/jail.d/grin-pool.conf"
     local f2b_purge="/etc/fail2ban/fail2ban.d/grin-pool-dbpurgeage.conf"
@@ -88,7 +91,7 @@ pool_cleanup() {
     echo ""
     echo -e "  ${BOLD}${GREEN}Kept — never touched:${RESET}"
     echo -e "    ${DIM}Grin node + chain data · grin-server.toml (stratum config as-is)${RESET}"
-    echo -e "    ${DIM}Wallet dir + seed · pool backups ($backup_dir)${RESET}"
+    echo -e "    ${DIM}Wallet dir + seed · pool backups ($backup_label)${RESET}"
     echo -e "    ${DIM}(use Script 08del for a full wipe including those)${RESET}"
     echo ""
     echo -ne "${BOLD}Proceed with public-pool cleanup? [y/N]: ${RESET}"
@@ -124,7 +127,7 @@ pool_cleanup() {
     local legacy_app="/opt/grin/pool"
     if [[ -d "$POOL_APP_DIR" || -d "$legacy_app" ]]; then
         echo -e "   ${YELLOW}⚠ $POOL_APP_DIR includes pool.db (miner balances) + .wallet_pass.${RESET}"
-        echo -e "   ${DIM}Backups in $backup_dir are kept — run B) Backup first if unsure.${RESET}"
+        echo -e "   ${DIM}Backups ($backup_label) are kept — run B) Backup first if unsure.${RESET}"
         echo -ne "${BOLD}2)${RESET} Remove pool app + database ($POOL_APP_DIR)? [y/N]: "
         read -r a || true
         if [[ "${a,,}" == "y" || "${a,,}" == "yes" ]]; then
@@ -218,7 +221,7 @@ pool_cleanup() {
     echo -ne "${BOLD}5)${RESET} Remove cron + logrotate + wrapper + stop wallet listeners? [y/N]: "
     read -r a || true
     if [[ "${a,,}" == "y" || "${a,,}" == "yes" ]]; then
-        rm -f "$cron_backup" "$cron_vacuum" "$backup_wrapper" "$logrotate_conf" "$POOL_ADMIN_RESET_BIN" \
+        rm -f "$cron_backup" "$cron_dbsnap" "$cron_vacuum" "$backup_wrapper" "$logrotate_conf" "$POOL_ADMIN_RESET_BIN" \
             || { error "Could not remove the cron / logrotate / wrapper files."; return 1; }
         # De-root artifacts (§13.9): scoped sudoers + pairing helper — but ONLY
         # when the other network's pool isn't still installed on this box (both
@@ -234,7 +237,7 @@ pool_cleanup() {
         success "Cron + logrotate + wrapper + gwctl helper/sudoers removed; wallet listeners stopped, watchdog + autostart removed."
         rm -rf "$(pw_script_dir)" || warn "Could not remove $(pw_script_dir)."
         info "Wallet seed dir ($(pw_wallet_dir)) kept — it holds the coinbase funds."
-        log "Cleanup: removed $cron_backup, $cron_vacuum, $backup_wrapper, $logrotate_conf, $POOL_ADMIN_RESET_BIN, gwctl helper/sudoers + wallet listeners/watchdog/autostart"
+        log "Cleanup: removed $cron_backup, $cron_dbsnap, $cron_vacuum, $backup_wrapper, $logrotate_conf, $POOL_ADMIN_RESET_BIN, gwctl helper/sudoers + wallet listeners/watchdog/autostart"
     fi
     echo ""
 
@@ -286,7 +289,7 @@ pool_cleanup() {
 
     success "Public-pool cleanup complete."
     echo -e "  ${BOLD}${GREEN}Kept:${RESET} node + chain data · grin-server.toml (stratum config as-is)"
-    echo -e "        wallet dir + seed · pool backups ($backup_dir)"
+    echo -e "        wallet dir + seed · pool backups ($backup_label)"
     echo -e "  ${DIM}A group you answered No to is still on disk; re-run Z to remove it.${RESET}"
     echo -e "  ${DIM}Pick a mode and run Install again.${RESET}"
 }

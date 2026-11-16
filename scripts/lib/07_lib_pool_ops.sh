@@ -539,7 +539,7 @@ pool_cron_schedules() {
     case "$cc" in
         1)
             # Delegates to the shared-engine schedule (encrypted archive + offsite
-            # push + retention) — same toggle as B) Backup & Restore → Schedule.
+            # push + retention) — same toggle as B) Backup & Restore → 3 Schedules → 1.
             pbk_schedule || true
             _pool_pause
             ;;

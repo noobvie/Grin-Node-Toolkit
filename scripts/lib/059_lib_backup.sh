@@ -118,12 +118,12 @@ EOF
 
 dbk_date() { date +%d%m%Y; }
 
-# Parse the DDMMYYYY out of a new-format backup filename → echo it, rc 1 otherwise.
+# Parse the DDMMYYYY out of a new-format backup filename → echo it, rc 1 otherwise. The
+# date is the LAST field, as the engine names it — which also reads an earlier same-day
+# archive the engine moved aside (<prefix><HHMMSS>_<DDMMYYYY>).
 dbk_parse_date() {
-    local base; base=$(basename "$1")
-    local d="${base#"$DBK_PREFIX"}"; d="${d%.tar.gz.enc}"
-    [[ "$d" =~ ^[0-9]{8}$ ]] && { echo "$d"; return 0; }
-    return 1
+    [[ "$(basename "$1")" == "$DBK_PREFIX"* ]] || return 1
+    gbe_parse_date "$1"
 }
 
 # ─── Set / change the personal key (shared engine key) ──────────────────────

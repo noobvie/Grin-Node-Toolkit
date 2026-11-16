@@ -380,6 +380,7 @@ _pmg_print_state() {
     wg_up="down"; ip link show "${WG_IFACE:-none}" >/dev/null 2>&1 && wg_up="${YELLOW}UP${RESET}"
     wg_en=$(systemctl is-enabled "wg-quick@${WG_IFACE:-none}" 2>/dev/null)
     cron="off"; [[ -f "$PBK_CRON" ]] && cron="on"
+    if [[ -f "${PDS_CRON:-/nonexistent}" ]]; then cron+=" · DB snapshot ${YELLOW}on${RESET}"; fi
     local vac="off"; [[ -f "$PMG_VACUUM_CRON" ]] && vac="${YELLOW}on${RESET}"
     echo -e "  ${BOLD}State of this box now:${RESET}"
     echo -e "    payouts          : $pay"
@@ -404,7 +405,7 @@ _pmg_print_rollback() {
     if declare -F pgs_installed >/dev/null 2>&1 && pgs_installed; then
         echo -e "    systemctl enable --now $PGS_SERVICE   ${DIM}# games (/play/)${RESET}"
     fi
-    echo -e "    ${DIM}then: pool menu 5) → 6) e (boot autostart) + 7) i (watchdog); B → 3) daily backup;${RESET}"
+    echo -e "    ${DIM}then: pool menu 5) → 6) e (boot autostart) + 7) i (watchdog); B → 3 → 1) daily backup;${RESET}"
     echo -e "    ${DIM}c) Cron schedules → 2) weekly VACUUM (and → 3) the games one), if it was on;${RESET}"
     echo -e "    ${DIM}reconcile, THEN resume payouts in admin → Payouts (never before).${RESET}"
 }
@@ -816,12 +817,17 @@ _pmg_out_stop() {
         info "No hub WireGuard on this box (single-box pool) — nothing to take down."
     fi
 
-    # The daily cron writes the SAME archive name (one per product per day) and would
-    # replace the cert-carrying migration archive with a cert-free one, changing the
-    # sha256 printed below. A dark box needs no daily backups anyway.
+    # The daily cron writes the SAME archive name (one per product per day): it would take
+    # that name and move the cert-carrying migration archive aside, so the file Migrate IN
+    # looks for would no longer be the one whose sha256 is printed below. A dark box needs
+    # no backups anyway — the DB snapshot cron goes too.
     if [[ -f "$PBK_CRON" ]]; then
         rm -f "$PBK_CRON" || { _pmg_fail 4 "could not remove the daily backup cron ($PBK_CRON)"; return 1; }
-        success "Daily backup cron off (it would overwrite today's migration archive)."
+        success "Daily backup cron off (it would take today's migration archive name)."
+    fi
+    if [[ -f "${PDS_CRON:-/nonexistent}" ]]; then
+        rm -f "$PDS_CRON" || { _pmg_fail 4 "could not remove the DB snapshot cron ($PDS_CRON)"; return 1; }
+        success "DB snapshot cron off (the ledger is frozen and moving)."
     fi
 }
 
@@ -866,8 +872,9 @@ _pmg_out_archive() {
         warn "No Let's Encrypt cert found for the pool vhost — the archive carries none;"
         warn "  the new box issues one after DNS moves (4) Setup nginx there)."
     fi
-    echo -e "  ${DIM}Named for today, so it REPLACES today's scheduled archive — intended: it is newer,${RESET}"
-    echo -e "  ${DIM}taken after the stop. It carries the TLS cert; daily archives never do.${RESET}"
+    echo -e "  ${DIM}Named for today, so it takes today's archive name — intended: it is newer, taken after${RESET}"
+    echo -e "  ${DIM}the stop. An earlier archive of today is kept beside it under its time. It carries the${RESET}"
+    echo -e "  ${DIM}TLS cert; daily archives never do.${RESET}"
     if gbp_configured 2>/dev/null; then
         echo -e "  ${DIM}Offsite push is on: this archive (cert included) is also pushed there.${RESET}"
     fi
@@ -880,12 +887,13 @@ _pmg_out_archive() {
     # and Migrate IN rightly refuses a manifest naming another archive — so the move's own
     # archive was unusable (security audit, hub-move review C1). Everything is stopped, so the ledger cannot
     # have moved: rewrite the manifest under the new date and rebuild once. The rebuild
-    # gets the SAME file name and replaces the mismatched archive; no orphan is left.
+    # gets the SAME file name and replaces the mismatched archive (GBE_KEEP_EARLIER=0: the
+    # first build is not moved aside, so no cert-carrying orphan is left).
     if [[ "$(basename "$PMG_ARCHIVE")" != "$PMG_MANIFEST_ARCHIVE" ]]; then
         warn "The local date changed between the manifest and the archive (midnight) — rewriting"
         warn "  the manifest under the new date and building the archive once more."
         _pmg_out_manifest || return 1
-        if ! _pbk_build_archive 1; then
+        if ! GBE_KEEP_EARLIER=0 _pbk_build_archive 1; then
             _pmg_fail 6 "the final archive could not be rebuilt"; return 1
         fi
         PMG_ARCHIVE="$GBE_ARCHIVE"
@@ -1687,6 +1695,8 @@ _pmg_in_restore() {
         2) PMG_IN_STAGE="restored"; _pbk_restore_perms
            _pmg_in_fail 3 "payouts could NOT be frozen on the restored pool.db — do not start anything"
            return 1 ;;
+        4) _pmg_in_fail 3 "nothing was extracted (backup lock busy, or pool.db could not be moved aside) — see above, then run MIGRATE again"
+           return 1 ;;
         *) PMG_IN_STAGE="restored"; _pbk_restore_perms
            _pmg_in_fail 3 "the archive held no pool.db"
            return 1 ;;
@@ -2242,8 +2252,8 @@ _pmg_in_final() {
     fi
     echo -e "    3. Reconcile: admin → Health → Reconciliation must report clean."
     echo -e "    4. THEN resume payouts in admin → Payouts. Nothing here unfreezes them."
-    echo -e "    5. B → 3 turns the daily backup back on (B → 4 → 1 first if this box has no key yet)."
-    echo -e "       ${DIM}Its first run REPLACES today's migration archive (same name) — keep a copy elsewhere.${RESET}"
+    echo -e "    5. B → 3 → 1 turns the daily backup back on, B → 3 → 2 the DB snapshot (B → 4 → 1 first if this box has no key yet)."
+    echo -e "       ${DIM}Its first run takes today's archive name and moves the migration archive aside under its time — keep a copy elsewhere.${RESET}"
     echo -e "    6. Wipe the OLD box after ~7 days — it still holds the wallet seed and the hub WG key."
     case "${PMG_IN_GAMES:-absent}" in
         restored)

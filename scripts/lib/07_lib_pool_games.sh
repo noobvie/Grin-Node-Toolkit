@@ -531,11 +531,15 @@ pgs_install() {
         warn "  Exit status 78 means a bad configuration: systemctl status $PGS_SERVICE"
     fi
 
-    # The daily backup wrapper is generated once, so a box that scheduled it before the
-    # games existed would never archive the games DB. Regenerate it when it is on.
-    if [[ -f "${PBK_CRON:-/nonexistent}" ]] && declare -F _pbk_write_wrapper >/dev/null 2>&1; then
-        pbk_load_conf 2>/dev/null || true
-        _pbk_write_wrapper && info "Daily backup wrapper refreshed — it now includes the games DB."
+    # The backup wrapper (daily + DB snapshot) is generated, so a box that scheduled it before
+    # the games existed would never archive the games DB. Regenerate it when either is on.
+    if [[ -f "${PBK_CRON:-/nonexistent}" || -f "${PDS_CRON:-/nonexistent}" ]] \
+        && declare -F pool_backup_refresh_generated >/dev/null 2>&1; then
+        if pool_backup_refresh_generated; then
+            info "Backup wrapper refreshed — it now includes the games DB."
+        else
+            warn "Could not refresh the backup wrapper — the games DB is not in scheduled backups yet."
+        fi
     fi
 
     echo ""

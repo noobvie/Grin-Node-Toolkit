@@ -730,6 +730,12 @@ pool_deploy_code() {
     # scripts/admin-reset.js, and this must never be the stale copy on the day it's needed.
     pool_admin_reset_install || true
 
+    # Backup wrapper, DB snapshot cron and offsite push commands are generated copies too;
+    # a fix to how they run reaches the box only through here.
+    if declare -F pool_backup_refresh_generated >/dev/null 2>&1; then
+        pool_backup_refresh_generated || warn "Scheduled backup scripts were not refreshed — see the line above."
+    fi
+
     # Make the new backend live — only if its runtime code changed (or an earlier
     # deploy's is still unloaded). A stopped service is left stopped (the operator
     # starts it via 6) Service control).

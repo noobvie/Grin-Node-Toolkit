@@ -5,8 +5,11 @@
 #   Location : /opt/grin/backups/
 #   Filename : grin_<product>_backup_<DDMMYYYY>.tar.gz.enc
 #              product ∈ solo · drop · toolkit … — product and date are always
-#              readable from the name; ONE archive per product per day
-#              (a same-day backup overwrites that day's file).
+#              readable from the name. A second archive on the same day takes
+#              that name and the earlier one moves aside to
+#              grin_<product>_backup_<HHMMSS>_<DDMMYYYY>.tar.gz.enc (its own
+#              time), so a later backup never destroys an earlier one. The date
+#              stays the LAST field, which is what every restore parses.
 #   Password : <personal_key><DDMMYYYY> — ONE personal key shared by ALL
 #              products, stored base64 in /opt/grin/conf/grin_backup.conf
 #              (mode 600) so unattended cron runs work; typed BY HAND on
@@ -162,6 +165,38 @@ gbe_snapshot_db() {  # <src.db> <dst>
         "$1" "$2" 2>/dev/null || cp -p "$1" "$2"
 }
 
+# ─── Put a finished archive in place without losing an earlier one ──────────
+# gbe_install_archive <encrypted tmp in the same dir> <final path>
+# Renames, never copies, so the final name only ever holds a complete file and a
+# failed encryption leaves the earlier archive untouched. An existing archive of
+# that name (and its Migrate OUT .sha256 sidecar) moves aside to
+# <stem>_<HHMMSS>_<DDMMYYYY>.tar.gz.enc, HHMMSS from its own mtime.
+# GBE_KEEP_EARLIER=0 replaces it instead (Migrate OUT rebuilding its own archive).
+# rc 0 installed · 1 nothing installed (the tmp file is removed).
+gbe_install_archive() {
+    local tmp="$1" out="$2" d stem t aside n=1
+    if [[ -e "$out" && "${GBE_KEEP_EARLIER:-1}" != "0" ]]; then
+        d=$(gbe_parse_date "$out") || d=""
+        if [[ -n "$d" ]]; then
+            stem="${out%_${d}.tar.gz.enc}"
+            t=$(date -r "$out" +%H%M%S 2>/dev/null) || t="000000"
+            aside="${stem}_${t}_${d}.tar.gz.enc"
+            while [[ -e "$aside" ]]; do aside="${stem}_${t}-${n}_${d}.tar.gz.enc"; n=$((n + 1)); done
+            if ! mv "$out" "$aside"; then
+                rm -f "$tmp"; error "Could not move the earlier $(basename "$out") aside — nothing replaced."
+                return 1
+            fi
+            if [[ -f "$out.sha256" ]]; then mv -f "$out.sha256" "$aside.sha256" 2>/dev/null || true; fi
+            info "Earlier archive of the same day kept as $(basename "$aside")."
+        fi
+    fi
+    if ! mv -f "$tmp" "$out"; then
+        rm -f "$tmp"; error "Could not move the new archive into place: $out"
+        return 1
+    fi
+    return 0
+}
+
 # ─── Finalize: verify → encrypt → perms → offsite push ───────────────────────
 # gbe_finalize_archive <product> <tmp_tar_gz> [dest_dir]
 # Verifies the tar is non-empty, encrypts it with <personal_key><DDMMYYYY> to
@@ -185,18 +220,24 @@ gbe_finalize_archive() {
         error "No backup personal key loaded — cannot encrypt."
         return 1
     fi
-    local d pass out
+    local d pass out enc
     d=$(gbe_date)
     pass="${GBE_PERSONAL_KEY}${d}"
-    mkdir -p "$dest"; chmod 700 "$dest" 2>/dev/null || true
+    mkdir -p "$dest" || { rm -f "$tmp"; unset pass; error "Cannot create $dest."; return 1; }
+    chmod 700 "$dest" 2>/dev/null || true
     out="$dest/grin_${product}_backup_${d}.tar.gz.enc"
-    if ! gbe_encrypt "$tmp" "$out" "$pass"; then
-        rm -f "$tmp" "$out"; unset pass
-        error "openssl encryption failed."
+    # Encrypt into a hidden mode-600 file beside the target (no archive glob matches
+    # a leading dot), then rename it in: the final name never holds a partial file.
+    enc=$(mktemp "$dest/.grin_${product}_backup_XXXXXX") \
+        || { rm -f "$tmp"; unset pass; error "mktemp failed in $dest."; return 1; }
+    if ! gbe_encrypt "$tmp" "$enc" "$pass"; then
+        rm -f "$tmp" "$enc"; unset pass
+        error "openssl encryption failed — any earlier archive of today is untouched."
         return 1
     fi
     rm -f "$tmp"; unset pass
-    chmod 600 "$out"; chown root:root "$out" 2>/dev/null || true
+    chmod 600 "$enc"; chown root:root "$enc" 2>/dev/null || true
+    gbe_install_archive "$enc" "$out" || return 1
     GBE_ARCHIVE="$out"
     local sz; sz=$(du -sh "$out" 2>/dev/null | cut -f1 || echo "?")
     success "Backup created: $out  ($sz, mode 600)"

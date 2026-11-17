@@ -148,15 +148,20 @@
 @media (max-width: 600px) {
     .gcb { --gcb-gap: 12px; }
     .gcb-launch { width: 48px; height: 48px; font-size: 22px; }
-    /* The sheet starts at top:0, exactly where the announcement-banner stack (9998) and the
-     * sticky site header paint, so at 9990 they covered the sheet's header and its close
-     * button. 9999 lifts the sheet above them; the cookie bar (also 9999) sits below the
-     * sheet's bottom edge (inset by --gcb-lift) and the maintenance overlay stays above. */
-    .gcb.is-open { inset: 0 0 var(--gcb-lift) 0; right: 0; bottom: var(--gcb-lift); z-index: 9999; }
-    .gcb.is-open .gcb-panel {
-        width: 100%; max-width: none; height: 100%; border-radius: 0; border: 0;
+    /* The sheet leaves --gcb-top clear at the top instead of covering the whole screen: the
+     * announcement banners (9998) and sticky site header paint there and used to hide the
+     * sheet's header and its close button. It is also z-indexed above them (9999) in case a
+     * banner is taller than the gap; the cookie bar (also 9999) sits below the sheet's bottom
+     * edge (inset by --gcb-lift) and the maintenance overlay stays above. */
+    .gcb.is-open {
+        --gcb-top: 72px;
+        inset: var(--gcb-top) 0 var(--gcb-lift) 0; right: 0; bottom: var(--gcb-lift); z-index: 9999;
     }
-    .gcb.is-open .gcb-head { padding-top: calc(10px + env(safe-area-inset-top, 0px)); }
+    .gcb.is-open .gcb-panel {
+        width: 100%; max-width: none; height: 100%;
+        border-radius: var(--radius, 10px) var(--radius, 10px) 0 0; border: 0;
+        border-top: 1px solid var(--border);
+    }
     .gcb-close { width: 40px; height: 40px; font-size: 17px; }
     .gcb-spacer { height: 68px; }
     body.gcb-sheet-open { overflow: hidden; }

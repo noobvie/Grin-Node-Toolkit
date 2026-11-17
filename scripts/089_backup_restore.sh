@@ -82,6 +82,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # naming/location, crypto, offsite push. Also provides the gbp_* push helpers.
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/grin_backup_engine.sh"
+# Backup verifier (menu V) — sandboxed restore test of any archive; gbv_*.
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/grin_backup_verify.sh"
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 LOG_DIR="/opt/grin/logs"
@@ -585,7 +588,7 @@ run_backup() {
         fi
     fi
 
-    # ── Step 5f: Node event recorder ledger (086 design §8.7) ────────────────
+    # ── Step 5f: Node event recorder ledger (script086_design.md §8.7) ────────────────
     # ledger.jsonl (+ its logrotate siblings) is the node's availability
     # HISTORY: one line per down/up transition, no secrets, no IPs, a few KB.
     # It cannot be rebuilt — the recorder only appends what it saw — so it goes
@@ -1279,7 +1282,7 @@ run_restore() {
             log "[RESTORE] node-events $_ne_net: live ledger kept"
             continue
         fi
-        # 0755 root, 0644 files: the pool reads these as grinpool (§8.7).
+        # 0755 root, 0644 files: the pool reads these as grinpool (script086_design.md §8.7).
         if ! mkdir -p "$_ne_dst" || ! chmod 755 /opt/grin/node-events "$_ne_dst"; then
             warn "Could not create $_ne_dst — $_ne_net event ledger not restored."
             continue
@@ -1655,6 +1658,10 @@ main() {
         exit $?
     fi
 
+    # The weekly backup check runs lib copies from /opt/grin/lib; a toolkit update
+    # reaches them here (self-update has no post-install hook). No-op when it is off.
+    gbv_refresh_installed || warn "Could not refresh the weekly backup check's lib copies (see $GBV_LOG)."
+
     while true; do
         clear
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
@@ -1688,9 +1695,12 @@ main() {
         echo -e "  ${BOLD}P${RESET})  Offsite push (scp to a remote server)"
         echo -e "     ${DIM}Auto-copy every finished archive to a remote box over ssh${RESET}"
         echo ""
+        echo -e "  ${BOLD}V${RESET})  Verify backups"
+        echo -e "     ${DIM}Restore test in a sandbox: decrypt, extract, read the data · nothing live touched${RESET}"
+        echo ""
         echo -e "  ${DIM}0)  Return${RESET}"
         echo ""
-        echo -ne "${BOLD}Choice [B/S/R/P/0]: ${RESET}"
+        echo -ne "${BOLD}Choice [B/S/R/P/V/0]: ${RESET}"
         read -r _choice
 
         # Every dispatch is ||-guarded: these functions return 1 on cancel /
@@ -1701,6 +1711,7 @@ main() {
             s) run_schedule  || true ;;
             r) run_restore   || true ;;
             p) gbp_setup     || true ;;
+            v) gbv_menu      || true ;;
             0) break         ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac
